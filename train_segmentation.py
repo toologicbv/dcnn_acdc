@@ -6,11 +6,11 @@ from torch.autograd import Variable
 import numpy as np
 
 from common.parsing import do_parse_args
-from common.common import OPTIMIZER_DICT
+from config.config import OPTIMIZER_DICT
 from utils.experiment import Experiment, ExperimentHandler
-from utils.config import config
+from config.config import config
 from utils.batch_handlers import TwoDimBatchHandler
-from in_out.load_data import HVSMR2016CardiacMRI
+from in_out.load_data import ACDC2017DataSet
 from models.model_handler import load_model, save_checkpoint
 
 
@@ -21,19 +21,21 @@ def training(exper_hdl):
     :return:
     """
 
-    dataset = HVSMR2016CardiacMRI(data_dir=exper_hdl.exper.config.data_dir,
-                                  search_mask=exper_hdl.exper.config.dflt_image_name + ".nii",
-                                  norm_scale=exper_hdl.exper.config.norm_method, load_type="numpy",
-                                  val_fold=exper_hdl.exper.run_args.val_fold_id)
+    dataset = ACDC2017DataSet(exper_hdl.exper.config, search_mask=config.dflt_image_name + ".mhd",
+                              fold_id=0, preprocess=False)
 
     dcnn_model = load_model(exper_hdl, simple=False)
-    exper_hdl.exper.optimizer = OPTIMIZER_DICT[exper_hdl.exper.config.optimizer](dcnn_model.parameters(),
-                                                                                 lr=exper_hdl.exper.run_args.lr)
+    exper_hdl.exper.optimizer = OPTIMIZER_DICT[exper_hdl.exper.config.optimizer](
+        dcnn_model.parameters(), lr=exper_hdl.exper.run_args.lr, weight_decay=exper_hdl.exper.run_args.weight_decay)
 
     exper_hdl.exper.batches_per_epoch = 2
-    exper_hdl.logger.info("Size data-set {} // number of epochs {} // batch-size {} // batches/epoch {}".format(
-        dataset.__len__(), exper_hdl.exper.run_args.epochs, exper_hdl.exper.run_args.batch_size,
+    exper_hdl.logger.info("Size train/val-data-set {}/{} :: number of epochs {} "
+                          ":: batch-size {} "
+                          ":: batches/epoch {}".format(
+        dataset.__len__()[0], dataset.__len__()[1], exper_hdl.exper.run_args.epochs,
+        exper_hdl.exper.run_args.batch_size,
         exper_hdl.exper.batches_per_epoch))
+
     num_val_runs = 0
     for epoch_id in range(exper_hdl.exper.run_args.epochs):
         exper_hdl.next_epoch()
@@ -41,11 +43,11 @@ def training(exper_hdl):
         exper_hdl.logger.info("Start epoch {}".format(exper_hdl.exper.epoch_id))
         for batch_id in range(exper_hdl.exper.batches_per_epoch):
             new_batch = TwoDimBatchHandler(exper_hdl.exper)
-            new_batch.generate_batch_2d(dataset.images, dataset.labels)
+            new_batch.generate_batch_2d(dataset.train_images, dataset.train_labels)
 
             # print("new_batch.b_images", new_batch.b_images.shape)
             b_out = dcnn_model(new_batch.b_images)
-            b_loss = dcnn_model.get_loss(b_out, new_batch.b_labels)
+            b_loss = dcnn_model.get_loss(b_out, new_batch.b_labels_per_class)
             # compute gradients w.r.t. model parameters
             b_loss.backward(retain_graph=False)
             exper_hdl.exper.optimizer.step()

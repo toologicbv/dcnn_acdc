@@ -1,17 +1,27 @@
 import os
+import torch
 import torch.nn as nn
 
 DEFAULT_DCNN_2D = {'num_of_layers': 10,
+                   'input_channels': 2,
                    'kernels': [3, 3, 3, 3, 3, 3, 3, 3, 1, 1],
-                   'channels': [32, 32, 32, 32, 32, 32, 32, 32, 192, 3],  # NOTE: last channel is num_of_classes
+                   'channels': [32, 32, 32, 32, 32, 32, 64, 128, 128, 4],  # NOTE: last channel is num_of_classes
                    'dilation': [1, 1, 2, 4, 8, 16, 32, 1, 1, 1],
                    'stride': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                   'batch_norm': [False, False, False, False, False, False, False, True, True, False],
-                   'non_linearity': [True, True, True, True, True, True, True, True, True, False],
+                   'batch_norm': [False, True, True, True, True, True, True, True, True, False],
+                   'non_linearity': [nn.ELU, nn.ELU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ELU, nn.ELU,
+                                     nn.Softmax],
                    'dropout': [0., 0., 0., 0., 0., 0., 0., 0.5, 0.5, 0.],
-                   'loss_function': nn.NLLLoss2d,
+                   'loss_function': nn.NLLLoss,
                    'output': nn.LogSoftmax
                    }
+
+OPTIMIZER_DICT = {'sgd': torch.optim.SGD,  # Gradient Descent
+                  'adadelta': torch.optim.Adadelta,  # Adadelta
+                  'adagrad': torch.optim.Adagrad,  # Adagrad
+                  'adam': torch.optim.Adam,  # Adam
+                  'rmsprop': torch.optim.RMSprop  # RMSprop
+                  }
 
 
 class BaseConfig(object):
@@ -47,9 +57,9 @@ class BaseConfig(object):
 
         # class labels
         self.class_lbl_background = 0
-        self.class_lbl_LV = 1
-        self.class_lbl_RV = 2
-        self.class_lbl_myo = 3
+        self.class_lbl_RV = 1
+        self.class_lbl_myo = 2
+        self.class_lbl_LV = 3
 
         self.class_lbl_background = 0
         self.class_lbl_myocardium = 1

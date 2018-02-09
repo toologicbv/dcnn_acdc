@@ -9,8 +9,8 @@ import dill
 from common.parsing import create_def_argparser, run_dict
 
 from common.common import create_logger, create_exper_label
-from utils.config import config
-from utils.batch_handlers import TwoDimBatchHandler, TestHandler
+from config.config import config
+from utils.batch_handlers import TwoDimBatchHandler
 from in_out.load_data import HVSMR2016CardiacMRI
 import models.dilated_cnn
 
@@ -101,23 +101,6 @@ class ExperimentHandler(object):
         model.train()
         del val_batch
 
-    def test_full_image(self, model, images, labels=None, batch_size=None, views=None,
-                        spacing=None, gen_overlays=True):
-        if views is None:
-            views = ['axial', 'coronal', 'saggital']
-
-        model.eval()
-        test_hdl = TestHandler(images, labels=labels, use_cuda=self.exper.run_args.cuda, batch_size=batch_size,
-                               spacing=spacing)
-        for view in views:
-            test_hdl.generate_3D_batches(s_axis=view)
-            test_hdl(model, self)
-
-        if gen_overlays:
-            test_hdl.generate_overlays(self)
-
-        model.train()
-
     @staticmethod
     def load_experiment(path_to_exp, full_path=False):
 
@@ -153,6 +136,7 @@ class Experiment(object):
         # set this later
         self.batches_per_epoch = 0
         if run_args is None:
+
             self.run_args = create_def_argparser(**run_dict)
         else:
             self.run_args = run_args
@@ -167,17 +151,19 @@ class Experiment(object):
         if set_seed:
             SEED = 2345
             torch.manual_seed(SEED)
-            if run_args.cuda:
+            if self.run_args.cuda:
                 torch.cuda.manual_seed(SEED)
             np.random.seed(SEED)
 
     def init_statistics(self):
-        self.num_val_runs = (self.run_args.epochs // self.run_args.val_freq)
-        if self.run_args.epochs % self.run_args.val_freq == 0:
-            pass
-        else:
-            # one extra run because max epoch is not divided by val_freq
-            self.num_val_runs += 1
+        if self.run_args.val_freq != 0:
+            self.num_val_runs = (self.run_args.epochs // self.run_args.val_freq)
+
+            if self.run_args.epochs % self.run_args.val_freq == 0:
+                pass
+            else:
+                # one extra run because max epoch is not divided by val_freq
+                self.num_val_runs += 1
         self.epoch_stats = {'mean_loss': np.zeros(self.run_args.epochs)}
         self.val_stats = {'mean_loss': np.zeros((self.num_val_runs, 2)),
                           'dice_coeff': np.zeros((self.num_val_runs, 3))}

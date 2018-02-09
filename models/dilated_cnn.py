@@ -1,27 +1,23 @@
 
 import torch
 import torch.nn as nn
-from utils.config import DEFAULT_DCNN_2D
+from torch.autograd import Variable
+from config.config import DEFAULT_DCNN_2D
 import numpy as np
 from building_blocks import Basic2DCNNBlock
-import shutil
-import os
+from models.building_blocks import ConcatenateCNNBlock
+from utils.dice_metric import soft_dice_score
 
 
 class BaseDilated2DCNN(nn.Module):
 
-    def __init__(self, architecture=DEFAULT_DCNN_2D, use_cuda=False, verbose=False):
+    def __init__(self, architecture=DEFAULT_DCNN_2D, use_cuda=False, verbose=True):
         super(BaseDilated2DCNN, self).__init__()
         self.architecture = architecture
         self.use_cuda = use_cuda
         self.num_conv_layers = self.architecture['num_of_layers']
         self.verbose = verbose
         self.model = self._build_dcnn()
-        # we're using CrossEntropyLoss. Implementation of PyTorch combines it with Softmax and hence
-        # not need to incorporate Softmax layer in NN
-        self.log_softmax = self.architecture['output'](dim=1)
-        self.loss_function = self.architecture['loss_function']()
-        self.test_function = nn.Softmax(dim=1)
 
         if self.use_cuda:
             self.cuda()
@@ -30,21 +26,32 @@ class BaseDilated2DCNN(nn.Module):
 
         layer_list = []
         num_conv_layers = self.architecture['num_of_layers']
-        for l in np.arange(num_conv_layers):
-            if l == 0:
-                in_channels = 1
+        for l_id in np.arange(num_conv_layers):
+            if l_id == 0:
+                in_channels = self.architecture['input_channels']
             else:
                 # get previous output channel size
-                in_channels = self.architecture['channels'][l - 1]
+                in_channels = self.architecture['channels'][l_id - 1]
             if self.verbose:
-                print("Constructing layer {}".format(l+1))
-            layer_list.append(Basic2DCNNBlock(in_channels, self.architecture['channels'][l],
-                                              self.architecture['kernels'][l],
-                                              stride=self.architecture['stride'][l],
-                                              dilation=self.architecture['dilation'][l],
-                                              apply_batch_norm=self.architecture['batch_norm'][l],
-                                              apply_non_linearity=self.architecture['non_linearity'][l],
-                                              prob_dropout=self.architecture['dropout'][l]))
+                print("Constructing layer {}".format(l_id+1))
+            if l_id < num_conv_layers - 1:
+                layer_list.append(Basic2DCNNBlock(in_channels, self.architecture['channels'][l_id],
+                                                  self.architecture['kernels'][l_id],
+                                                  stride=self.architecture['stride'][l_id],
+                                                  dilation=self.architecture['dilation'][l_id],
+                                                  apply_batch_norm=self.architecture['batch_norm'][l_id],
+                                                  apply_non_linearity=self.architecture['non_linearity'][l_id],
+                                                  prob_dropout=self.architecture['dropout'][l_id],
+                                                  verbose=self.verbose))
+            else:
+                # for ACDC data the last layer is a concatenation of two 2D-CNN layers
+                layer_list.append(ConcatenateCNNBlock(in_channels, self.architecture['channels'][l_id],
+                                                      self.architecture['kernels'][l_id],
+                                                      stride=self.architecture['stride'][l_id],
+                                                      dilation=self.architecture['dilation'][l_id],
+                                                      apply_batch_norm=self.architecture['batch_norm'][l_id],
+                                                      apply_non_linearity=self.architecture['non_linearity'][l_id],
+                                                      axis=1, verbose=self.verbose))
 
         return nn.Sequential(*layer_list)
 
@@ -59,36 +66,26 @@ class BaseDilated2DCNN(nn.Module):
             raise ValueError("input is not of type torch.autograd.variable.Variable")
 
         out = self.model(input)
-        if self.training:
-            out = self.log_softmax(out)
-        else:
-            # during testing we don't want the LogSoftmax but Softmax in order to compute
-            # the dice coefficient with sklearn function which expects probabilities.
-            out = self.test_function(out)
+        # our last layer ConcatenateCNNBlock already contains the two Softmax layers
 
         return out
 
     def get_loss(self, predictions, labels):
-        # we need to reshape the tensors because CrossEntropy expects 2D tensor (N, C) where C is num of classes
-        # the input tensor is in our case [batch_size, num_of_classes, height, width]
-        # the labels are                  [batch_size, 1, height, width]
-        if not self.training:
-            # need to apply Log function because in test-mode the output of CNN is softmax (see above)
-            predictions = torch.log(predictions)
+        """
+            we need to reshape the tensors because CrossEntropy expects 2D tensor (N, C) where C is num of classes
+            the input tensor is in our case [batch_size, 2 * num_of_classes, height, width]
+            the labels are                  [batch_size, 2 * num_of_classes, height, width]
+        """
+        num_of_classes = labels.size(1)
+        losses = Variable(torch.FloatTensor(num_of_classes))
+        if self.use_cuda:
+            losses = losses.cuda()
+        for cls in np.arange(labels.size(1)):
+            losses[cls] = soft_dice_score(predictions, labels, cls=cls)
 
-        labels = labels.view(labels.size(0), labels.size(2), labels.size(3))
-        return self.loss_function(predictions, labels)
-
-    def get_loss_v1(self, predictions, labels):
-        # we need to reshape the tensors because CrossEntropy expects 2D tensor (N, C) where C is num of classes
-        # the input tensor is in our case [batch_size, num_of_classes, height, width]
-        # the labels are                  [batch_size, 1, height, width]
-        #
-        # THIS THING DIDN'T WORK UNFORTUNATELY
-        predictions = predictions.view(-1, predictions.size(1))
-        labels = labels.view(-1)
-        # print("Loss sizes ", input.size(), labels.size())
-        return self.loss_func(predictions, labels)
+        # regloss = don't forget
+        # loss = -1.0 * loss_ES - 1.0 * loss_ED + 0.0001 * regloss
+        return torch.sum(losses)
 
     def cuda(self):
         super(BaseDilated2DCNN, self).cuda()

@@ -119,7 +119,7 @@ class ACDC2017DataSet(BaseImageDataSet):
     pad_size = config.pad_size
     new_voxel_spacing = 1.4
 
-    def __init__(self, config, search_mask=None, nclass=3, load_func=load_mhd_to_numpy,
+    def __init__(self, config, search_mask=None, nclass=4, load_func=load_mhd_to_numpy,
                  fold_id=1, preprocess=False):
 
         super(BaseImageDataSet, self).__init__()
@@ -163,7 +163,7 @@ class ACDC2017DataSet(BaseImageDataSet):
         val_file_list = []
         # get training images and labels
         search_mask_img = os.path.join(self.train_path, self.search_mask)
-        print("INFO - >>> Search with dir+pattern {} <<<".format(search_mask_img))
+        # print("INFO - >>> Search with dir+pattern {} <<<".format(search_mask_img))
         for train_file in glob.glob(search_mask_img):
             ref_file = train_file.replace(ACDC2017DataSet.image_path, ACDC2017DataSet.label_path)
             train_file_list.append(tuple((train_file, ref_file)))
@@ -178,21 +178,21 @@ class ACDC2017DataSet(BaseImageDataSet):
     def _load_file_list(self, file_list, is_train=True):
         files_loaded = 0
         file_list.sort()
-        print(len(file_list))
+
         for idx in np.arange(0, len(file_list), 2):
             # tuple contains [0]=train file name and [1] reference file name
             img_file, ref_file = file_list[idx]
             # first frame is always the end-systolic MRI scan, filename ends with "1"
             mri_scan_es, origin, spacing = self.load_func(img_file, data_type=ACDC2017DataSet.pixel_dta_type,
                                                           swap_axis=True)
-            print("INFO - Loading ES-file {}".format(img_file))
+            # print("INFO - Loading ES-file {}".format(img_file))
             reference_es, origin, spacing = self.load_func(ref_file, data_type=ACDC2017DataSet.pixel_dta_type,
                                                            swap_axis=True)
             # do the same for the End-Systolic pair of images
             img_file, ref_file = file_list[idx+1]
             mri_scan_ed, origin, spacing = self.load_func(img_file, data_type=ACDC2017DataSet.pixel_dta_type,
                                                           swap_axis=True)
-            print("INFO - Loading ED_file {}".format(img_file))
+            # print("INFO - Loading ED_file {}".format(img_file))
             reference_ed, origin, spacing = self.load_func(ref_file, data_type=ACDC2017DataSet.pixel_dta_type,
                                                            swap_axis=True)
             # AUGMENT data and add to train, validation or test if applicable
@@ -214,6 +214,10 @@ class ACDC2017DataSet(BaseImageDataSet):
     def _augment_data(self, image_ed, label_ed, image_es, label_es, is_train=False):
         """
         Augments image slices by rotating z-axis slices for 90, 180 and 270 degrees
+
+        image_ed, label_ed, image_es and label_es are 3 dimensional tensors [x,y,z]
+        label tensors contain the class labels for the segmentation from 0-3 for the 4 segmentation classes
+        0 = background, 1 = left ventricle, 2 = right ventricle, 3 = myocardium
 
         """
 
@@ -284,6 +288,9 @@ class ACDC2017DataSet(BaseImageDataSet):
         files_loaded = self._resample_images(train_file_list)
         files_loaded += self._resample_images(val_file_list)
         print("INFO - Using fold{} - loaded {} files".format(self.fold_id, files_loaded))
+
+    def __len__(self):
+        return len(self.train_images), len(self.val_images)
 
 
 class HVSMR2016CardiacMRI(BaseImageDataSet):
@@ -615,8 +622,8 @@ class HVSMR2016CardiacMRI(BaseImageDataSet):
         return overlays
 
 
-dataset = ACDC2017DataSet(config=config, search_mask=config.dflt_image_name + ".mhd", fold_id=0,
-                          preprocess=False)
+# dataset = ACDC2017DataSet(config=config, search_mask=config.dflt_image_name + ".mhd", fold_id=0,
+#                           preprocess=False)
 
 # del dataset
 
