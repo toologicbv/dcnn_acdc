@@ -22,64 +22,66 @@ def training(exper_hdl):
     """
 
     dataset = ACDC2017DataSet(exper_hdl.exper.config, search_mask=config.dflt_image_name + ".mhd",
-                              fold_id=0, preprocess=False)
+                              fold_id=0, preprocess=False, debug=True)
 
-    dcnn_model = load_model(exper_hdl, simple=False)
-    exper_hdl.exper.optimizer = OPTIMIZER_DICT[exper_hdl.exper.config.optimizer](
-        dcnn_model.parameters(), lr=exper_hdl.exper.run_args.lr, weight_decay=exper_hdl.exper.run_args.weight_decay)
+    dcnn_model = load_model(exper_hdl)
 
-    exper_hdl.exper.batches_per_epoch = 2
+    exper_hdl.exper.batches_per_epoch = 1
     exper_hdl.logger.info("Size train/val-data-set {}/{} :: number of epochs {} "
                           ":: batch-size {} "
                           ":: batches/epoch {}".format(
-        dataset.__len__()[0], dataset.__len__()[1], exper_hdl.exper.run_args.epochs,
-        exper_hdl.exper.run_args.batch_size,
-        exper_hdl.exper.batches_per_epoch))
+                            dataset.__len__()[0], dataset.__len__()[1], exper_hdl.exper.run_args.epochs,
+                            exper_hdl.exper.run_args.batch_size,
+                            exper_hdl.exper.batches_per_epoch))
 
     num_val_runs = 0
     for epoch_id in range(exper_hdl.exper.run_args.epochs):
         exper_hdl.next_epoch()
+        dices = np.zeros((exper_hdl.exper.batches_per_epoch, 2))
+        # in order to store the 6 dice coefficients
+        accuracy = np.zeros((exper_hdl.exper.batches_per_epoch, 6))
+        # in order to store the 2 mean dice losses (ES/ED)
+        losses = np.zeros(exper_hdl.exper.batches_per_epoch)
         start_time = time.time()
         exper_hdl.logger.info("Start epoch {}".format(exper_hdl.exper.epoch_id))
         for batch_id in range(exper_hdl.exper.batches_per_epoch):
             new_batch = TwoDimBatchHandler(exper_hdl.exper)
             new_batch.generate_batch_2d(dataset.train_images, dataset.train_labels)
+            b_loss = dcnn_model.do_train(new_batch)
+            # get the soft dice loss for ES and ED classes (average over each four classes)
+            dices[batch_id] = dcnn_model.get_dice_losses(average=True)
+            accuracy[batch_id] = dcnn_model.get_accuracy()
+            losses[batch_id] = b_loss
 
-            # print("new_batch.b_images", new_batch.b_images.shape)
-            b_out = dcnn_model(new_batch.b_images)
-            b_loss = dcnn_model.get_loss(b_out, new_batch.b_labels_per_class)
-            # compute gradients w.r.t. model parameters
-            b_loss.backward(retain_graph=False)
-            exper_hdl.exper.optimizer.step()
-            # sum_grads = dcnn_model.sum_grads()
-            exper_hdl.exper.epoch_stats["mean_loss"][epoch_id] += b_loss.data.cpu().squeeze().numpy()
-            dcnn_model.zero_grad()
+        losses = np.mean(losses)
+        accuracy = np.mean(accuracy, axis=0)
+        dices = np.mean(dices, axis=0)
+        exper_hdl.set_batch_loss(losses)
+        exper_hdl.set_accuracy(accuracy)
 
-        exper_hdl.exper.epoch_stats["mean_loss"][epoch_id] *= 1./float(exper_hdl.exper.batches_per_epoch)
         if exper_hdl.exper.run_args.val_freq != 0 and (exper_hdl.exper.epoch_id % exper_hdl.exper.run_args.val_freq == 0
                                                        or
                                                        exper_hdl.exper.epoch_id == exper_hdl.exper.run_args.epochs):
             # validate model
+            exper_hdl.next_val_run()
             num_val_runs += 1
-            val_batch = TwoDimBatchHandler(exper_hdl.exper)
-            val_batch.generate_batch_2d(dataset.val_images, dataset.val_labels)
-            dcnn_model.eval()
-            b_predictions = dcnn_model(val_batch.b_images)
-            val_loss = dcnn_model.get_loss(b_predictions, val_batch.b_labels)
-            val_loss = val_loss.data.cpu().squeeze().numpy()[0]
-            # compute dice score for both classes (myocardium and bloodpool)
-            dice = HVSMR2016CardiacMRI.compute_accuracy(b_predictions, val_batch.b_labels)
+            val_batch = TwoDimBatchHandler(exper_hdl.exper, batch_size=32, test_run=True)
+            val_batch.generate_batch_2d(dataset.images(train=False), dataset.labels(train=False))
+            val_loss = dcnn_model.do_validate(val_batch)
+            val_accuracy = dcnn_model.get_accuracy()
             # store epochID and validation loss
-            exper_hdl.exper.val_stats["mean_loss"][num_val_runs-1] = np.array([exper_hdl.exper.epoch_id, val_loss])
-            exper_hdl.exper.val_stats["dice_coeff"][num_val_runs - 1] = np.array([exper_hdl.exper.epoch_id, dice[0],
-                                                                                  dice[1]])
+            val_loss = val_loss.data.cpu().numpy()[0]
+            exper_hdl.exper.val_stats["mean_loss"][num_val_runs-1] = val_loss
+            exper_hdl.exper.val_stats["dice_coeff"][num_val_runs - 1] = val_accuracy
             exper_hdl.logger.info("Model validation in epoch {}: current loss {:.3f}\t "
-                                  "dice-coeff(myo/blood) {:.3f}/{:.3f}".format(exper_hdl.exper.epoch_id, val_loss,
-                                                                           dice[0], dice[1]))
-            dcnn_model.train()
+                                  "dice-coeff:: ES {:.3f}/{:.3f}/{:.3f} --- "
+                                  "ED {:.3f}/{:.3f}/{:.3f}".format(exper_hdl.exper.epoch_id, val_loss,
+                                                                   val_accuracy[0], val_accuracy[1],
+                                                                   val_accuracy[2], val_accuracy[3],
+                                                                   val_accuracy[4], val_accuracy[5]))
 
         if exper_hdl.exper.run_args.chkpnt and (exper_hdl.exper.epoch_id % exper_hdl.exper.run_args.chkpnt_freq == 0 or
-                                      exper_hdl.exper.epoch_id == exper_hdl.exper.run_args.epochs):
+                                                exper_hdl.exper.epoch_id == exper_hdl.exper.run_args.epochs):
             save_checkpoint(exper_hdl, {'epoch': exper_hdl.exper.epoch_id,
                                         'state_dict': dcnn_model.state_dict(),
                                         'best_prec1': 0.},
@@ -88,11 +90,21 @@ def training(exper_hdl):
             exper_hdl.save_experiment()
         end_time = time.time()
         total_time = end_time - start_time
-        exper_hdl.logger.info("End epoch {}: mean loss: {:.3f} / duration {:.2f} seconds".format(
-            exper_hdl.exper.epoch_id,
-            exper_hdl.exper.epoch_stats["mean_loss"][
-            epoch_id],
-            total_time))
+        if exper_hdl.exper.epoch_id % 2 == 0:
+            if dcnn_model.lr_scheduler is not None:
+                lr = dcnn_model.lr_scheduler.lr
+            else:
+                lr = dcnn_model.optimizer.defaults["lr"]
+            exper_hdl.logger.info("End epoch {}: mean loss: {:.3f} / mean dice-loss (ES/ED) {}"
+                                  " / duration {:.2f} seconds "
+                                  "lr={:.5f}".format(exper_hdl.exper.epoch_id, exper_hdl.get_epoch_loss(),
+                                                                      dices,  # exper_hdl.get_epoch_accuracy(),
+                                                                      total_time,
+                                                                      lr))
+            exper_hdl.logger.info("Current dice accuracies ES {:.3f}/{:.3f}/{:.3f} \t"
+                                  "ED {:.3f}/{:.3f}/{:.3f} ".format(accuracy[0], accuracy[1],
+                                                                    accuracy[2], accuracy[3],
+                                                                    accuracy[4], accuracy[5]))
     exper_hdl.save_experiment()
     del dataset
     del dcnn_model

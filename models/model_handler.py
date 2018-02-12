@@ -1,8 +1,9 @@
-from models.dilated_cnn import BaseDilated2DCNN, DilatedCNN
+from models.dilated_cnn import BaseDilated2DCNN
 import torch
 import shutil
 import os
 import torch.nn as nn
+import numpy as np
 
 
 def weights_init(m):
@@ -25,16 +26,14 @@ def save_checkpoint(exper_hdl, state, is_best, prefix=None, filename='checkpoint
         shutil.copyfile(file_name, file_name + '_model_best.pth.tar')
 
 
-def load_model(exper_hdl, simple=False):
+def load_model(exper_hdl):
 
     if exper_hdl.exper.run_args.model == 'dcnn':
-
-        if simple:
-            exper_hdl.logger.info("Creating new model DilatedCNN: {}".format(exper_hdl.exper.run_args.model))
-            model = DilatedCNN(use_cuda=exper_hdl.exper.run_args.cuda)
-        else:
-            exper_hdl.logger.info("Creating new model BaseDilated2DCNN: {}".format(exper_hdl.exper.run_args.model))
-            model = BaseDilated2DCNN(use_cuda=exper_hdl.exper.run_args.cuda)
+        exper_hdl.logger.info("Creating new model BaseDilated2DCNN: {}".format(exper_hdl.exper.run_args.model))
+        model = BaseDilated2DCNN(optimizer=exper_hdl.exper.config.optimizer, lr=exper_hdl.exper.run_args.lr,
+                                 weight_decay=exper_hdl.exper.run_args.weight_decay,
+                                 use_cuda=exper_hdl.exper.run_args.cuda,
+                                 cycle_length=exper_hdl.exper.run_args.cycle_length)
 
         model.apply(weights_init)
     else:

@@ -120,16 +120,15 @@ class ACDC2017DataSet(BaseImageDataSet):
     new_voxel_spacing = 1.4
 
     def __init__(self, config, search_mask=None, nclass=4, load_func=load_mhd_to_numpy,
-                 fold_id=1, preprocess=False):
+                 fold_ids=1, preprocess=False, debug=False):
 
         super(BaseImageDataSet, self).__init__()
         self.data_dir = os.path.join(config.root_dir, config.data_dir)
         self.search_mask = search_mask
         self.num_of_classes = nclass
-        self.current_fold = fold_id
+        self.fold_ids = fold_ids
         self.load_func = load_func
-        self.fold_id = fold_id
-        self.abs_path_fold = os.path.join(self.data_dir, "fold" + str(fold_id))
+        self.abs_path_fold = os.path.join(self.data_dir, "fold")
 
         self.train_images = []
         self.train_labels = []
@@ -138,6 +137,7 @@ class ACDC2017DataSet(BaseImageDataSet):
         self.val_labels = []
         self.val_spacings = []
         self.preprocess = preprocess
+        self.debug = debug
         self._set_pathes()
         # The images from Jelmer are already normalized (per image) but they are not isotropic
         # Hence with the "pre-process" option the "Jelmer" images are loaded and resampled to an in-plane
@@ -151,6 +151,11 @@ class ACDC2017DataSet(BaseImageDataSet):
         if self.preprocess:
             ACDC2017DataSet.image_path = ACDC2017DataSet.image_path.replace("_iso", "")
             ACDC2017DataSet.label_path = ACDC2017DataSet.label_path.replace("_iso", "")
+
+        if self.debug:
+            # load images from a directory that only contains a couple of images
+            ACDC2017DataSet.image_path = ACDC2017DataSet.image_path + "_test"
+            ACDC2017DataSet.label_path = ACDC2017DataSet.label_path + "_test"
 
         self.train_path = os.path.join(self.abs_path_fold,
                                        os.path.join(ACDC2017DataSet.train_path, ACDC2017DataSet.image_path))
@@ -292,334 +297,17 @@ class ACDC2017DataSet(BaseImageDataSet):
     def __len__(self):
         return len(self.train_images), len(self.val_images)
 
-
-class HVSMR2016CardiacMRI(BaseImageDataSet):
-
-    pixel_dta_type = 'float32'
-    pad_size = config.pad_size
-    label_background = config.class_lbl_background
-    label_myocardium = config.class_lbl_myocardium
-    label_bloodpool = config.class_lbl_bloodpool
-
-    def __init__(self, data_dir, search_mask=None, nclass=3, transform=False, conf_obj=None,
-                 load_func=load_mhd_to_numpy, norm_scale="normalize", mode="train", load_type="raw",
-                 kfold=5, val_fold=1):
-        """
-        The images are already resampled to an isotropic 3D size of 0.65mm x 0.65 x 0.65
-
-
-        :param data_dir: root directory
-        :param search_mask:
-        :param nclass:
-        :param transform:
-        :param conf_obj:
-        :param load_func: currently only load_mhd_to_numpy is supported
-        :param norm_scale: takes arguments "normalize" or "rescale"
-        :param mode: takes "train", "test", "valid"
-        """
-        super(HVSMR2016CardiacMRI, self).__init__(data_dir, conf_obj)
-        self.kfold = kfold
-        self.val_fold = val_fold
-        self.transform = transform
-        self.norm_scale = norm_scale
-        self.search_mask = search_mask
-        self.load_func = load_func
-        self.load_type = load_type
-        self.mode = mode
-        # Note, this list will contain len() image slices...2D!
-        self.images = []
-        self.labels = []
-        self.val_images = []
-        self.val_labels = []
-        self.test_images = []
-        self.test_labels = []
-        self.origins = []
-        self.spacings = []
-        self.test_origins = []
-        self.test_spacings = []
-        self.no_class = nclass
-        self.class_count = np.zeros(self.no_class)
-        self.val_image_indices =  self._prepare_cross_validation()
-        # print("Validation indices {}".format(self.val_image_indices))
-        if self.load_type == "raw":
-            # Important detail: we need to swap axis 0 and 2 of the HVSMR2016 files
-            self.load_images_from_dir(swap_axis=True)
-        elif self.load_type == "numpy":
-            self.load_numpy_arr_from_dir()
-            if len(self.images) == 0:
-                print("Info - cannot find any numpy npz files. Looking for raw files...")
-                self.load_images_from_dir(swap_axis=True)
+    def images(self, train=True):
+        if train:
+            return self.train_images
         else:
-            raise ValueError("Load mode {} is not supported".format(self.load_type))
+            return self.val_images
 
-    def __getitem__(self, index):
-        assert index <= self.__len__()
-        return tuple((self.images[index], self.labels[index]))
-
-    def _prepare_cross_validation(self):
-        folds = KFold(n_splits=self.kfold)
-        fold_arrays = [val_set for _, val_set in folds.split(np.arange(10))]
-        return fold_arrays[self.val_fold]
-
-    def _get_file_lists(self):
-
-        img_file_list = []
-        label_file_list = []
-
-        if self.mode == "train":
-            input_dir = os.path.join(self.data_dir, "train")
-        elif self.mode == "test":
-            input_dir = os.path.join(self.data_dir, "test")
+    def labels(self, train=True):
+        if train:
+            return self.train_labels
         else:
-            raise ValueError("Loading mode {} is currently not supported (train/test)".format(self.mode))
-
-        search_mask = os.path.join(input_dir, self.search_mask)
-
-        for fname in glob.glob(search_mask):
-            img_file_list.append(fname)
-            label_file_list.append(fname.replace("image", "label"))
-
-        return img_file_list, label_file_list
-
-    def load_images_from_dir(self, swap_axis=False):
-        """
-            Searches for files that match the search_mask-parameter and assumes that there are also
-            reference aka label images accompanied with each image
-
-        """
-        files_loaded = 0
-
-        img_file_list, label_file_list = self._get_file_lists()
-        for i, file_name in enumerate(img_file_list):
-            print("> > > Loading image+label from {}".format(file_name))
-            mri_scan, origin, spacing = self.load_func(file_name, data_type=HVSMR2016CardiacMRI.pixel_dta_type)
-            # the Nifty files from the challenge that Jelmer provided have (z,y,x) and hence z,x must be swapped
-            if swap_axis:
-                mri_scan = np.swapaxes(mri_scan, 0, 2)
-
-            if self.norm_scale == "normalize":
-                # print("> > > Info - Normalizing images intensity values")
-                mri_scan = normalize_image(mri_scan, axis=None)
-
-            elif self.norm_scale == "rescale":
-                mri_scan = rescale_image(mri_scan, axis=None)
-                # print("> > > Info - Rescaling images intensity values")
-            else:
-                # no rescaling or normalization
-                print("> > > Info - No rescaling or normalization applied to image!")
-            # add a front axis to the numpy array, will use that to concatenate the image slices
-            self.origins.append(origin)
-            self.spacings.append(spacing)
-            print("{} / {}".format(file_name,  label_file_list[i]))
-            label, _, _ = self.load_func(label_file_list[i])
-            if swap_axis:
-                label = np.swapaxes(label, 0, 2)
-            for class_label in range(self.no_class):
-                self.class_count[class_label] += np.sum(label == class_label)
-            # augment the image with additional rotated slices
-            if i in self.val_image_indices:
-                val_set = True
-            else:
-                val_set = False
-            # AUGMENT data and add to train, validation or test if applicable
-            self._augment_data(mri_scan, label, pad_size=HVSMR2016CardiacMRI.pad_size, isval=val_set)
-
-            files_loaded += 1
-
-        if len(self.val_images) == 0:
-            samples = int(0.1 * len(self.images))
-            self.val_images = self.images[0:samples]
-            self.val_labels = self.labels[0:samples]
-
-    def _augment_data(self, image, label, pad_size=0, isval=False):
-        """
-        Adds all original and rotated image slices to self.images and self.labels objects
-        :param image:
-        :param label:
-        :param pad_size:
-        :return:
-        """
-
-        def rotate_slice(img_slice, lbl_slice, isval=False):
-            # PAD IMAGE
-            for rots in range(4):
-                # no padding here but when we extract patches during BatchGeneration
-                section = np.pad(img_slice, pad_size, 'constant', constant_values=(0,)).astype(
-                    HVSMR2016CardiacMRI.pixel_dta_type)
-                if not isval:
-                    self.images.append(section)
-                    self.labels.append(lbl_slice)
-                else:
-                    self.val_images.append(section)
-                    self.val_labels.append((lbl_slice))
-
-                # rotate for next iteration
-                img_slice = np.rot90(img_slice)
-                lbl_slice = np.rot90(lbl_slice)
-
-        if isval:
-            # store the complete image for testing as well
-            self.test_images.append(image)
-            self.test_labels.append(label)
-
-        # for each image-slice rotate the img four times. We're doing that for all three orientations
-        for z in range(image.shape[2]):
-            label_slice = label[:, :, z]
-            image_slice = image[:, :, z]
-            rotate_slice(image_slice, label_slice, isval)
-
-        for y in range(image.shape[1]):
-            label_slice = np.squeeze(label[:, y, :])
-            image_slice = np.squeeze(image[:, y, :])
-            rotate_slice(image_slice, label_slice, isval)
-
-        for x in range(image.shape[0]):
-            label_slice = np.squeeze(label[x, :, :])
-            image_slice = np.squeeze(image[x, :, :])
-            rotate_slice(image_slice, label_slice, isval)
-
-    def load_numpy_arr_from_dir(self, file_prefix=None, abs_path=None):
-        if file_prefix is None:
-            file_prefix = config.numpy_save_filename
-
-        if abs_path is None:
-            abs_path = self.data_dir
-
-        if self.mode == "train":
-            out_dir = os.path.join(abs_path, "train")
-        else:
-            out_dir = os.path.join(abs_path, "test")
-
-        search_mask = os.path.join(out_dir, file_prefix + "*.npz")
-        print(">>>>>>>>>>>> Info - Looking for files with search_mask {}".format(search_mask))
-        for fname in glob.glob(search_mask):
-            print(">>>>>>>>>>>>>>> Info - Loading numpy objects from {}".format(fname))
-            numpy_ar = np.load(fname)
-            self.images.extend(list(numpy_ar["images"]))
-            self.labels.extend(list(numpy_ar["labels"]))
-            if self.class_count is None:
-                self.class_count = numpy_ar["class_count"]
-
-    def save_to_numpy(self, file_prefix=None, abs_path=None):
-
-        if file_prefix is None:
-            file_prefix = config.numpy_save_filename
-
-        if abs_path is None:
-            abs_path = self.data_dir
-
-        if self.mode == "train":
-            out_filename = os.path.join(abs_path, "train")
-        else:
-            out_filename = os.path.join(abs_path, "test")
-
-        try:
-            chunksize = 1000
-            start = 0
-            end = chunksize
-            for c, chunk in enumerate(np.arange(chunksize)):
-                filename = os.path.join(out_filename, file_prefix + str(chunk) + ".npz")
-                print("> > > Info - Save (chunked) data to directory {}".format(filename))
-                np.savez(filename, images=self.images[start:end],
-                         labels=self.labels[start:end],
-                         class_count=self.class_count)
-
-                start += chunksize
-                end += chunksize
-                if c == 3:
-                    break
-        except IOError:
-            raise IOError("Can't save {}".format(filename))
-
-    def get_test_image(self, swap_axis=True):
-        save_mode = self.mode
-        self.mode = "test"
-        img_files, label_files = self._get_file_lists()
-        for i, file_name in enumerate(img_files):
-            print("> > > Loading image+label from {}".format(file_name))
-            mri_scan, origin, spacing = self.load_func(file_name, data_type=HVSMR2016CardiacMRI.pixel_dta_type)
-            # the Nifty files from the challenge that Jelmer provided have (z,y,x) and hence z,x must be swapped
-            if swap_axis:
-                mri_scan = np.swapaxes(mri_scan, 0, 2)
-
-            if self.norm_scale == "normalize":
-                # print("> > > Info - Normalizing images intensity values")
-                mri_scan = normalize_image(mri_scan, axis=None)
-
-            elif self.norm_scale == "rescale":
-                mri_scan = rescale_image(mri_scan, axis=None)
-                # print("> > > Info - Rescaling images intensity values")
-            else:
-                # no rescaling or normalization
-                print("> > > Info - No rescaling or normalization applied to image!")
-            # add a front axis to the numpy array, will use that to concatenate the image slices
-            self.test_origins.append(origin)
-            self.test_spacings.append(spacing)
-            self.test_images.append(mri_scan)
-            label, _, _ = self.load_func(label_files[i])
-            if swap_axis:
-                label = np.swapaxes(label, 0, 2)
-            self.test_labels.append(label)
-
-        self.mode = save_mode
-
-    def create_test_slices(self):
-        test_img_slices, test_lbl_slices = [], []
-
-        for i in np.arange(len(self.test_images)):
-            image = np.pad(self.test_images[i], ((0, 0),
-                                                 (HVSMR2016CardiacMRI.pad_size, HVSMR2016CardiacMRI.pad_size),
-                                                 (HVSMR2016CardiacMRI.pad_size, HVSMR2016CardiacMRI.pad_size)),
-                           'constant', constant_values=(0,)).astype(HVSMR2016CardiacMRI.pixel_dta_type)
-            for x in np.arange(self.test_images[i].shape[0]):
-                slice_padded = image[x, :, :]
-                lbl_slice = self.test_labels[i][x, :, :]
-                # slice_padded = np.pad(img_slice, HVSMR2016CardiacMRI.pad_size, 'constant', constant_values=(0,)).astype(
-                #    HVSMR2016CardiacMRI.pixel_dta_type)
-                test_img_slices.append(slice_padded)
-                test_lbl_slices.append(lbl_slice)
-
-        return test_img_slices, test_lbl_slices
-
-    @staticmethod
-    def get_pred_class_labels(predictions, classes=None, axis=1):
-        """
-            predictions, autograd.Variable or numpy array with dim:
-             [batch_size, num_of_classes, width, height]
-
-            The parameter "axis" specifies the axis over which we take the maximum in order to determine
-            the segmentation class. The method only supports axis-values 0 and 1.
-
-            Important: the return object "overlays" has dimension [num_of_classes, batch_size, width, height]
-
-        :param predictions:
-        :param classes:
-        :return:
-        """
-        # if PyTorch Variable, convert to numpy array
-        if isinstance(predictions, Variable):
-            predictions = predictions.data.cpu().squeeze().numpy()
-
-        if classes is None:
-            classes = [HVSMR2016CardiacMRI.label_myocardium, HVSMR2016CardiacMRI.label_bloodpool]
-
-        pred_idx = np.argmax(predictions, axis=axis)
-        print(np.unique(pred_idx))
-        print("In method get_pred_class_labels, shape of input ", predictions.shape)
-        if axis == 1:
-            overlays = np.zeros((len(classes) + 1, predictions.shape[0], predictions.shape[2],
-                                 predictions.shape[3]))
-        elif axis == 0:
-            overlays = np.zeros((len(classes) + 1, predictions.shape[1], predictions.shape[2],
-                                 predictions.shape[3]))
-        else:
-            raise ValueError("axis value {} is not supported".format(axis))
-
-        for cls in classes:
-            pred_cls_labels = pred_idx == cls
-            overlays[cls, :, :, :] = pred_cls_labels
-
-        return overlays
+            return self.val_labels
 
 
 # dataset = ACDC2017DataSet(config=config, search_mask=config.dflt_image_name + ".mhd", fold_id=0,

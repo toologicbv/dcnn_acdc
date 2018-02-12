@@ -10,16 +10,17 @@ run_dict = {'cmd': 'train',
             'version': "v1",
             'data_dir': config.data_dir,
             'use_cuda': True,
-            'epochs': 1,
-            'batch_size': 2,
-            'lr': 1e-4,
+            'epochs': 10,
+            'batch_size': 5,
+            'lr': 1e-3,
             'retrain': False,
             'log_dir': None,
             'chkpnt': False,
             'val_fold_id': 1,
             'val_freq': 10,
             'chkpnt_freq': 10,
-            'weight_decay': 0.0001
+            'weight_decay': 0.,
+            'cycle_length': 100
 }
 
 
@@ -40,6 +41,7 @@ def create_def_argparser(**kwargs):
     args.val_freq = kwargs['val_freq']
     args.val_freq = kwargs['chkpnt_freq']
     args.weight_decay = kwargs['weight_decay']
+    args.cycle_length = kwargs['cycle_length']
 
     args.cuda = args.use_cuda and torch.cuda.is_available()
     args.chkpnt = os.path.join(config.checkpoint_path, "default.tar")
@@ -72,13 +74,13 @@ def do_parse_args():
                         help='SGD momentum (default: 0.9)')
     parser.add_argument('--weight_decay', '--wd', default=1e-4, type=float,
                         metavar='W', help='weight decay (default: 1e-4)')
-
+    parser.add_argument('--cycle_length', type=int, default=100, metavar='N',
+                        help='Cycle length for update of learning rate (and snapshot ensemble) (default: 100)')
     parser.add_argument('--bn_sync', action='store_true')
     parser.add_argument('--retrain', action='store_true')
     parser.add_argument('--chkpnt', action='store_true')
     parser.add_argument('--chkpnt_freq', type=int, default=100, metavar='N',
                         help='Checkpoint frequency (saving model state) (default: 100)')
-
 
     args = parser.parse_args()
     args.cuda = args.use_cuda and torch.cuda.is_available()

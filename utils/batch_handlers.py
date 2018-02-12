@@ -39,13 +39,13 @@ class TwoDimBatchHandler(BatchHandler):
     patch_size = 150
     pixel_dta_type = "float32"
 
-    def __init__(self, exper, is_train=True, batch_size=None, num_classes=4):
+    def __init__(self, exper, test_run=False, batch_size=None, num_classes=4):
         if batch_size is None:
             self.batch_size = exper.run_args.batch_size
         else:
             self.batch_size = batch_size
 
-        self.is_train = is_train
+        self.test_run = test_run
         self.num_classes = num_classes
         self.ps_wp = TwoDimBatchHandler.patch_size_with_padding
         self.patch_size = TwoDimBatchHandler.patch_size
@@ -68,6 +68,12 @@ class TwoDimBatchHandler(BatchHandler):
 
     def backward(self, *args):
         pass
+
+    def get_images(self):
+        return self.b_images
+
+    def get_labels(self):
+        return self.b_labels_per_class
 
     def generate_batch_2d(self, images, labels, save_batch=False):
         """
@@ -109,8 +115,9 @@ class TwoDimBatchHandler(BatchHandler):
                 b_labels_per_class[idx, cls_idx+self.num_classes, :, :] = (label_ed == cls_idx).astype('int16')
 
         # print("Images used {}".format(",".join(img_nums)))
-        self.b_images = Variable(torch.FloatTensor(torch.from_numpy(b_images).float()))
-        self.b_labels_per_class = Variable(torch.FloatTensor(torch.from_numpy(b_labels_per_class).float()))
+        self.b_images = Variable(torch.FloatTensor(torch.from_numpy(b_images).float()), volatile=self.test_run)
+        self.b_labels_per_class = Variable(torch.FloatTensor(torch.from_numpy(b_labels_per_class).float()),
+                                           volatile=self.test_run)
 
         if save_batch:
             self.save_batch_img_to_files()

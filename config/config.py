@@ -12,8 +12,7 @@ DEFAULT_DCNN_2D = {'num_of_layers': 10,
                    'non_linearity': [nn.ELU, nn.ELU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ELU, nn.ELU,
                                      nn.Softmax],
                    'dropout': [0., 0., 0., 0., 0., 0., 0., 0.5, 0.5, 0.],
-                   'loss_function': nn.NLLLoss,
-                   'output': nn.LogSoftmax
+                   'loss_function': nn.NLLLoss
                    }
 
 OPTIMIZER_DICT = {'sgd': torch.optim.SGD,  # Gradient Descent
@@ -48,6 +47,7 @@ class BaseConfig(object):
 
         # optimizer
         self.optimizer = "adam"
+        self.cycle_length = 100
 
         # normalization method "normalize or rescaling"
         self.norm_method = "normalize"

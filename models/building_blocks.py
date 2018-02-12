@@ -32,7 +32,7 @@ class ConcatenateCNNBlock(nn.Module):
             #        isinstance(apply_non_linearity, nn.Softmax)):
             #    raise ValueError("{} is not supported as non-linearity".format(apply_non_linearity.__class__.__name__))
             if self.verbose:
-                print("INFO - apply {}".format(apply_non_linearity.__repr__))
+                print("INFO - apply {}".format(apply_non_linearity.__name__))
             self.non_linearity = self.apply_non_linearity(dim=1)
 
         if self.apply_batch_norm:
@@ -58,16 +58,11 @@ class ConcatenateCNNBlock(nn.Module):
             out2 = self.bn2(out2)
 
         if self.apply_non_linearity is not None:
-            if self.training:
-                # during training apply LogSoftmax because we're computing the loss afterwards
-                # note: we had some problems when first calculating Softmax then Log and then CrossEntropyLoss
-                # which would give us NaN values on some of the QIA GPUs unfortunately
-                out1 = self.non_linearity(out1)
-                out2 = self.non_linearity(out2)
-            else:
-                # during testing apply Softmax, because we want to compute accuracy
-                out1 = self.softmax(out1)
-                out2 = self.softmax(out2)
+            # The model uses the so called soft-Dice loss function. Calculation of the loss requires
+            # that we calculate probabilities for each pixel, and hence we use the Softmax for this, which should
+            # be specified as the non-linearity in the dictionary of the config object
+            out1 = self.non_linearity(out1)
+            out2 = self.non_linearity(out2)
 
         return torch.cat((out1, out2), dim=self.axis)
 

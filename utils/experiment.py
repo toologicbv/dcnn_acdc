@@ -11,18 +11,17 @@ from common.parsing import create_def_argparser, run_dict
 from common.common import create_logger, create_exper_label
 from config.config import config
 from utils.batch_handlers import TwoDimBatchHandler
-from in_out.load_data import HVSMR2016CardiacMRI
 import models.dilated_cnn
 
 
 class ExperimentHandler(object):
 
-    def __init__(self, exper, logger=None):
+    def __init__(self, exper, logger=None, use_logfile=True):
 
         self.exper = exper
         self.logger = None
         if logger is None:
-            self.logger = create_logger(self.exper, file_handler=False)
+            self.logger = create_logger(self.exper, file_handler=use_logfile)
         else:
             self.logger = logger
 
@@ -31,6 +30,10 @@ class ExperimentHandler(object):
 
     def next_epoch(self):
         self.exper.epoch_id += 1
+
+    def next_val_run(self):
+        self.exper.val_run_id += 1
+        self.exper.val_stats["epoch_ids"][self.exper.val_run_id] = self.exper.epoch_id
 
     def save_experiment(self, file_name=None):
 
@@ -90,7 +93,7 @@ class ExperimentHandler(object):
         val_loss = model.get_loss(b_predictions, val_batch.b_labels)
         val_loss = val_loss.data.cpu().squeeze().numpy()[0]
         # compute dice score for both classes (myocardium and bloodpool)
-        dice = HVSMR2016CardiacMRI.compute_accuracy(b_predictions, val_batch.b_labels)
+        dice = None  # HVSMR2016CardiacMRI.compute_accuracy(b_predictions, val_batch.b_labels)
         # store epochID and validation loss
         if val_run_id is not None:
             self.exper.val_stats["mean_loss"][val_run_id - 1] = np.array([self.exper.epoch_id, val_loss])
@@ -100,6 +103,39 @@ class ExperimentHandler(object):
                                                                       dice[0], dice[1]))
         model.train()
         del val_batch
+
+    def set_batch_loss(self, loss):
+        if isinstance(loss, Variable) or isinstance(loss, torch.FloatTensor):
+            loss = loss.data.cpu().squeeze().numpy()
+        self.exper.epoch_stats["mean_loss"][self.exper.epoch_id-1] = loss
+
+    def set_dice_losses(self, dice_losses, val_run_id=None):
+
+        if val_run_id is None:
+            self.exper.epoch_stats["soft_dice_loss"][self.exper.epoch_id - 1] = dice_losses
+        else:
+            # during validation add epoch number to tuple, should be useful during evaluation
+            dice_losses = tuple((self.exper.epoch_id - 1, dice_losses[0], dice_losses[1]))
+            self.exper.val_stats["soft_dice_loss"][val_run_id] = dice_losses
+
+    def set_accuracy(self, accuracy, val_run_id=None):
+
+        if val_run_id is None:
+            self.exper.epoch_stats["dice_coeff"][self.exper.epoch_id - 1] = accuracy
+        else:
+            # want to store the
+            np_acc = np.zeros(accuracy.shape[0] + 1)
+            accuracy = tuple((self.exper.epoch_id - 1, accuracy[0], accuracy[1]))
+            self.exper.val_stats["dice_coeff"][val_run_id] = accuracy
+
+    def get_epoch_loss(self):
+        return self.exper.epoch_stats["mean_loss"][self.exper.epoch_id - 1]
+
+    def get_epoch_dice_losses(self):
+        return self.exper.epoch_stats["soft_dice_loss"][self.exper.epoch_id - 1]
+
+    def get_epoch_dice_coeffients(self):
+        return self.exper.epoch_stats["dice_coeff"][self.exper.epoch_id - 1]
 
     @staticmethod
     def load_experiment(path_to_exp, full_path=False):
@@ -146,6 +182,7 @@ class Experiment(object):
         self.stats_path = None
         self._set_path()
         self.num_val_runs = 0
+        self.val_run_id = -1
         self.init_statistics()
 
         if set_seed:
@@ -164,9 +201,15 @@ class Experiment(object):
             else:
                 # one extra run because max epoch is not divided by val_freq
                 self.num_val_runs += 1
-        self.epoch_stats = {'mean_loss': np.zeros(self.run_args.epochs)}
-        self.val_stats = {'mean_loss': np.zeros((self.num_val_runs, 2)),
-                          'dice_coeff': np.zeros((self.num_val_runs, 3))}
+        self.epoch_stats = {'mean_loss': np.zeros(self.run_args.epochs),
+                            # storing the mean dice loss for ES and ED separately
+                            'soft_dice_loss': np.zeros((self.run_args.epochs, 2)),
+                            # storing dice coefficients for LV, RV and myocardium classes for ES and ED = six values
+                            'dice_coeff': np.zeros((self.run_args.epochs, 6))}
+        self.val_stats = {'epoch_ids': np.zeros(self.num_val_runs),
+                          'mean_loss': np.zeros(self.num_val_runs),
+                          'soft_dice_loss': np.zeros((self.num_val_runs, 2)),
+                          'dice_coeff': np.zeros((self.run_args.epochs, 6))}
 
     def start(self, exper_logger=None):
 

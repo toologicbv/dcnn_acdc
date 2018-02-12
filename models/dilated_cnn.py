@@ -2,23 +2,36 @@
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
-from config.config import DEFAULT_DCNN_2D
+from config.config import DEFAULT_DCNN_2D, config
 import numpy as np
+from config.config import OPTIMIZER_DICT
 from building_blocks import Basic2DCNNBlock
 from models.building_blocks import ConcatenateCNNBlock
-from utils.dice_metric import soft_dice_score
+from utils.dice_metric import soft_dice_score, dice_coefficient
+from models.lr_schedulers import CycleLR
 
 
 class BaseDilated2DCNN(nn.Module):
 
-    def __init__(self, architecture=DEFAULT_DCNN_2D, use_cuda=False, verbose=True):
+    def __init__(self, architecture=DEFAULT_DCNN_2D, optimizer=torch.optim.Adam, lr=1e-4, weight_decay=0.,
+                 use_cuda=False, verbose=True, cycle_length=0):
         super(BaseDilated2DCNN, self).__init__()
         self.architecture = architecture
         self.use_cuda = use_cuda
         self.num_conv_layers = self.architecture['num_of_layers']
         self.verbose = verbose
         self.model = self._build_dcnn()
+        self.lr_scheduler = None
+        self.optimizer = OPTIMIZER_DICT[optimizer](
+            self.parameters(), lr=lr, weight_decay=weight_decay)
+        if cycle_length != 0:
+            self.lr_scheduler = CycleLR(self.optimizer, alpha_zero=0.2, cycle_length=cycle_length)
+            self.use_scheduler = True
+        else:
+            self.use_scheduler = False
 
+        self.np_dice_losses = None
+        self.np_dice_coeffs = None
         if self.use_cuda:
             self.cuda()
 
@@ -70,7 +83,7 @@ class BaseDilated2DCNN(nn.Module):
 
         return out
 
-    def get_loss(self, predictions, labels):
+    def get_loss(self, predictions, labels, is_train=True):
         """
             we need to reshape the tensors because CrossEntropy expects 2D tensor (N, C) where C is num of classes
             the input tensor is in our case [batch_size, 2 * num_of_classes, height, width]
@@ -78,14 +91,59 @@ class BaseDilated2DCNN(nn.Module):
         """
         num_of_classes = labels.size(1)
         losses = Variable(torch.FloatTensor(num_of_classes))
+        dices = Variable(torch.FloatTensor(num_of_classes))
         if self.use_cuda:
             losses = losses.cuda()
         for cls in np.arange(labels.size(1)):
             losses[cls] = soft_dice_score(predictions, labels, cls=cls)
+            # for the dice coefficient we need to determine the class labels of the predictions
+            # remember that the object labels contains binary labels for each class (hence dim=1 has size 8)
+            # here we determine the max index for each prediction over the 8 classes, and then set all labels
+            # to zero that are not relevant for this dice coeff.
+            # IMPORTANT: we DON't compute the DICE for the background class
+            if cls != config.class_lbl_background:
+                _, pred_labels = torch.max(predictions, dim=1)
+                pred_labels = pred_labels == cls
+                dices[cls] = dice_coefficient(pred_labels, labels[:, cls, :, :])
+                if not is_train:
+                    print(np.unique(labels[:, cls, :, :].data.cpu().numpy()))
+                    print(np.unique(pred_labels.data.cpu().numpy()))
 
-        # regloss = don't forget
-        # loss = -1.0 * loss_ES - 1.0 * loss_ED + 0.0001 * regloss
-        return torch.sum(losses)
+        self.np_dice_losses = losses.data.cpu().numpy()
+        self.np_dice_coeffs = dices.data.cpu().numpy()
+
+        # NOTE: we want to minimize the loss, but the soft-dice-loss is actually increasing when our predictions
+        # get better. HENCE, we need to multiply by minus one here.
+        return (-1.) * torch.sum(losses)
+
+    def do_train(self, batch):
+        self.zero_grad()
+        b_out = self(batch.get_images())
+        b_loss = self.get_loss(b_out, batch.get_labels())
+        # compute gradients w.r.t. model parameters
+        b_loss.backward(retain_graph=False)
+        if self.use_scheduler:
+            self.lr_scheduler.step()
+        else:
+            self.optimizer.step()
+        return b_loss
+
+    def do_validate(self, batch):
+        self.eval()
+        b_predictions = self(batch.get_images())
+        val_loss = self.get_loss(b_predictions, batch.get_labels())
+        self.train()
+        return val_loss
+
+    def get_dice_losses(self, average=False):
+        if not average:
+            return self.np_dice_losses
+        else:
+            split = int(self.np_dice_losses.shape[0] * 0.5)
+            return np.mean(self.np_dice_losses[0:split]), np.mean(self.np_dice_losses[split:])
+
+    def get_accuracy(self):
+        return np.concatenate((self.np_dice_coeffs[1:4], self.np_dice_coeffs[5:8]))
 
     def cuda(self):
         super(BaseDilated2DCNN, self).cuda()
