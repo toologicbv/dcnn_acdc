@@ -38,8 +38,9 @@ def create_def_argparser(**kwargs):
     args.retrain = kwargs['retrain']
     args.log_dir = kwargs['log_dir']
     args.val_fold_id = kwargs['val_fold_id']
+    args.print_freq = kwargs['print_freq']
     args.val_freq = kwargs['val_freq']
-    args.val_freq = kwargs['chkpnt_freq']
+    args.chkpnt_freq = kwargs['chkpnt_freq']
     args.weight_decay = kwargs['weight_decay']
     args.cycle_length = kwargs['cycle_length']
 
@@ -64,6 +65,8 @@ def do_parse_args():
                         help='number of epochs to train (default: 10)')
     parser.add_argument('--val_fold_id', type=int, default=1, metavar='N',
                         help='which fold to use for validation ([1...5]) (default: 1)')
+    parser.add_argument('--print_freq', type=int, default=10, metavar='N',
+                        help='Frequency of printing training performance (expressed in epochs) (default: 10)')
     parser.add_argument('--val_freq', type=int, default=10, metavar='N',
                         help='Frequency of validation (expressed in epochs) (default: 10)')
 
@@ -74,8 +77,8 @@ def do_parse_args():
                         help='SGD momentum (default: 0.9)')
     parser.add_argument('--weight_decay', '--wd', default=1e-4, type=float,
                         metavar='W', help='weight decay (default: 1e-4)')
-    parser.add_argument('--cycle_length', type=int, default=100, metavar='N',
-                        help='Cycle length for update of learning rate (and snapshot ensemble) (default: 100)')
+    parser.add_argument('--cycle_length', type=int, default=0, metavar='N',
+                        help='Cycle length for update of learning rate (and snapshot ensemble) (default: 0)')
     parser.add_argument('--bn_sync', action='store_true')
     parser.add_argument('--retrain', action='store_true')
     parser.add_argument('--chkpnt', action='store_true')
@@ -84,6 +87,12 @@ def do_parse_args():
 
     args = parser.parse_args()
     args.cuda = args.use_cuda and torch.cuda.is_available()
+
+    # if we're using a cyclic learning rate schedule, set checkpoint interval to cycle_length
+    # hence we store a model each cycle length
+    if args.cycle_length != 0:
+        args.chkpnt_freq = args.cycle_length
+        args.chkpnt = True
 
     assert args.root_dir is not None
     return args

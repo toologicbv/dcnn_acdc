@@ -12,7 +12,7 @@ class CycleLR(_LRScheduler):
 
     """
     def __init__(self, optimizer, alpha_zero=0.2, cycle_length=10000, last_epoch=-1):
-        self.optimizer = optimizer
+
         self.alpha_zero = alpha_zero
         self.cycle_length = cycle_length
         self.lr = alpha_zero
@@ -23,6 +23,5 @@ class CycleLR(_LRScheduler):
             epoch = self.last_epoch
 
         self.lr = (self.alpha_zero / 2.0) * \
-             (np.cos((np.pi * float(np.mod(epoch - 1, self.cycle_length))) / self.cycle_length) + 1)
-
+             (np.cos((np.pi * float(np.mod(epoch, self.cycle_length))) / self.cycle_length) + 1)
         return [self.lr for _ in self.base_lrs]

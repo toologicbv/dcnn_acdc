@@ -25,7 +25,7 @@ class BaseDilated2DCNN(nn.Module):
         self.optimizer = OPTIMIZER_DICT[optimizer](
             self.parameters(), lr=lr, weight_decay=weight_decay)
         if cycle_length != 0:
-            self.lr_scheduler = CycleLR(self.optimizer, alpha_zero=0.2, cycle_length=cycle_length)
+            self.lr_scheduler = CycleLR(self.optimizer, alpha_zero=lr, cycle_length=cycle_length)
             self.use_scheduler = True
         else:
             self.use_scheduler = False
@@ -95,7 +95,7 @@ class BaseDilated2DCNN(nn.Module):
         if self.use_cuda:
             losses = losses.cuda()
         for cls in np.arange(labels.size(1)):
-            losses[cls] = soft_dice_score(predictions, labels, cls=cls)
+            losses[cls] = soft_dice_score(predictions[:, cls, :, :], labels[:, cls, :, :])
             # for the dice coefficient we need to determine the class labels of the predictions
             # remember that the object labels contains binary labels for each class (hence dim=1 has size 8)
             # here we determine the max index for each prediction over the 8 classes, and then set all labels
@@ -124,8 +124,8 @@ class BaseDilated2DCNN(nn.Module):
         b_loss.backward(retain_graph=False)
         if self.use_scheduler:
             self.lr_scheduler.step()
-        else:
-            self.optimizer.step()
+
+        self.optimizer.step()
         return b_loss
 
     def do_validate(self, batch):
@@ -153,6 +153,13 @@ class BaseDilated2DCNN(nn.Module):
 
     def save_params(self, absolute_path):
         torch.save(self.state_dict(), absolute_path)
+
+    def get_lr(self):
+        if self.lr_scheduler is not None:
+            lr = self.lr_scheduler.lr
+        else:
+            lr = self.optimizer.defaults["lr"]
+        return lr
 
     def sum_grads(self, verbose=False):
         sum_grads = 0

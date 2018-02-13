@@ -9,7 +9,7 @@ from sklearn.metrics.classification import UndefinedMetricWarning
 
 
 # https://github.com/EKami/carvana-challenge/blob/master/src/nn/losses.py
-def soft_dice_score(probs, true_binary_labels, cls=0):
+def soft_dice_score(prob_c, true_label_c):
     """
 
     Computing the soft-dice-loss for a SPECIFIC class according to:
@@ -25,8 +25,7 @@ def soft_dice_score(probs, true_binary_labels, cls=0):
 
     """
     eps = 1.0e-6
-    prob_c = probs[:, cls, :, :]
-    true_label_c = true_binary_labels[:, cls, :, :]
+
     nominator = torch.sum(true_label_c * prob_c)
     denominator = torch.sum(true_label_c) + torch.sum(prob_c) + eps
     return nominator/denominator
@@ -56,5 +55,5 @@ def dice_coefficient(pred_labels, true_labels, cls=0):
         dice = 2 * float(intersection) / float(denominator)
     except ZeroDivisionError:
         print("WARNING - Division by zero in procedure dice_coefficient!")
-
+        dice = 0.
     return dice

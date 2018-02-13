@@ -68,6 +68,9 @@ class BaseConfig(object):
         # noise threshold
         self.noise_threshold = 0.01
 
+        # validation settings
+        self.val_batch_size = 64
+
     def copy_from_object(self, obj):
 
         for key, value in obj.__dict__.iteritems():

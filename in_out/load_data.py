@@ -120,7 +120,7 @@ class ACDC2017DataSet(BaseImageDataSet):
     new_voxel_spacing = 1.4
 
     def __init__(self, config, search_mask=None, nclass=4, load_func=load_mhd_to_numpy,
-                 fold_ids=1, preprocess=False, debug=False):
+                 fold_ids=[0], preprocess=False, debug=False):
 
         super(BaseImageDataSet, self).__init__()
         self.data_dir = os.path.join(config.root_dir, config.data_dir)
@@ -157,27 +157,28 @@ class ACDC2017DataSet(BaseImageDataSet):
             ACDC2017DataSet.image_path = ACDC2017DataSet.image_path + "_test"
             ACDC2017DataSet.label_path = ACDC2017DataSet.label_path + "_test"
 
-        self.train_path = os.path.join(self.abs_path_fold,
-                                       os.path.join(ACDC2017DataSet.train_path, ACDC2017DataSet.image_path))
-        self.val_path = os.path.join(self.abs_path_fold,
-                                     os.path.join(ACDC2017DataSet.val_path, ACDC2017DataSet.image_path))
-
     def _get_file_lists(self):
 
         train_file_list = []
         val_file_list = []
-        # get training images and labels
-        search_mask_img = os.path.join(self.train_path, self.search_mask)
-        # print("INFO - >>> Search with dir+pattern {} <<<".format(search_mask_img))
-        for train_file in glob.glob(search_mask_img):
-            ref_file = train_file.replace(ACDC2017DataSet.image_path, ACDC2017DataSet.label_path)
-            train_file_list.append(tuple((train_file, ref_file)))
+        for fold_id in self.fold_ids:
+            self.train_path = os.path.join(self.abs_path_fold + str(fold_id),
+                                           os.path.join(ACDC2017DataSet.train_path, ACDC2017DataSet.image_path))
+            self.val_path = os.path.join(self.abs_path_fold + str(fold_id),
+                                         os.path.join(ACDC2017DataSet.val_path, ACDC2017DataSet.image_path))
+            # get training images and labels
+            search_mask_img = os.path.join(self.train_path, self.search_mask)
+            # print("INFO - >>> Search with dir+pattern {} <<<".format(search_mask_img))
+            for train_file in glob.glob(search_mask_img):
+                ref_file = train_file.replace(ACDC2017DataSet.image_path, ACDC2017DataSet.label_path)
+                train_file_list.append(tuple((train_file, ref_file)))
 
-        # get validation images and labels
-        search_mask_img = os.path.join(self.val_path, self.search_mask)
-        for val_file in glob.glob(search_mask_img):
-            ref_file = val_file.replace(ACDC2017DataSet.image_path, ACDC2017DataSet.label_path)
-            val_file_list.append(tuple((val_file, ref_file)))
+            # get validation images and labels
+            search_mask_img = os.path.join(self.val_path, self.search_mask)
+            for val_file in glob.glob(search_mask_img):
+                ref_file = val_file.replace(ACDC2017DataSet.image_path, ACDC2017DataSet.label_path)
+                val_file_list.append(tuple((val_file, ref_file)))
+
         return train_file_list, val_file_list
 
     def _load_file_list(self, file_list, is_train=True):
@@ -213,8 +214,8 @@ class ACDC2017DataSet(BaseImageDataSet):
         train_file_list, val_file_list = self._get_file_lists()
         files_loaded += self._load_file_list(train_file_list, is_train=True)
         files_loaded += self._load_file_list(val_file_list, is_train=False)
-        print("INFO - Using fold{} - loaded {} files: {} slices in train set, {} slices in validation set".format(
-            self.fold_id, files_loaded, len(self.train_images), len(self.val_images)))
+        print("INFO - Using folds {} - loaded {} files: {} slices in train set, {} slices in validation set".format(
+            self.fold_ids, files_loaded, len(self.train_images), len(self.val_images)))
 
     def _augment_data(self, image_ed, label_ed, image_es, label_es, is_train=False):
         """
@@ -292,7 +293,7 @@ class ACDC2017DataSet(BaseImageDataSet):
         train_file_list, val_file_list = self._get_file_lists()
         files_loaded = self._resample_images(train_file_list)
         files_loaded += self._resample_images(val_file_list)
-        print("INFO - Using fold{} - loaded {} files".format(self.fold_id, files_loaded))
+        print("INFO - Using folds {} - loaded {} files".format(self.fold_ids, files_loaded))
 
     def __len__(self):
         return len(self.train_images), len(self.val_images)

@@ -16,6 +16,8 @@ import models.dilated_cnn
 
 class ExperimentHandler(object):
 
+    exp_filename = "exper_stats"
+
     def __init__(self, exper, logger=None, use_logfile=True):
 
         self.exper = exper
@@ -35,10 +37,13 @@ class ExperimentHandler(object):
         self.exper.val_run_id += 1
         self.exper.val_stats["epoch_ids"][self.exper.val_run_id] = self.exper.epoch_id
 
-    def save_experiment(self, file_name=None):
+    def save_experiment(self, file_name=None, final_run=False):
 
         if file_name is None:
-            file_name = "exper_stats@{}".format(self.exper.epoch_id) + ".dll"
+            if final_run:
+                file_name = ExperimentHandler.exp_filename + ".dll"
+            else:
+                file_name = ExperimentHandler.exp_filename + "@{}".format(self.exper.epoch_id) + ".dll"
 
         outfile = os.path.join(self.exper.stats_path, file_name)
         with open(outfile, 'wb') as f:
@@ -61,6 +66,9 @@ class ExperimentHandler(object):
 
         if root_dir is None:
             root_dir = self.exper.config.root_dir
+
+        if checkpoint is None:
+            checkpoint = self.exper.epoch_id
 
         str_classname = "BaseDilated2DCNN"
         checkpoint_file = str_classname + "checkpoint" + str(checkpoint).zfill(5) + ".pth.tar"
@@ -104,6 +112,9 @@ class ExperimentHandler(object):
         model.train()
         del val_batch
 
+    def set_lr(self, lr):
+        self.exper.epoch_stats["lr"][self.exper.epoch_id - 1] = lr
+
     def set_batch_loss(self, loss):
         if isinstance(loss, Variable) or isinstance(loss, torch.FloatTensor):
             loss = loss.data.cpu().squeeze().numpy()
@@ -114,9 +125,7 @@ class ExperimentHandler(object):
         if val_run_id is None:
             self.exper.epoch_stats["soft_dice_loss"][self.exper.epoch_id - 1] = dice_losses
         else:
-            # during validation add epoch number to tuple, should be useful during evaluation
-            dice_losses = tuple((self.exper.epoch_id - 1, dice_losses[0], dice_losses[1]))
-            self.exper.val_stats["soft_dice_loss"][val_run_id] = dice_losses
+            self.exper.val_stats["soft_dice_loss"][val_run_id-1] = dice_losses
 
     def set_accuracy(self, accuracy, val_run_id=None):
 
@@ -124,9 +133,7 @@ class ExperimentHandler(object):
             self.exper.epoch_stats["dice_coeff"][self.exper.epoch_id - 1] = accuracy
         else:
             # want to store the
-            np_acc = np.zeros(accuracy.shape[0] + 1)
-            accuracy = tuple((self.exper.epoch_id - 1, accuracy[0], accuracy[1]))
-            self.exper.val_stats["dice_coeff"][val_run_id] = accuracy
+            self.exper.val_stats["dice_coeff"][val_run_id-1] = accuracy
 
     def get_epoch_loss(self):
         return self.exper.epoch_stats["mean_loss"][self.exper.epoch_id - 1]
@@ -138,10 +145,17 @@ class ExperimentHandler(object):
         return self.exper.epoch_stats["dice_coeff"][self.exper.epoch_id - 1]
 
     @staticmethod
-    def load_experiment(path_to_exp, full_path=False):
+    def load_experiment(path_to_exp, full_path=False, epoch=None):
 
+        path_to_exp = os.path.join(path_to_exp, config.stats_path)
+
+        if epoch is None:
+            path_to_exp = os.path.join(path_to_exp, ExperimentHandler.exp_filename + ".dll")
+        else:
+            exp_filename = ExperimentHandler.exp_filename + "@{}".format(epoch) + ".dll"
+            path_to_exp = os.path.join(path_to_exp, exp_filename)
         if not full_path:
-            path_to_exp = os.path.join(config.root_dir, os.path.join(config.log_root_path , path_to_exp))
+            path_to_exp = os.path.join(config.root_dir, os.path.join(config.log_root_path, path_to_exp))
 
         print("Load from {}".format(path_to_exp))
         try:
@@ -176,6 +190,7 @@ class Experiment(object):
             self.run_args = create_def_argparser(**run_dict)
         else:
             self.run_args = run_args
+
         self.config = config
         self.epoch_stats = None
         self.val_stats = None
@@ -201,7 +216,8 @@ class Experiment(object):
             else:
                 # one extra run because max epoch is not divided by val_freq
                 self.num_val_runs += 1
-        self.epoch_stats = {'mean_loss': np.zeros(self.run_args.epochs),
+        self.epoch_stats = {'lr': np.zeros(self.run_args.epochs),
+                            'mean_loss': np.zeros(self.run_args.epochs),
                             # storing the mean dice loss for ES and ED separately
                             'soft_dice_loss': np.zeros((self.run_args.epochs, 2)),
                             # storing dice coefficients for LV, RV and myocardium classes for ES and ED = six values
@@ -209,7 +225,7 @@ class Experiment(object):
         self.val_stats = {'epoch_ids': np.zeros(self.num_val_runs),
                           'mean_loss': np.zeros(self.num_val_runs),
                           'soft_dice_loss': np.zeros((self.num_val_runs, 2)),
-                          'dice_coeff': np.zeros((self.run_args.epochs, 6))}
+                          'dice_coeff': np.zeros((self.num_val_runs, 6))}
 
     def start(self, exper_logger=None):
 
