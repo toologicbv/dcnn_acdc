@@ -54,14 +54,9 @@ def normalize_image(img, axis=None):
 
 
 class BaseImageDataSet(Dataset):
-    def __init__(self, data_dir, conf_obj=None):
-        if data_dir is None:
-            if not conf_obj is None:
-                data_dir = config.data_dir
-            else:
-                raise ValueError("parameter {} is None, cannot load images".format(data_dir))
-        assert os.path.exists(data_dir), "{} does not exist".format(data_dir)
-        self.data_dir = data_dir
+
+    def __init__(self):
+
         self.search_mask = None
         self.images = None
         self.images_raw = None
@@ -108,11 +103,12 @@ class ACDC2017DataSet(BaseImageDataSet):
     pad_size = config.pad_size
     new_voxel_spacing = 1.4
 
-    def __init__(self, config, search_mask=None, nclass=4, load_func=load_mhd_to_numpy,
+    def __init__(self, exper_config, search_mask=None, nclass=4, load_func=load_mhd_to_numpy,
                  fold_ids=[0], preprocess=False, debug=False):
-
         super(BaseImageDataSet, self).__init__()
-        self.data_dir = os.path.join(config.root_dir, config.data_dir)
+        self.data_dir = os.path.join(exper_config.root_dir, exper_config.data_dir)
+        print(exper_config.root_dir, exper_config.data_dir)
+        print("self.data_dir ", self.data_dir)
         self.search_mask = search_mask
         self.num_of_classes = nclass
         self.fold_ids = fold_ids
@@ -155,9 +151,20 @@ class ACDC2017DataSet(BaseImageDataSet):
                                            os.path.join(ACDC2017DataSet.train_path, ACDC2017DataSet.image_path))
             self.val_path = os.path.join(self.abs_path_fold + str(fold_id),
                                          os.path.join(ACDC2017DataSet.val_path, ACDC2017DataSet.image_path))
+            if self.preprocess:
+                iso_img_path = self.train_path.replace("images", "images_iso")
+                if not os.path.isdir(iso_img_path):
+                    os.mkdir(iso_img_path)
+                    iso_lbl_path = iso_img_path.replace("images_iso", "reference_iso")
+                    os.mkdir(iso_lbl_path)
+                iso_img_path = self.val_path.replace("images", "images_iso")
+                if not os.path.isdir(iso_img_path):
+                    os.mkdir(iso_img_path)
+                    iso_lbl_path = iso_img_path.replace("images_iso", "reference_iso")
+                    os.mkdir(iso_lbl_path)
             # get training images and labels
             search_mask_img = os.path.join(self.train_path, self.search_mask)
-            # print("INFO - >>> Search with dir+pattern {} <<<".format(search_mask_img))
+            print("INFO - >>> Search for {} <<<".format(search_mask_img))
             for train_file in glob.glob(search_mask_img):
                 ref_file = train_file.replace(ACDC2017DataSet.image_path, ACDC2017DataSet.label_path)
                 train_file_list.append(tuple((train_file, ref_file)))
@@ -201,6 +208,13 @@ class ACDC2017DataSet(BaseImageDataSet):
         files_loaded = 0
         print("INFO - Using folds {} - busy loading images/references...this may take a while!".format(self.fold_ids))
         train_file_list, val_file_list = self._get_file_lists()
+        if len(train_file_list) == 0:
+            print("INFO - No iso-files found therefore generating them from fold directorie(s)")
+            # iso images do not already exist...presumably
+            self.preprocess = True
+            self._set_pathes()
+            self.pre_process()
+            train_file_list, val_file_list = self._get_file_lists()
         files_loaded += self._load_file_list(train_file_list, is_train=True)
         files_loaded += self._load_file_list(val_file_list, is_train=False)
         print("INFO - Using folds {} - loaded {} files: {} slices in train set, {} slices in validation set".format(
@@ -278,7 +292,7 @@ class ACDC2017DataSet(BaseImageDataSet):
         return files_loaded
 
     def pre_process(self):
-        print("INFO - Resampling images")
+        print("INFO - Resampling images to isometric size")
         train_file_list, val_file_list = self._get_file_lists()
         files_loaded = self._resample_images(train_file_list)
         files_loaded += self._resample_images(val_file_list)
@@ -300,8 +314,8 @@ class ACDC2017DataSet(BaseImageDataSet):
             return self.val_labels
 
 
-# dataset = ACDC2017DataSet(config=config, search_mask=config.dflt_image_name + ".mhd", fold_id=0,
-#                           preprocess=False)
+# dataset = ACDC2017DataSet(config=config, search_mask=config.dflt_image_name + ".mhd", fold_ids=[3],
+#                          preprocess=False)
 
 # del dataset
 

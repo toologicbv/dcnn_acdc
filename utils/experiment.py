@@ -29,6 +29,7 @@ class ExperimentHandler(object):
 
     def set_root_dir(self, root_dir):
         self.exper.config.root_dir = root_dir
+        self.exper.config.data_dir = os.path.join(self.exper.config.root_dir, "data/Folds/")
 
     def next_epoch(self):
         self.exper.epoch_id += 1
@@ -73,7 +74,10 @@ class ExperimentHandler(object):
         str_classname = "BaseDilated2DCNN"
         checkpoint_file = str_classname + "checkpoint" + str(checkpoint).zfill(5) + ".pth.tar"
         act_class = getattr(models.dilated_cnn, str_classname)
-        model = act_class(use_cuda=self.exper.run_args.cuda)
+        model = act_class(optimizer=self.exper.config.optimizer, lr=self.exper.run_args.lr,
+                          weight_decay=self.exper.run_args.weight_decay,
+                          use_cuda=self.exper.run_args.cuda,
+                          cycle_length=self.exper.run_args.cycle_length)
         abs_checkpoint_dir = os.path.join(root_dir,
                                           os.path.join( self.exper.chkpnt_dir, checkpoint_file))
         if os.path.exists(abs_checkpoint_dir):

@@ -22,7 +22,8 @@ def training(exper_hdl):
     """
 
     dataset = ACDC2017DataSet(exper_hdl.exper.config, search_mask=config.dflt_image_name + ".mhd",
-                              fold_ids=exper_hdl.exper.run_args.fold_ids, preprocess=False, debug=True)
+                              fold_ids=exper_hdl.exper.run_args.fold_ids, preprocess=False,
+                              debug=exper_hdl.exper.run_args.quick_run)
 
     dcnn_model = load_model(exper_hdl)
     # IMPORTANT: I AM CURRENTLY NOT USING THE FUNCTIONALITY TO RUN MULTIPLE BATCHES PER EPOCH!!!
@@ -120,11 +121,7 @@ def main():
     exper_hdl = ExperimentHandler(exper)
     exper.start()
     exper_hdl.print_flags()
-
-    if args.cmd == 'train':
-        training(exper_hdl)
-    elif args.cmd == 'test':
-        raise NotImplementedError("test mode is not yet implemented")
+    training(exper_hdl)
 
 
 if __name__ == '__main__':
