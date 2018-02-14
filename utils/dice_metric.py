@@ -31,13 +31,13 @@ def soft_dice_score(prob_c, true_label_c):
     return nominator/denominator
 
 
-def dice_coefficient(pred_labels, true_labels, cls=0):
+def dice_coefficient(pred_labels, true_labels):
     """
     Compute the Dice aka F1-score
 
     We assume predicted and true labels are PyTorch Variables for ONE specific class.
 
-    Both
+    Both tensors contain for all image pixels a predicted label and the reference label in binary values
 
 
     """

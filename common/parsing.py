@@ -62,8 +62,8 @@ def do_parse_args():
     parser.add_argument('--batch_size', type=int, default=64, metavar='N',
                         help='input batch size for training (default: 64)')
     parser.add_argument('--epochs', type=int, default=10, metavar='N',
-                        help='number of epochs to train (default: 10)')
-    parser.add_argument('--val_fold_id', type=int, default=1, metavar='N',
+                        help='number of epochs to train (default: [0])')
+    parser.add_argument('--fold_ids', type=list, default="0", metavar='N',
                         help='which fold to use for validation ([1...5]) (default: 1)')
     parser.add_argument('--print_freq', type=int, default=10, metavar='N',
                         help='Frequency of printing training performance (expressed in epochs) (default: 10)')

@@ -22,7 +22,7 @@ def training(exper_hdl):
     """
 
     dataset = ACDC2017DataSet(exper_hdl.exper.config, search_mask=config.dflt_image_name + ".mhd",
-                              fold_ids=[0], preprocess=False, debug=False)
+                              fold_ids=exper_hdl.exper.run_args.fold_ids, preprocess=False, debug=True)
 
     dcnn_model = load_model(exper_hdl)
     # IMPORTANT: I AM CURRENTLY NOT USING THE FUNCTIONALITY TO RUN MULTIPLE BATCHES PER EPOCH!!!

@@ -9,7 +9,7 @@ import os
 import numpy as np
 import torch
 from torch.autograd import Variable
-from in_out.load_data import write_numpy_to_image
+from in_out.read_save_images import write_numpy_to_image
 # from in_out.load_data import ACDC2017DataSet
 
 
@@ -137,25 +137,33 @@ class TwoDimBatchHandler(BatchHandler):
             for phase in np.arange(2):
                 filename_img = os.path.join(self.config.data_dir, "b" + str(i+1).zfill(2) + "_img_ph"
                                             + str(phase) + ".nii")
-                write_numpy_to_image(self.b_images[i].data.cpu().numpy(), filename=filename_img)
-
+                offx = self.config.pad_size
+                offy = self.config.pad_size
+                img = self.b_images[i].data.cpu().numpy()[phase, offx:offx+self.patch_size + 1,
+                      offy:offy+self.patch_size + 1]
+                print(self.b_images[i].size(), img.shape)
+                # we don't need to swap the axis because the image is 2D only
+                write_numpy_to_image(img, filename=filename_img)
+                cls_offset = phase * 4
                 for cls in np.arange(num_of_classes / 2):
                     if cls != 0 and cls != 4:
-                        cls_lbl = self.b_labels_per_class[i, cls].data.cpu().numpy()
+                        cls_lbl = self.b_labels_per_class[i, cls_offset+cls].data.cpu().numpy()
 
                         filename_lbl = os.path.join(self.config.data_dir, "b" + str(i + 1).zfill(2) + "_lbl_ph"
                                                     + str(phase) + "_cls" + str(cls) + ".nii")
-                        # lbl = np.pad(cls_lbl, 65, 'constant', constant_values=(0,)).astype("float32")
                         print(i, cls, np.unique(cls_lbl), cls_lbl.shape)
                         write_numpy_to_image(cls_lbl.astype("float32"), filename=filename_lbl)
 
-    def visualize_batch(self, width=8, height=6, num_of_images=1):
+    def visualize_batch(self, width=8, height=6, num_of_images=None):
         """
 
         Visualizing an image + label(s) from the batch in order to visually inspect the batch.
         Note, b_images is [batch_size, 2, x, y]
               b_labels_per_class is [batch_size, 8, x, y]
         """
+
+        if num_of_images is None:
+            num_of_images = self.batch_size
 
         fig = plt.figure(figsize=(width, height))
         counter = 1
@@ -165,12 +173,9 @@ class TwoDimBatchHandler(BatchHandler):
         for idx in np.arange(num_of_images):
             # start to inspect only the ES image (index 0)
             img = self.b_images[idx].data.cpu().numpy()
-            offx, offy = self.offsets[idx]
             ax1 = plt.subplot(num_of_subplots, columns, counter)
-            offx = 65 - offx
-            if offx < 0:
-                offx = 0
-            offy = 65 - offy
+            offx = self.config.pad_size
+            offy = self.config.pad_size
             if offy < 0:
                 offy = 0
             print(offx, offy)

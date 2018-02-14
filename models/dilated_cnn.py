@@ -94,6 +94,10 @@ class BaseDilated2DCNN(nn.Module):
         dices = Variable(torch.FloatTensor(num_of_classes))
         if self.use_cuda:
             losses = losses.cuda()
+        # determine the predicted labels. IMPORTANT do this separately for each ES and ED which means
+        # we have to split the network output on dim1 in to parts of size 4
+        _, pred_labels_es = torch.max(predictions[:, 0:num_of_classes / 2, :, :], dim=1)
+        _, pred_labels_ed = torch.max(predictions[:, num_of_classes / 2:num_of_classes, :, :], dim=1)
         for cls in np.arange(labels.size(1)):
             losses[cls] = soft_dice_score(predictions[:, cls, :, :], labels[:, cls, :, :])
             # for the dice coefficient we need to determine the class labels of the predictions
@@ -102,12 +106,15 @@ class BaseDilated2DCNN(nn.Module):
             # to zero that are not relevant for this dice coeff.
             # IMPORTANT: we DON't compute the DICE for the background class
             if cls != config.class_lbl_background:
-                _, pred_labels = torch.max(predictions, dim=1)
-                pred_labels = pred_labels == cls
+                if cls < num_of_classes / 2:
+                    pred_labels = pred_labels_es == cls
+                else:
+                    # it looks kind of awkward but, cls stays in the range [0-7] but the two tensors pred_labels_es
+                    # and pred_labels_ed contain class values each from [0-3] and not from [0-7]. Hence for the ED
+                    # labels (which are situated in the second part of tensor "label" which acually has size 8 in dim1)
+                    # we make sure the comparison accounts for this (cls - num_of_classes / 2)
+                    pred_labels = pred_labels_ed == (cls - num_of_classes / 2)
                 dices[cls] = dice_coefficient(pred_labels, labels[:, cls, :, :])
-                if not is_train:
-                    print(np.unique(labels[:, cls, :, :].data.cpu().numpy()))
-                    print(np.unique(pred_labels.data.cpu().numpy()))
 
         self.np_dice_losses = losses.data.cpu().numpy()
         self.np_dice_coeffs = dices.data.cpu().numpy()

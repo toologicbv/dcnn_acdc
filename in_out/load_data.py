@@ -18,17 +18,6 @@ from in_out.read_save_images import load_mhd_to_numpy
 # from losses.dice_metric import dice_coeff
 
 
-def write_numpy_to_image(np_array, filename, swap_axis=False, spacing=None):
-
-    if swap_axis:
-        np_array = np.swapaxes(np_array, 0, 2)
-    img = sitk.GetImageFromArray(np_array)
-    if spacing is not None:
-        img.SetSpacing(spacing)
-    sitk.WriteImage(img, filename)
-    print("Successfully saved image to {}".format(filename))
-
-
 def crawl_dir(in_dir, load_func="load_itk", pattern="*.mhd", logger=None):
     """
     Searches for files that match the pattern-parameter and assumes that there also
@@ -210,7 +199,7 @@ class ACDC2017DataSet(BaseImageDataSet):
 
     def load_files(self):
         files_loaded = 0
-
+        print("INFO - Using folds {} - busy loading images/references...this may take a while!".format(self.fold_ids))
         train_file_list, val_file_list = self._get_file_lists()
         files_loaded += self._load_file_list(train_file_list, is_train=True)
         files_loaded += self._load_file_list(val_file_list, is_train=False)
