@@ -71,6 +71,10 @@ class BaseConfig(object):
         # validation settings
         self.val_batch_size = 64
 
+        # plotting
+        self.title_font = {'fontname': 'Arial', 'size': '14', 'color': 'black', 'weight': 'normal'}
+        self.figure_ext = ".png"
+
     def copy_from_object(self, obj):
 
         for key, value in obj.__dict__.iteritems():

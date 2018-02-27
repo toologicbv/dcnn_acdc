@@ -6,16 +6,13 @@ import glob
 if "/home/jogi/.local/lib/python2.7/site-packages" in sys.path:
     sys.path.remove("/home/jogi/.local/lib/python2.7/site-packages")
 
-from sklearn.model_selection import KFold
+from in_out.read_save_images import write_numpy_to_image
 
-from torch.autograd import Variable
-import torch
 from torch.utils.data import Dataset
 from config.config import config
 from utils.img_sampling import resample_image_scipy
 from in_out.read_save_images import save_img_as_mhg
 from in_out.read_save_images import load_mhd_to_numpy
-# from losses.dice_metric import dice_coeff
 
 
 def crawl_dir(in_dir, load_func="load_itk", pattern="*.mhd", logger=None):
@@ -133,6 +130,7 @@ class ACDC2017DataSet(BaseImageDataSet):
             self.load_files()
 
     def _set_pathes(self):
+        print("_set_pathes {}".format(self.debug))
         if self.preprocess:
             ACDC2017DataSet.image_path = ACDC2017DataSet.image_path.replace("_iso", "")
             ACDC2017DataSet.label_path = ACDC2017DataSet.label_path.replace("_iso", "")
@@ -190,7 +188,7 @@ class ACDC2017DataSet(BaseImageDataSet):
             # print("INFO - Loading ES-file {}".format(img_file))
             reference_es, origin, spacing = self.load_func(ref_file, data_type=ACDC2017DataSet.pixel_dta_type,
                                                            swap_axis=True)
-            # do the same for the End-Systolic pair of images
+            # do the same for the End-diastole pair of images
             img_file, ref_file = file_list[idx+1]
             mri_scan_ed, origin, spacing = self.load_func(img_file, data_type=ACDC2017DataSet.pixel_dta_type,
                                                           swap_axis=True)
@@ -247,6 +245,7 @@ class ACDC2017DataSet(BaseImageDataSet):
                 if is_train:
                     self.train_images.append(pad_img_slice)
                     self.train_labels.append(label_slice)
+
                 else:
                     self.val_images.append(pad_img_slice)
                     self.val_labels.append(label_slice)
@@ -314,8 +313,8 @@ class ACDC2017DataSet(BaseImageDataSet):
             return self.val_labels
 
 
-# dataset = ACDC2017DataSet(config=config, search_mask=config.dflt_image_name + ".mhd", fold_ids=[3],
-#                          preprocess=False)
+# dataset = ACDC2017DataSet(exper_config=config, search_mask=config.dflt_image_name + ".mhd", fold_ids=[0],
+#                          preprocess=False, debug=True)
 
 # del dataset
 

@@ -39,13 +39,14 @@ class TwoDimBatchHandler(BatchHandler):
     patch_size = 150
     pixel_dta_type = "float32"
 
-    def __init__(self, exper, test_run=False, batch_size=None, num_classes=4):
+    def __init__(self, exper, test_run=False, batch_size=None, num_classes=8):
         if batch_size is None:
             self.batch_size = exper.run_args.batch_size
         else:
             self.batch_size = batch_size
 
         self.test_run = test_run
+        # the number of classes to 8 but sometimes we'll need to work with half of the classes (4 for ES and ED)
         self.num_classes = num_classes
         self.ps_wp = TwoDimBatchHandler.patch_size_with_padding
         self.patch_size = TwoDimBatchHandler.patch_size
@@ -56,6 +57,7 @@ class TwoDimBatchHandler(BatchHandler):
         self.b_images = None
         # batch reference image for the different classes (so for each reference class 1 image)
         self.b_labels_per_class = None
+        self.b_pred_labels_per_class = None
         # this objects holds for each image-slice the separate class labels, so one set for each class
         self.b_labels_per_class = None
         self.config = exper.config
@@ -70,6 +72,10 @@ class TwoDimBatchHandler(BatchHandler):
     def backward(self, *args):
         pass
 
+    def set_pred_labels(self, pred_per_class):
+        # in order to save memory we cast the object as NUMPY array
+        self.b_pred_labels_per_class = pred_per_class.data.cpu().numpy()
+
     def get_images(self):
         return self.b_images
 
@@ -81,8 +87,13 @@ class TwoDimBatchHandler(BatchHandler):
         Variable images and labels are LISTS containing image slices, hence len(images) = number of total slices
         Each image slice (and label slice) has the following tensor dimensions:
 
-         images:    [2 (ES and ED channels), x-axis, y-axis]
-         labels:    [2 (ES and ED channels),  x-axis, y-axis]
+         images:    [2 (ED and ES channels), x-axis, y-axis]
+         labels:    [2 (ED and ES channels),  x-axis, y-axis]
+
+         IMPORTANT NOTE: first dim has size 2 and index "0" = ED image
+                                                  index "1" = ES image
+
+        This applies to image and label
 
          Note that labels contains segmentation class values between 0 and 3 for the four classes.
          We will convert these values into binary values below and hence add (next to the batch dimension dim-0)
@@ -90,7 +101,7 @@ class TwoDimBatchHandler(BatchHandler):
         """
 
         b_images = np.zeros((self.batch_size, 2, self.ps_wp, self.ps_wp))
-        b_labels_per_class = np.zeros((self.batch_size, self.num_classes * 2, self.patch_size + 1, self.patch_size + 1))
+        b_labels_per_class = np.zeros((self.batch_size, self.num_classes, self.patch_size + 1, self.patch_size + 1))
 
         num_images = len(images)
         # img_nums = []
@@ -107,13 +118,14 @@ class TwoDimBatchHandler(BatchHandler):
 
             b_images[idx, :, :, :] = img
             # next convert class labels to binary class labels
-            label_es = label[0, offx:offx + self.patch_size + 1, offy:offy + self.patch_size + 1]
-            label_ed = label[1, offx:offx + self.patch_size + 1, offy:offy + self.patch_size + 1]
-            for cls_idx in np.arange(self.num_classes):
-                # store ES class labels in first 4 positions of dim-1
-                b_labels_per_class[idx, cls_idx, :, :] = (label_es == cls_idx).astype('int16')
-                # sotre ED class labels in positions 4-7 of dim-1
-                b_labels_per_class[idx, cls_idx+self.num_classes, :, :] = (label_ed == cls_idx).astype('int16')
+            label_ed = label[0, offx:offx + self.patch_size + 1, offy:offy + self.patch_size + 1]
+            label_es = label[1, offx:offx + self.patch_size + 1, offy:offy + self.patch_size + 1]
+            half_classes = int(self.num_classes / 2)
+            for cls_idx in np.arange(half_classes):
+                # store ED class labels in first 4 positions of dim-1
+                b_labels_per_class[idx, cls_idx, :, :] = (label_ed == cls_idx).astype('int16')
+                # sotre ES class labels in positions 4-7 of dim-1
+                b_labels_per_class[idx, cls_idx+half_classes, :, :] = (label_es == cls_idx).astype('int16')
 
         # print("Images used {}".format(",".join(img_nums)))
         self.b_images = Variable(torch.FloatTensor(torch.from_numpy(b_images).float()), volatile=self.test_run)
@@ -129,7 +141,7 @@ class TwoDimBatchHandler(BatchHandler):
         del b_images
         del b_labels_per_class
 
-    def save_batch_img_to_files(self):
+    def save_batch_img_to_files(self, save_dir=None):
         num_of_classes = self.b_labels_per_class.size(1)
         print("Batch-size {} / classes {}".format(self.b_labels_per_class.size(0), num_of_classes))
         for i in np.arange(self.batch_size):
@@ -153,6 +165,12 @@ class TwoDimBatchHandler(BatchHandler):
                                                     + str(phase) + "_cls" + str(cls) + ".nii")
                         print(i, cls, np.unique(cls_lbl), cls_lbl.shape)
                         write_numpy_to_image(cls_lbl.astype("float32"), filename=filename_lbl)
+                        # if object that store predictions is non None we save them as well for analysis
+                        if self.b_pred_labels_per_class is not None:
+                            pred_cls_lbl = self.b_pred_labels_per_class[i, cls_offset+cls]
+                            filename_lbl = os.path.join(self.config.data_dir, "b_pred" + str(i + 1).zfill(2) + "_lbl_ph"
+                                                        + str(phase) + "_cls" + str(cls) + ".nii")
+                            write_numpy_to_image(pred_cls_lbl.astype("float32"), filename=filename_lbl)
 
     def visualize_batch(self, width=8, height=6, num_of_images=None):
         """
@@ -167,34 +185,55 @@ class TwoDimBatchHandler(BatchHandler):
 
         fig = plt.figure(figsize=(width, height))
         counter = 1
-        columns = self.num_classes + 1
-        num_of_subplots = 2 * num_of_images * self.num_classes
-
+        half_classes = int(self.num_classes / 2)
+        columns = half_classes + 1
+        if self.b_pred_labels_per_class is not None:
+            rows = 4
+            plot_preds = True
+        else:
+            rows = 2
+            plot_preds = False
+        num_of_subplots = rows * num_of_images * columns  # +1 because the original image is included
+        print("Number of subplots {}".format(num_of_subplots))
         for idx in np.arange(num_of_images):
-            # start to inspect only the ES image (index 0)
             img = self.b_images[idx].data.cpu().numpy()
+            img_ed = img[0]  # INDEX 0 = end-diastole image
+            img_es = img[1]  # INDEX 1 = end-systole image
             ax1 = plt.subplot(num_of_subplots, columns, counter)
+            ax1.set_title("End-diastole image and reference")
             offx = self.config.pad_size
             offy = self.config.pad_size
             if offy < 0:
                 offy = 0
-            print(offx, offy)
-            img = img[:, offx:offx+self.patch_size + 1, offy:offy+self.patch_size + 1]
-            print(img.shape)
-            plt.imshow(img[0], cmap=cm.gray)
+            img_ed = img_ed[offx:offx+self.patch_size + 1, offy:offy+self.patch_size + 1]
+            plt.imshow(img_ed, cmap=cm.gray)
             counter += 1
             labels = self.b_labels_per_class[idx].data.cpu().numpy()
-            for cls1 in np.arange(self.num_classes):
+            if plot_preds:
+                pred_labels = self.b_pred_labels_per_class[idx]
+            for cls1 in np.arange(half_classes):
                 _ = plt.subplot(num_of_subplots, columns, counter)
                 plt.imshow(labels[cls1], cmap=cm.gray)
+                if plot_preds:
+                    _ = plt.subplot(num_of_subplots, columns, counter + columns)
+                    plt.imshow(pred_labels[cls1], cmap=cm.gray)
                 counter += 1
 
             cls1 += 1
+            counter += columns
             ax2 = plt.subplot(num_of_subplots, columns, counter)
-            plt.imshow(img[1], cmap=cm.gray)
+            ax2.set_title("End-systole image and reference")
+            img_es = img_es[offx:offx + self.patch_size + 1, offy:offy + self.patch_size + 1]
+            plt.imshow(img_es, cmap=cm.gray)
+
             counter += 1
-            for cls2 in np.arange(self.num_classes):
+            for cls2 in np.arange(half_classes):
                 _ = plt.subplot(num_of_subplots, columns, counter)
                 plt.imshow(labels[cls1 + cls2], cmap=cm.gray)
+                if plot_preds:
+                    _ = plt.subplot(num_of_subplots, columns, counter + columns)
+                    plt.imshow(pred_labels[cls1 + cls2], cmap=cm.gray)
                 counter += 1
+
+            counter += columns
         plt.show()

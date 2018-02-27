@@ -71,7 +71,7 @@ def training(exper_hdl):
             val_batch = TwoDimBatchHandler(exper_hdl.exper, batch_size=exper_hdl.exper.config.val_batch_size,
                                            test_run=True)
             val_batch.generate_batch_2d(dataset.images(train=False), dataset.labels(train=False))
-            val_loss = dcnn_model.do_validate(val_batch)
+            val_loss, _ = dcnn_model.do_validate(val_batch)
             val_accuracy = dcnn_model.get_accuracy()
             val_dice_losses = dcnn_model.get_dice_losses(average=True)
             # store epochID and validation loss

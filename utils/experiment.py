@@ -63,7 +63,7 @@ class ExperimentHandler(object):
         if self.exper.run_args.cuda:
             self.logger.info(" *** RUNNING ON GPU *** ")
 
-    def load_checkpoint(self, root_dir=None, checkpoint=None):
+    def load_checkpoint(self, root_dir=None, checkpoint=None, verbose=False):
 
         if root_dir is None:
             root_dir = self.exper.config.root_dir
@@ -77,7 +77,8 @@ class ExperimentHandler(object):
         model = act_class(optimizer=self.exper.config.optimizer, lr=self.exper.run_args.lr,
                           weight_decay=self.exper.run_args.weight_decay,
                           use_cuda=self.exper.run_args.cuda,
-                          cycle_length=self.exper.run_args.cycle_length)
+                          cycle_length=self.exper.run_args.cycle_length,
+                          verbose=verbose)
         abs_checkpoint_dir = os.path.join(root_dir,
                                           os.path.join( self.exper.chkpnt_dir, checkpoint_file))
         if os.path.exists(abs_checkpoint_dir):
@@ -231,6 +232,17 @@ class Experiment(object):
                           'soft_dice_loss': np.zeros((self.num_val_runs, 2)),
                           'dice_coeff': np.zeros((self.num_val_runs, 6))}
 
+    def get_loss(self, validation=False):
+
+        if not validation:
+            return self.epoch_stats["mean_loss"]
+        else:
+            return self.val_stats["mean_loss"]
+
+    @property
+    def validation_epoch_ids(self):
+        return self.val_stats['epoch_ids']
+
     def start(self, exper_logger=None):
 
         pass
@@ -258,6 +270,14 @@ class Experiment(object):
                 self.chkpnt_dir = os.path.join(log_dir, self.config.checkpoint_path)
                 os.makedirs(self.chkpnt_dir)
         self.output_dir = log_dir
+
+    @property
+    def log_directory(self):
+        return self.output_dir
+
+    @property
+    def root_directory(self):
+        return self.config.root_dir
 
     def set_new_config(self, new_config):
         self.config = new_config

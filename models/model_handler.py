@@ -26,14 +26,15 @@ def save_checkpoint(exper_hdl, state, is_best, prefix=None, filename='checkpoint
         shutil.copyfile(file_name, file_name + '_model_best.pth.tar')
 
 
-def load_model(exper_hdl):
+def load_model(exper_hdl, verbose=False):
 
     if exper_hdl.exper.run_args.model == 'dcnn':
         exper_hdl.logger.info("Creating new model BaseDilated2DCNN: {}".format(exper_hdl.exper.run_args.model))
         model = BaseDilated2DCNN(optimizer=exper_hdl.exper.config.optimizer, lr=exper_hdl.exper.run_args.lr,
                                  weight_decay=exper_hdl.exper.run_args.weight_decay,
                                  use_cuda=exper_hdl.exper.run_args.cuda,
-                                 cycle_length=exper_hdl.exper.run_args.cycle_length)
+                                 cycle_length=exper_hdl.exper.run_args.cycle_length,
+                                 verbose=verbose)
 
         model.apply(weights_init)
     else:

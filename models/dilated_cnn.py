@@ -9,6 +9,7 @@ from building_blocks import Basic2DCNNBlock
 from models.building_blocks import ConcatenateCNNBlock
 from utils.dice_metric import soft_dice_score, dice_coefficient
 from models.lr_schedulers import CycleLR
+from utils.medpy_metrics import hd
 
 
 class BaseDilated2DCNN(nn.Module):
@@ -32,6 +33,7 @@ class BaseDilated2DCNN(nn.Module):
 
         self.np_dice_losses = None
         self.np_dice_coeffs = None
+        self.hausdorff_list = None
         if self.use_cuda:
             self.cuda()
 
@@ -83,7 +85,7 @@ class BaseDilated2DCNN(nn.Module):
 
         return out
 
-    def get_loss(self, predictions, labels, is_train=True):
+    def get_loss(self, predictions, labels, zooms=None, compute_hd=False):
         """
             we need to reshape the tensors because CrossEntropy expects 2D tensor (N, C) where C is num of classes
             the input tensor is in our case [batch_size, 2 * num_of_classes, height, width]
@@ -92,6 +94,7 @@ class BaseDilated2DCNN(nn.Module):
         num_of_classes = labels.size(1)
         losses = Variable(torch.FloatTensor(num_of_classes))
         dices = Variable(torch.FloatTensor(num_of_classes))
+        self.hausdorff_list = []
         if self.use_cuda:
             losses = losses.cuda()
         # determine the predicted labels. IMPORTANT do this separately for each ES and ED which means
@@ -105,7 +108,7 @@ class BaseDilated2DCNN(nn.Module):
             # here we determine the max index for each prediction over the 8 classes, and then set all labels
             # to zero that are not relevant for this dice coeff.
             # IMPORTANT: we DON't compute the DICE for the background class
-            if cls != config.class_lbl_background:
+            if cls != config.class_lbl_background and cls != (num_of_classes / 2):
                 if cls < num_of_classes / 2:
                     pred_labels = pred_labels_es == cls
                 else:
@@ -115,10 +118,23 @@ class BaseDilated2DCNN(nn.Module):
                     # we make sure the comparison accounts for this (cls - num_of_classes / 2)
                     pred_labels = pred_labels_ed == (cls - num_of_classes / 2)
                 dices[cls] = dice_coefficient(pred_labels, labels[:, cls, :, :])
+                if compute_hd:
+                    # need this counter to calculate the mean afterwards, some cls contours can be empty
+                    batch_hd_cls = []
+                    # hausdorff procedure only takes numpy arrays as input
+                    # the hausdorff method must be computed per image, hence we loop through batch (dim0)
+                    for i_idx in np.arange(labels.size(0)):
+                        np_gt_labels = labels[i_idx, cls, :, :].data.cpu().numpy()
+                        np_pred_labels = pred_labels[i_idx].data.cpu().numpy()
+                        # only compute distance if both contours are actually in images
+                        if 0 != np.count_nonzero(np_gt_labels) and 0 != np.count_nonzero(np_pred_labels):
+                            batch_hd_cls.append(hd(np_gt_labels, np_pred_labels, voxelspacing=zooms, connectivity=1))
+
+                    # compute mean for this class over batches
+                    self.hausdorff_list.append(batch_hd_cls)
 
         self.np_dice_losses = losses.data.cpu().numpy()
         self.np_dice_coeffs = dices.data.cpu().numpy()
-
         # NOTE: we want to minimize the loss, but the soft-dice-loss is actually increasing when our predictions
         # get better. HENCE, we need to multiply by minus one here.
         return (-1.) * torch.sum(losses)
@@ -135,22 +151,43 @@ class BaseDilated2DCNN(nn.Module):
         self.optimizer.step()
         return b_loss
 
-    def do_validate(self, batch):
+    def do_validate(self, batch, voxel_spacing=None, compute_hd=False):
+        """
+
+        :returns validation loss (autograd.Variable) and the label predictions [batch_size, classes, width, height]
+        also as autograd.Variable
+        """
         self.eval()
         b_predictions = self(batch.get_images())
-        val_loss = self.get_loss(b_predictions, batch.get_labels())
+        val_loss = self.get_loss(b_predictions, batch.get_labels(), zooms=voxel_spacing, compute_hd=compute_hd)
         self.train()
-        return val_loss
+        return val_loss, b_predictions
 
     def get_dice_losses(self, average=False):
         if not average:
             return self.np_dice_losses
         else:
+            # REMEMBER: first 3 values are ES results, and last 3 values ED results
             split = int(self.np_dice_losses.shape[0] * 0.5)
             return np.mean(self.np_dice_losses[0:split]), np.mean(self.np_dice_losses[split:])
 
     def get_accuracy(self):
         return np.concatenate((self.np_dice_coeffs[1:4], self.np_dice_coeffs[5:8]))
+
+    def get_hausdorff(self, compute_statistics=True):
+        num_of_classes = len(self.hausdorff_list)
+        # store mean and stdev
+        hd_stats = np.zeros((num_of_classes, 2))
+        if compute_statistics:
+            for cls in np.arange(num_of_classes):
+                # can happen, with small batch-sizes that e.g. for RV class there were no contours, check here
+                if len(self.hausdorff_list[cls]) != 0:
+                    hd = np.array(self.hausdorff_list[cls])
+                    hd_stats[cls] = np.array([np.mean(hd), np.std(hd)])
+                else:
+                    hd_stats[cls] = np.array([0, 0])
+
+        return hd_stats, self.hausdorff_list
 
     def cuda(self):
         super(BaseDilated2DCNN, self).cuda()

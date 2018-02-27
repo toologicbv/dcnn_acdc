@@ -31,6 +31,8 @@ from scipy.stats import pearsonr
 # own modules
 
 # code
+
+
 def dc(result, reference):
     r"""
     Dice coefficient
@@ -80,6 +82,7 @@ def dc(result, reference):
     
     return dc
 
+
 def jc(result, reference):
     """
     Jaccard coefficient
@@ -113,6 +116,7 @@ def jc(result, reference):
     jc = float(intersection) / float(union)
     
     return jc
+
 
 def precision(result, reference):
     """
@@ -161,6 +165,7 @@ def precision(result, reference):
     
     return precision
 
+
 def recall(result, reference):
     """
     Recall.
@@ -208,6 +213,7 @@ def recall(result, reference):
     
     return recall
 
+
 def sensitivity(result, reference):
     """
     Sensitivity.
@@ -218,6 +224,7 @@ def sensitivity(result, reference):
     :func:`specificity` 
     """
     return recall(result, reference)
+
 
 def specificity(result, reference):
     """
@@ -266,6 +273,7 @@ def specificity(result, reference):
     
     return specificity
 
+
 def true_negative_rate(result, reference):
     """
     True negative rate.
@@ -290,6 +298,7 @@ def true_positive_rate(result, reference):
     """
     return recall(result, reference)
 
+
 def positive_predictive_value(result, reference):
     """
     Positive predictive value.
@@ -301,6 +310,7 @@ def positive_predictive_value(result, reference):
     :func:`true_negative_rate`
     """
     return precision(result, reference)
+
 
 def hd(result, reference, voxelspacing=None, connectivity=1):
     """
@@ -348,6 +358,7 @@ def hd(result, reference, voxelspacing=None, connectivity=1):
     hd2 = __surface_distances(reference, result, voxelspacing, connectivity).max()
     hd = max(hd1, hd2)
     return hd
+
 
 def assd(result, reference, voxelspacing=None, connectivity=1):
     """
@@ -1141,7 +1152,8 @@ def __distinct_binary_object_correspondences(reference, result, connectivity=1):
         one_to_many = one_to_many[1:] # delete the processed set from all sets
     
     return labelmap1, labelmap2, n_obj_result, n_obj_reference, mapping
-    
+
+
 def __surface_distances(result, reference, voxelspacing=None, connectivity=1):
     """
     The distances between the surface voxel of binary objects in result and their
@@ -1175,6 +1187,7 @@ def __surface_distances(result, reference, voxelspacing=None, connectivity=1):
     sds = dt[result_border]
     
     return sds
+
 
 def __combine_windows(w1, w2):
     """
