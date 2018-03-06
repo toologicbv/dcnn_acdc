@@ -16,7 +16,7 @@ DEFAULT_DCNN_2D = {'num_of_layers': 10,
                    'description': 'DEFAULT_DCNN_2D'
                    }
 
-MC_DROPOUT025_DCNN_2D = {'num_of_layers': 10,
+MC_DROPOUT04_DCNN_2D = {'num_of_layers': 10,
                          'input_channels': 2,
                          'kernels': [3, 3, 3, 3, 3, 3, 3, 3, 1, 1],
                          'channels': [32, 32, 32, 32, 32, 32, 64, 128, 128, 4],  # NOTE: last channel is num_of_classes
@@ -25,9 +25,9 @@ MC_DROPOUT025_DCNN_2D = {'num_of_layers': 10,
                          'batch_norm': [False, True, True, True, True, True, True, True, True, False],
                          'non_linearity': [nn.ELU, nn.ELU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ELU, nn.ELU,
                                            nn.Softmax],
-                         'dropout': [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25],
+                         'dropout': [0.4] * 10,
                          'loss_function': nn.NLLLoss,
-                         'description': 'MC_DROPOUT025_DCNN_2D'
+                         'description': 'MC_DROPOUT04_DCNN_2D'
                       }
 
 MC_DROPOUT01_DCNN_2D = {'num_of_layers': 10,
@@ -39,7 +39,7 @@ MC_DROPOUT01_DCNN_2D = {'num_of_layers': 10,
                         'batch_norm': [False, True, True, True, True, True, True, True, True, False],
                         'non_linearity': [nn.ELU, nn.ELU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ELU, nn.ELU,
                                           nn.Softmax],
-                        'dropout': [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+                        'dropout': [0.1] * 10,
                         'loss_function': nn.NLLLoss,
                         'description': 'MC_DROPOUT01_DCNN_2D'
                       }

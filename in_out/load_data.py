@@ -101,16 +101,16 @@ class ACDC2017DataSet(BaseImageDataSet):
     new_voxel_spacing = 1.4
 
     def __init__(self, exper_config, search_mask=None, nclass=4, load_func=load_mhd_to_numpy,
-                 fold_ids=[0], preprocess=False, debug=False):
+                 fold_ids=[0], preprocess=False, debug=False, do_augment=True):
         super(BaseImageDataSet, self).__init__()
         self.data_dir = os.path.join(exper_config.root_dir, exper_config.data_dir)
-        print(exper_config.root_dir, exper_config.data_dir)
-        print("self.data_dir ", self.data_dir)
         self.search_mask = search_mask
         self.num_of_classes = nclass
         self.fold_ids = fold_ids
         self.load_func = load_func
         self.abs_path_fold = os.path.join(self.data_dir, "fold")
+        # extend data set with augmentations. For test images we don't want this to be performed
+        self.do_augment = do_augment
 
         self.train_images = []
         self.train_labels = []
@@ -130,7 +130,7 @@ class ACDC2017DataSet(BaseImageDataSet):
             self.load_files()
 
     def _set_pathes(self):
-        print("_set_pathes {}".format(self.debug))
+
         if self.preprocess:
             ACDC2017DataSet.image_path = ACDC2017DataSet.image_path.replace("_iso", "")
             ACDC2017DataSet.label_path = ACDC2017DataSet.label_path.replace("_iso", "")
@@ -196,8 +196,12 @@ class ACDC2017DataSet(BaseImageDataSet):
             reference_ed, origin, spacing = self.load_func(ref_file, data_type=ACDC2017DataSet.pixel_dta_type,
                                                            swap_axis=True)
             # AUGMENT data and add to train, validation or test if applicable
-            self._augment_data(mri_scan_ed, reference_ed, mri_scan_es, reference_es,
-                               is_train=is_train)
+            if self.do_augment:
+                self._augment_data(mri_scan_ed, reference_ed, mri_scan_es, reference_es,
+                                   is_train=is_train)
+            else:
+                # add "raw" images
+                raise NotImplementedError("Trying to load images without augmentation is currently not implemented")
 
             files_loaded += 2
         return files_loaded
@@ -313,8 +317,8 @@ class ACDC2017DataSet(BaseImageDataSet):
             return self.val_labels
 
 
-# dataset = ACDC2017DataSet(exper_config=config, search_mask=config.dflt_image_name + ".mhd", fold_ids=[0],
-#                          preprocess=False, debug=True)
+dataset = ACDC2017DataSet(exper_config=config, search_mask=config.dflt_image_name + ".mhd", fold_ids=[0],
+                          preprocess=False, debug=True)
 
 # del dataset
 

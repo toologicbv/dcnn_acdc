@@ -2,7 +2,7 @@ import argparse
 import torch
 
 from config.config import config
-from config.config import config, DEFAULT_DCNN_2D, MC_DROPOUT01_DCNN_2D, MC_DROPOUT025_DCNN_2D
+from config.config import config, DEFAULT_DCNN_2D, MC_DROPOUT01_DCNN_2D, MC_DROPOUT04_DCNN_2D
 import os
 
 
@@ -57,7 +57,7 @@ def do_parse_args():
     # Training settings
     parser = argparse.ArgumentParser(description='PyTorch Dilated CNN')
 
-    parser.add_argument('--model', default="dcnn", choices=['dcnn', 'dcnn_mc1', 'dcnn_mc2'])
+    parser.add_argument('--model', default="dcnn", choices=['dcnn', 'dcnn_mc1', 'dcnn_mc2', 'dcnn_mc4'])
     parser.add_argument('--version', type=str, default='v1')
     parser.add_argument('--root_dir', default=config.root_dir)
     parser.add_argument('--log_dir', default=None)
@@ -104,8 +104,8 @@ def do_parse_args():
         args.architecture = DEFAULT_DCNN_2D
     elif args.model == "dcnn_mc1":
         args.architecture = MC_DROPOUT01_DCNN_2D
-    elif args.model == "dcnn_mc2":
-        args.architecture = MC_DROPOUT025_DCNN_2D
+    elif args.model == "dcnn_mc4":
+        args.architecture = MC_DROPOUT04_DCNN_2D
     else:
         raise ValueError("Parameter value of model {} is not supported".format(args.model))
 
