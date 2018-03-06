@@ -6,7 +6,7 @@ import glob
 if "/home/jogi/.local/lib/python2.7/site-packages" in sys.path:
     sys.path.remove("/home/jogi/.local/lib/python2.7/site-packages")
 
-from in_out.read_save_images import write_numpy_to_image
+from tqdm import tqdm
 
 from torch.utils.data import Dataset
 from config.config import config
@@ -179,7 +179,7 @@ class ACDC2017DataSet(BaseImageDataSet):
         files_loaded = 0
         file_list.sort()
 
-        for idx in np.arange(0, len(file_list), 2):
+        for idx in tqdm(np.arange(0, len(file_list), 2)):
             # tuple contains [0]=train file name and [1] reference file name
             img_file, ref_file = file_list[idx]
             # first frame is always the end-systolic MRI scan, filename ends with "1"

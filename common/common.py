@@ -2,8 +2,10 @@ from config.config import config
 import logging
 import os
 import time
+import numpy as np
 
 import torch
+from tqdm import trange
 
 
 def datestr():
@@ -46,3 +48,13 @@ def create_exper_label(exper):
     exper_label = exper.run_args.model + exper.run_args.version + "_" + str(exper.run_args.epochs) + "E"
 
     return exper_label
+
+
+def uncertainity_estimate(X, model, iters, l2):
+    outputs = np.hstack([model(X[:, np.newaxis]).data.numpy() for i in trange(iters)])
+    y_mean = outputs.mean(axis=1)
+    y_variance = outputs.var(axis=1)
+    tau = l2 * (1. - model.dropout_p) / (2. * N * model.decay)
+    y_variance += (1. / tau)
+    y_std = np.sqrt(y_variance)
+    return y_mean, y_std

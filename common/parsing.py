@@ -2,11 +2,13 @@ import argparse
 import torch
 
 from config.config import config
+from config.config import config, DEFAULT_DCNN_2D, MC_DROPOUT01_DCNN_2D, MC_DROPOUT025_DCNN_2D
 import os
 
 
 run_dict = {'cmd': 'train',
             'model': "dcnn",
+            'architecture': DEFAULT_DCNN_2D,
             'version': "v1",
             'data_dir': config.data_dir,
             'use_cuda': True,
@@ -29,6 +31,7 @@ def create_def_argparser(**kwargs):
     args = argparse.Namespace()
     args.cmd = kwargs['cmd']
     args.model = kwargs['model']
+    args.architecture = kwargs['architecture']
     args.version = kwargs['version']
     args.data_dir = kwargs['data_dir']
     args.use_cuda = kwargs['use_cuda']
@@ -54,7 +57,7 @@ def do_parse_args():
     # Training settings
     parser = argparse.ArgumentParser(description='PyTorch Dilated CNN')
 
-    parser.add_argument('--model', default="dcnn")
+    parser.add_argument('--model', default="dcnn", choices=['dcnn', 'dcnn_mc1', 'dcnn_mc2'])
     parser.add_argument('--version', type=str, default='v1')
     parser.add_argument('--root_dir', default=config.root_dir)
     parser.add_argument('--log_dir', default=None)
@@ -93,6 +96,18 @@ def do_parse_args():
     if args.cycle_length != 0:
         args.chkpnt_freq = args.cycle_length
         args.chkpnt = True
+
+    # set model architecture
+    parser.add_argument("--architecture")
+    if args.model == "dcnn":
+
+        args.architecture = DEFAULT_DCNN_2D
+    elif args.model == "dcnn_mc1":
+        args.architecture = MC_DROPOUT01_DCNN_2D
+    elif args.model == "dcnn_mc2":
+        args.architecture = MC_DROPOUT025_DCNN_2D
+    else:
+        raise ValueError("Parameter value of model {} is not supported".format(args.model))
 
     assert args.root_dir is not None
     return args

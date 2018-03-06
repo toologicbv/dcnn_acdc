@@ -12,8 +12,37 @@ DEFAULT_DCNN_2D = {'num_of_layers': 10,
                    'non_linearity': [nn.ELU, nn.ELU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ELU, nn.ELU,
                                      nn.Softmax],
                    'dropout': [0., 0., 0., 0., 0., 0., 0., 0.5, 0.5, 0.],
-                   'loss_function': nn.NLLLoss
+                   'loss_function': nn.NLLLoss,
+                   'description': 'DEFAULT_DCNN_2D'
                    }
+
+MC_DROPOUT025_DCNN_2D = {'num_of_layers': 10,
+                         'input_channels': 2,
+                         'kernels': [3, 3, 3, 3, 3, 3, 3, 3, 1, 1],
+                         'channels': [32, 32, 32, 32, 32, 32, 64, 128, 128, 4],  # NOTE: last channel is num_of_classes
+                         'dilation': [1, 1, 2, 4, 8, 16, 32, 1, 1, 1],
+                         'stride': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                         'batch_norm': [False, True, True, True, True, True, True, True, True, False],
+                         'non_linearity': [nn.ELU, nn.ELU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ELU, nn.ELU,
+                                           nn.Softmax],
+                         'dropout': [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25],
+                         'loss_function': nn.NLLLoss,
+                         'description': 'MC_DROPOUT025_DCNN_2D'
+                      }
+
+MC_DROPOUT01_DCNN_2D = {'num_of_layers': 10,
+                        'input_channels': 2,
+                        'kernels': [3, 3, 3, 3, 3, 3, 3, 3, 1, 1],
+                        'channels': [32, 32, 32, 32, 32, 32, 64, 128, 128, 4],  # NOTE: last channel is num_of_classes
+                        'dilation': [1, 1, 2, 4, 8, 16, 32, 1, 1, 1],
+                        'stride': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                        'batch_norm': [False, True, True, True, True, True, True, True, True, False],
+                        'non_linearity': [nn.ELU, nn.ELU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ELU, nn.ELU,
+                                          nn.Softmax],
+                        'dropout': [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+                        'loss_function': nn.NLLLoss,
+                        'description': 'MC_DROPOUT01_DCNN_2D'
+                      }
 
 OPTIMIZER_DICT = {'sgd': torch.optim.SGD,  # Gradient Descent
                   'adadelta': torch.optim.Adadelta,  # Adadelta

@@ -6,9 +6,8 @@ from torch.autograd import Variable
 import numpy as np
 
 from common.parsing import do_parse_args
-from config.config import OPTIMIZER_DICT
-from utils.experiment import Experiment, ExperimentHandler
 from config.config import config
+from utils.experiment import Experiment, ExperimentHandler
 from utils.batch_handlers import TwoDimBatchHandler
 from in_out.load_data import ACDC2017DataSet
 from models.model_handler import load_model, save_checkpoint

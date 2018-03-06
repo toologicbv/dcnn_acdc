@@ -12,7 +12,7 @@ class ConcatenateCNNBlock(nn.Module):
     """
 
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=(1, 1),
-                 apply_batch_norm=False, apply_non_linearity=None, bias=True, axis=1, verbose=False):
+                 prob_dropout=0., apply_batch_norm=False, apply_non_linearity=None, bias=True, axis=1, verbose=False):
         super(ConcatenateCNNBlock, self).__init__()
 
         self.apply_batch_norm = apply_batch_norm
@@ -23,6 +23,11 @@ class ConcatenateCNNBlock(nn.Module):
         self.axis = axis
         self.verbose = verbose
         self.apply_non_linearity = apply_non_linearity
+        if prob_dropout > 0.:
+            self.apply_dropout = True
+        else:
+            self.apply_dropout = False
+
         if self.verbose:
             print("INFO - Adding {} layer".format(self.__class__.__name__))
 
@@ -50,6 +55,8 @@ class ConcatenateCNNBlock(nn.Module):
             self.conv_layer2.bias.data.fill_(0)
 
     def forward(self, tensor_in):
+        if self.apply_dropout:
+            tensor_in = self.layer_drop(tensor_in)
 
         out1 = self.conv_layer1(tensor_in)
         out2 = self.conv_layer2(tensor_in)
@@ -104,12 +111,12 @@ class Basic2DCNNBlock(nn.Module):
             self.conv_layer.bias.data.fill_(0)
 
     def forward(self, x):
+        if self.apply_dropout:
+            x = self.layer_drop(x)
         out = self.conv_layer(x)
         if self.apply_non_linearity is not None:
             out = self.non_linearity(out)
         if self.apply_batch_norm:
             out = self.bn(out)
-        if self.apply_dropout:
-            out = self.layer_drop(out)
 
         return out
