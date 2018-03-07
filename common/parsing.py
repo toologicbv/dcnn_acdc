@@ -2,13 +2,12 @@ import argparse
 import torch
 
 from config.config import config
-from config.config import config, DEFAULT_DCNN_2D, MC_DROPOUT01_DCNN_2D, MC_DROPOUT04_DCNN_2D
 import os
 
 
 run_dict = {'cmd': 'train',
             'model': "dcnn",
-            'architecture': DEFAULT_DCNN_2D,
+            'architecture': config.get_architecture(model="dcnn"),
             'version': "v1",
             'data_dir': config.data_dir,
             'use_cuda': True,
@@ -22,7 +21,8 @@ run_dict = {'cmd': 'train',
             'val_freq': 10,
             'chkpnt_freq': 10,
             'weight_decay': 0.,
-            'cycle_length': 100
+            'cycle_length': 100,
+            'drop_prob': 0.5
 }
 
 
@@ -47,6 +47,7 @@ def create_def_argparser(**kwargs):
     args.weight_decay = kwargs['weight_decay']
     args.cycle_length = kwargs['cycle_length']
     args.quick_run = kwargs['quick_run']
+    args.drop_prob = kwargs['drop_prob']
 
     args.cuda = args.use_cuda and torch.cuda.is_available()
     args.chkpnt = os.path.join(config.checkpoint_path, "default.tar")
@@ -57,7 +58,7 @@ def do_parse_args():
     # Training settings
     parser = argparse.ArgumentParser(description='PyTorch Dilated CNN')
 
-    parser.add_argument('--model', default="dcnn", choices=['dcnn', 'dcnn_mc1', 'dcnn_mc2', 'dcnn_mc4'])
+    parser.add_argument('--model', default="dcnn", choices=['dcnn', 'dcnn_mc'])
     parser.add_argument('--version', type=str, default='v1')
     parser.add_argument('--root_dir', default=config.root_dir)
     parser.add_argument('--log_dir', default=None)
@@ -79,6 +80,9 @@ def do_parse_args():
 
     parser.add_argument('--weight_decay', '--wd', default=1e-4, type=float,
                         metavar='W', help='weight decay (default: 1e-4)')
+    parser.add_argument('--drop_prob', '--dp', default=0.5, type=float,
+                        metavar='x.xx', help='dropout probability (default: 0.5)')
+
     parser.add_argument('--cycle_length', type=int, default=0, metavar='N',
                         help='Cycle length for update of learning rate (and snapshot ensemble) (default: 0)')
 
@@ -97,15 +101,8 @@ def do_parse_args():
         args.chkpnt_freq = args.cycle_length
         args.chkpnt = True
 
-    # set model architecture
-    parser.add_argument("--architecture")
-    if args.model == "dcnn":
-
-        args.architecture = DEFAULT_DCNN_2D
-    elif args.model == "dcnn_mc1":
-        args.architecture = MC_DROPOUT01_DCNN_2D
-    elif args.model == "dcnn_mc4":
-        args.architecture = MC_DROPOUT04_DCNN_2D
+    if args.model[:4] == "dcnn":
+        pass
     else:
         raise ValueError("Parameter value of model {} is not supported".format(args.model))
 

@@ -104,6 +104,8 @@ class ACDC2017DataSet(BaseImageDataSet):
                  fold_ids=[0], preprocess=False, debug=False, do_augment=True):
         super(BaseImageDataSet, self).__init__()
         self.data_dir = os.path.join(exper_config.root_dir, exper_config.data_dir)
+        self.rel_image_path = None
+        self.rel_label_path = None
         self.search_mask = search_mask
         self.num_of_classes = nclass
         self.fold_ids = fold_ids
@@ -132,13 +134,16 @@ class ACDC2017DataSet(BaseImageDataSet):
     def _set_pathes(self):
 
         if self.preprocess:
-            ACDC2017DataSet.image_path = ACDC2017DataSet.image_path.replace("_iso", "")
-            ACDC2017DataSet.label_path = ACDC2017DataSet.label_path.replace("_iso", "")
+            self.rel_image_path = ACDC2017DataSet.image_path.replace("_iso", "")
+            self.rel_label_path = ACDC2017DataSet.label_path.replace("_iso", "")
+        else:
+            self.rel_image_path = ACDC2017DataSet.image_path
+            self.rel_label_path = ACDC2017DataSet.label_path
 
         if self.debug:
             # load images from a directory that only contains a couple of images
-            ACDC2017DataSet.image_path = ACDC2017DataSet.image_path + "_test"
-            ACDC2017DataSet.label_path = ACDC2017DataSet.label_path + "_test"
+            self.rel_image_path = ACDC2017DataSet.image_path + "_test"
+            self.rel_label_path = ACDC2017DataSet.label_path + "_test"
 
     def _get_file_lists(self):
 
@@ -146,9 +151,9 @@ class ACDC2017DataSet(BaseImageDataSet):
         val_file_list = []
         for fold_id in self.fold_ids:
             self.train_path = os.path.join(self.abs_path_fold + str(fold_id),
-                                           os.path.join(ACDC2017DataSet.train_path, ACDC2017DataSet.image_path))
+                                           os.path.join(ACDC2017DataSet.train_path, self.rel_image_path))
             self.val_path = os.path.join(self.abs_path_fold + str(fold_id),
-                                         os.path.join(ACDC2017DataSet.val_path, ACDC2017DataSet.image_path))
+                                         os.path.join(ACDC2017DataSet.val_path, self.rel_image_path))
             if self.preprocess:
                 iso_img_path = self.train_path.replace("images", "images_iso")
                 if not os.path.isdir(iso_img_path):
@@ -164,13 +169,13 @@ class ACDC2017DataSet(BaseImageDataSet):
             search_mask_img = os.path.join(self.train_path, self.search_mask)
             print("INFO - >>> Search for {} <<<".format(search_mask_img))
             for train_file in glob.glob(search_mask_img):
-                ref_file = train_file.replace(ACDC2017DataSet.image_path, ACDC2017DataSet.label_path)
+                ref_file = train_file.replace(self.rel_image_path, self.rel_label_path)
                 train_file_list.append(tuple((train_file, ref_file)))
 
             # get validation images and labels
             search_mask_img = os.path.join(self.val_path, self.search_mask)
             for val_file in glob.glob(search_mask_img):
-                ref_file = val_file.replace(ACDC2017DataSet.image_path, ACDC2017DataSet.label_path)
+                ref_file = val_file.replace(self.rel_image_path, self.rel_label_path)
                 val_file_list.append(tuple((val_file, ref_file)))
 
         return train_file_list, val_file_list
@@ -317,8 +322,8 @@ class ACDC2017DataSet(BaseImageDataSet):
             return self.val_labels
 
 
-dataset = ACDC2017DataSet(exper_config=config, search_mask=config.dflt_image_name + ".mhd", fold_ids=[0],
-                          preprocess=False, debug=True)
+# dataset = ACDC2017DataSet(exper_config=config, search_mask=config.dflt_image_name + ".mhd", fold_ids=[0],
+#                          preprocess=False, debug=True)
 
 # del dataset
 

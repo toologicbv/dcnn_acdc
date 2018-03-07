@@ -46,6 +46,9 @@ class ConcatenateCNNBlock(nn.Module):
             self.bn1 = nn.BatchNorm2d(out_channels)
             self.bn2 = nn.BatchNorm2d(out_channels)
 
+    def cuda(self):
+        super(ConcatenateCNNBlock, self).cuda()
+
     def reset_weights(self):
         init.xavier_normal(self.conv_layer1.weight.data)
         init.xavier_normal(self.conv_layer2.weight.data)
@@ -103,7 +106,8 @@ class Basic2DCNNBlock(nn.Module):
                 print(">>> apply dropout <<<")
             self.layer_drop = nn.Dropout2d(p=prob_dropout)
 
-        # self.reset_weights()
+    def cuda(self):
+        super(Basic2DCNNBlock, self).cuda()
 
     def reset_weights(self):
         init.xavier_normal(self.conv_layer.weight.data)

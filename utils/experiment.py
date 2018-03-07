@@ -9,7 +9,7 @@ import dill
 from common.parsing import create_def_argparser, run_dict
 
 from common.common import create_logger, create_exper_label
-from config.config import config
+from config.config import config, DEFAULT_DCNN_MC_2D, DEFAULT_DCNN_2D
 from utils.batch_handlers import TwoDimBatchHandler
 import models.dilated_cnn
 
@@ -63,7 +63,7 @@ class ExperimentHandler(object):
         if self.exper.run_args.cuda:
             self.logger.info(" *** RUNNING ON GPU *** ")
 
-    def load_checkpoint(self, root_dir=None, checkpoint=None, verbose=False):
+    def load_checkpoint(self, root_dir=None, checkpoint=None, verbose=False, drop_prob=0.):
 
         if root_dir is None:
             root_dir = self.exper.config.root_dir
@@ -74,7 +74,19 @@ class ExperimentHandler(object):
         str_classname = "BaseDilated2DCNN"
         checkpoint_file = str_classname + "checkpoint" + str(checkpoint).zfill(5) + ".pth.tar"
         act_class = getattr(models.dilated_cnn, str_classname)
-        model = act_class(optimizer=self.exper.config.optimizer, lr=self.exper.run_args.lr,
+        if not hasattr(self.exper.run_args, "drop_prob"):
+            print("WARNING - exper.run_args has not attribute drop_prob, using prob {:.2}".format(drop_prob))
+            drop_prob = 0.1
+        else:
+            drop_prob = self.exper.run_args.drop_prob
+        if hasattr(self.exper.config, "get_architecture"):
+            architecture = self.exper.config.get_architecture(model=self.exper.run_args.model,
+                                                              drop_prob=drop_prob)
+        else:
+            architecture = DEFAULT_DCNN_MC_2D
+
+        model = act_class(architecture=architecture, optimizer=self.exper.config.optimizer,
+                          lr=self.exper.run_args.lr,
                           weight_decay=self.exper.run_args.weight_decay,
                           use_cuda=self.exper.run_args.cuda,
                           cycle_length=self.exper.run_args.cycle_length,
@@ -180,7 +192,7 @@ class ExperimentHandler(object):
 
 class Experiment(object):
 
-    def __init__(self, config, run_args=None, set_seed=True):
+    def __init__(self, config, run_args=None):
 
         # logging
         self.epoch_id = 0
@@ -204,13 +216,6 @@ class Experiment(object):
         self.num_val_runs = 0
         self.val_run_id = -1
         self.init_statistics()
-
-        if set_seed:
-            SEED = 2345
-            torch.manual_seed(SEED)
-            if self.run_args.cuda:
-                torch.cuda.manual_seed(SEED)
-            np.random.seed(SEED)
 
     def init_statistics(self):
         if self.run_args.val_freq != 0:

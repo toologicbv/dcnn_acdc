@@ -70,7 +70,7 @@ def training(exper_hdl):
             val_batch = TwoDimBatchHandler(exper_hdl.exper, batch_size=exper_hdl.exper.config.val_batch_size,
                                            test_run=True)
             val_batch.generate_batch_2d(dataset.images(train=False), dataset.labels(train=False))
-            val_loss, _ = dcnn_model.do_validate(val_batch)
+            val_loss, _ = dcnn_model.do_test(val_batch.get_images(), val_batch.get_labels())
             val_accuracy = dcnn_model.get_accuracy()
             val_dice_losses = dcnn_model.get_dice_losses(average=True)
             # store epochID and validation loss
@@ -79,7 +79,7 @@ def training(exper_hdl):
             exper_hdl.exper.val_stats["dice_coeff"][num_val_runs - 1] = val_accuracy
             exper_hdl.set_accuracy(val_accuracy, val_run_id=num_val_runs)
             exper_hdl.set_dice_losses(val_dice_losses, val_run_id=num_val_runs)
-            exper_hdl.logger.info("Model validation in epoch {}: current loss {:.3f}\t "
+            exper_hdl.logger.info("---> VALIDATION of model in epoch {}: current loss {:.3f}\t "
                                   "dice-coeff:: ES {:.3f}/{:.3f}/{:.3f} --- "
                                   "ED {:.3f}/{:.3f}/{:.3f}".format(exper_hdl.exper.epoch_id, val_loss,
                                                                    val_accuracy[0], val_accuracy[1],
@@ -101,7 +101,8 @@ def training(exper_hdl):
             exper_hdl.logger.info("End epoch {}: mean loss: {:.3f} / mean dice-loss (ES/ED) {}"
                                   " / duration {:.2f} seconds "
                                   "lr={:.5f}".format(exper_hdl.exper.epoch_id, exper_hdl.get_epoch_loss(),
-                                                                      dices,  # exper_hdl.get_epoch_accuracy(),
+                                                                      np.array_str(dices, precision=3),
+                                                                      # exper_hdl.get_epoch_accuracy(),
                                                                       total_time,
                                                                       lr))
             exper_hdl.logger.info("Current dice accuracies ES {:.3f}/{:.3f}/{:.3f} \t"
@@ -115,8 +116,15 @@ def training(exper_hdl):
 
 def main():
     args = do_parse_args()
+    SEED = 4325
+    torch.manual_seed(SEED)
+    torch.cuda.manual_seed(SEED)
+    if args.cuda:
+        torch.backends.cudnn.enabled = True
 
-    exper = Experiment(config, run_args=args, set_seed=True)
+    np.random.seed(SEED)
+
+    exper = Experiment(config, run_args=args)
     exper_hdl = ExperimentHandler(exper)
     exper.start()
     exper_hdl.print_flags()

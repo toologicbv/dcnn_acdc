@@ -3,7 +3,6 @@ import torch
 import shutil
 import os
 import torch.nn as nn
-from config.config import DEFAULT_DCNN_2D
 import numpy as np
 
 
@@ -29,11 +28,14 @@ def save_checkpoint(exper_hdl, state, is_best, prefix=None, filename='checkpoint
 
 def load_model(exper_hdl, verbose=False):
 
+    model_architecture = exper_hdl.exper.config.get_architecture(model=exper_hdl.exper.run_args.model,
+                                                                 drop_prob=exper_hdl.exper.run_args.drop_prob)
     if exper_hdl.exper.run_args.model[:4] == 'dcnn':
         exper_hdl.logger.info("Creating new model BaseDilated2DCNN: {} "
                               "with architecture {}".format(exper_hdl.exper.run_args.model,
-                                                            exper_hdl.exper.run_args.architecture["description"]))
-        model = BaseDilated2DCNN(architecture=exper_hdl.exper.run_args.architecture, optimizer=exper_hdl.exper.config.optimizer,
+                                                            model_architecture["description"]))
+        model = BaseDilated2DCNN(architecture=model_architecture,
+                                 optimizer=exper_hdl.exper.config.optimizer,
                                  lr=exper_hdl.exper.run_args.lr,
                                  weight_decay=exper_hdl.exper.run_args.weight_decay,
                                  use_cuda=exper_hdl.exper.run_args.cuda,

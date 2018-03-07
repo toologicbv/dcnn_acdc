@@ -1,6 +1,7 @@
 import os
 import torch
 import torch.nn as nn
+import socket
 
 DEFAULT_DCNN_2D = {'num_of_layers': 10,
                    'input_channels': 2,
@@ -16,32 +17,18 @@ DEFAULT_DCNN_2D = {'num_of_layers': 10,
                    'description': 'DEFAULT_DCNN_2D'
                    }
 
-MC_DROPOUT04_DCNN_2D = {'num_of_layers': 10,
-                         'input_channels': 2,
-                         'kernels': [3, 3, 3, 3, 3, 3, 3, 3, 1, 1],
-                         'channels': [32, 32, 32, 32, 32, 32, 64, 128, 128, 4],  # NOTE: last channel is num_of_classes
-                         'dilation': [1, 1, 2, 4, 8, 16, 32, 1, 1, 1],
-                         'stride': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                         'batch_norm': [False, True, True, True, True, True, True, True, True, False],
-                         'non_linearity': [nn.ELU, nn.ELU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ELU, nn.ELU,
-                                           nn.Softmax],
-                         'dropout': [0.4] * 10,
-                         'loss_function': nn.NLLLoss,
-                         'description': 'MC_DROPOUT04_DCNN_2D'
-                      }
-
-MC_DROPOUT01_DCNN_2D = {'num_of_layers': 10,
-                        'input_channels': 2,
-                        'kernels': [3, 3, 3, 3, 3, 3, 3, 3, 1, 1],
-                        'channels': [32, 32, 32, 32, 32, 32, 64, 128, 128, 4],  # NOTE: last channel is num_of_classes
-                        'dilation': [1, 1, 2, 4, 8, 16, 32, 1, 1, 1],
-                        'stride': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                        'batch_norm': [False, True, True, True, True, True, True, True, True, False],
-                        'non_linearity': [nn.ELU, nn.ELU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ELU, nn.ELU,
-                                          nn.Softmax],
-                        'dropout': [0.1] * 10,
-                        'loss_function': nn.NLLLoss,
-                        'description': 'MC_DROPOUT01_DCNN_2D'
+DEFAULT_DCNN_MC_2D = {'num_of_layers': 10,
+                      'input_channels': 2,
+                      'kernels': [3, 3, 3, 3, 3, 3, 3, 3, 1, 1],
+                      'channels': [32, 32, 32, 32, 32, 32, 64, 128, 128, 4],  # NOTE: last channel is num_of_classes
+                      'dilation': [1, 1, 2, 4, 8, 16, 32, 1, 1, 1],
+                      'stride': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                      'batch_norm': [False, True, True, True, True, True, True, True, True, False],
+                      'non_linearity': [nn.ELU, nn.ELU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ELU, nn.ELU,
+                                        nn.Softmax],
+                      'dropout': [0.1] * 10,
+                      'loss_function': nn.NLLLoss,
+                      'description': 'DEFAULT_DCNN_MC_2D'
                       }
 
 OPTIMIZER_DICT = {'sgd': torch.optim.SGD,  # Gradient Descent
@@ -98,7 +85,10 @@ class BaseConfig(object):
         self.noise_threshold = 0.01
 
         # validation settings
-        self.val_batch_size = 64
+        if socket.gethostname() == "qiaubuntu" or socket.gethostname() == "ubuntu-toologic2":
+            self.val_batch_size = 16
+        else:
+            self.val_batch_size = 64
 
         # plotting
         self.title_font = {'fontname': 'Arial', 'size': '14', 'color': 'black', 'weight': 'normal'}
@@ -120,6 +110,51 @@ class BaseConfig(object):
             return os.environ.get("PYTHON_DATA_FOLDER", "data")
         env_variable = "PYTHON_DATA_FOLDER_%s" % dataset.upper()
         return os.environ.get(env_variable, "data")
+
+    @staticmethod
+    def get_architecture(model="dcnn", **kwargs):
+
+        if kwargs is not None:
+            if "drop_prob" not in kwargs:
+                kwargs["drop_prob"] = 0.5
+        else:
+            kwargs["drop_prob"] = 0.5
+
+        if model == "dcnn":
+            architecture = {'num_of_layers': 10,
+                            'input_channels': 2,
+                            'kernels': [3, 3, 3, 3, 3, 3, 3, 3, 1, 1],
+                            'channels': [32, 32, 32, 32, 32, 32, 64, 128, 128, 4],
+                            # NOTE: last channel is num_of_classes
+                            'dilation': [1, 1, 2, 4, 8, 16, 32, 1, 1, 1],
+                            'stride': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                            'batch_norm': [False, True, True, True, True, True, True, True, True, False],
+                            'non_linearity': [nn.ELU, nn.ELU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ELU,
+                                              nn.ELU,
+                                              nn.Softmax],
+                            'dropout': [0., 0., 0., 0., 0., 0., 0., kwargs["drop_prob"], kwargs["drop_prob"], 0.],
+                            'loss_function': nn.NLLLoss,
+                            'description': 'DEFAULT_DCNN_2D'
+                            }
+        elif model[:7] == "dcnn_mc":
+            num_of_layers = 10
+            architecture = {'num_of_layers': num_of_layers,
+                            'input_channels': 2,
+                            'kernels': [3, 3, 3, 3, 3, 3, 3, 3, 1, 1],
+                            'channels': [32, 32, 32, 32, 32, 32, 64, 128, 128, 4],
+                            # NOTE: last channel is num_of_classes
+                            'dilation': [1, 1, 2, 4, 8, 16, 32, 1, 1, 1],
+                            'stride': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                            'batch_norm': [False, True, True, True, True, True, True, True, True, False],
+                            'non_linearity': [nn.ELU, nn.ELU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ELU,
+                                              nn.ELU,
+                                              nn.Softmax],
+                            'dropout': [kwargs["drop_prob"]] * num_of_layers,
+                            'loss_function': nn.NLLLoss,
+                            'description': 'DCNN_2D_MC_DROPOUT_{}'.format(kwargs["drop_prob"])
+                            }
+
+        return architecture
 
 
 config = BaseConfig()

@@ -2,7 +2,7 @@
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
-from config.config import DEFAULT_DCNN_2D, config
+from config.config import config
 import numpy as np
 from config.config import OPTIMIZER_DICT
 from building_blocks import Basic2DCNNBlock
@@ -14,7 +14,7 @@ from utils.medpy_metrics import hd
 
 class BaseDilated2DCNN(nn.Module):
 
-    def __init__(self, architecture=DEFAULT_DCNN_2D, optimizer=torch.optim.Adam, lr=1e-4, weight_decay=0.,
+    def __init__(self, architecture, optimizer=torch.optim.Adam, lr=1e-4, weight_decay=0.,
                  use_cuda=False, verbose=True, cycle_length=0):
         super(BaseDilated2DCNN, self).__init__()
         self.architecture = architecture
@@ -37,6 +37,9 @@ class BaseDilated2DCNN(nn.Module):
         if self.use_cuda:
             self.cuda()
 
+    def cuda(self):
+        super(BaseDilated2DCNN, self).cuda()
+
     def _build_dcnn(self):
 
         layer_list = []
@@ -58,6 +61,8 @@ class BaseDilated2DCNN(nn.Module):
                                                   apply_non_linearity=self.architecture['non_linearity'][l_id],
                                                   prob_dropout=self.architecture['dropout'][l_id],
                                                   verbose=self.verbose))
+                if self.use_cuda:
+                    layer_list[-1].cuda()
             else:
                 # for ACDC data the last layer is a concatenation of two 2D-CNN layers
                 layer_list.append(ConcatenateCNNBlock(in_channels, self.architecture['channels'][l_id],
@@ -67,6 +72,8 @@ class BaseDilated2DCNN(nn.Module):
                                                       apply_batch_norm=self.architecture['batch_norm'][l_id],
                                                       apply_non_linearity=self.architecture['non_linearity'][l_id],
                                                       axis=1, verbose=self.verbose))
+                if self.use_cuda:
+                    layer_list[-1].cuda()
 
         return nn.Sequential(*layer_list)
 
@@ -151,17 +158,21 @@ class BaseDilated2DCNN(nn.Module):
         self.optimizer.step()
         return b_loss
 
-    def do_validate(self, batch, voxel_spacing=None, compute_hd=False):
+    def do_test(self, images, labels, voxel_spacing=None, compute_hd=False, test_mode=True):
         """
+        voxel_spacing: we assume the image slices are 2D and have isotropic spacing. Hence voxel_spacing is a scaler
+                       and for AC-DC equal to 1.4
 
         :returns validation loss (autograd.Variable) and the label predictions [batch_size, classes, width, height]
-        also as autograd.Variable
+                 also as autograd.Variable
         """
-        self.eval()
-        b_predictions = self(batch.get_images())
-        val_loss = self.get_loss(b_predictions, batch.get_labels(), zooms=voxel_spacing, compute_hd=compute_hd)
-        self.train()
-        return val_loss, b_predictions
+        if test_mode:
+            self.eval()
+        b_predictions = self(images)
+        test_loss = self.get_loss(b_predictions, labels, zooms=voxel_spacing, compute_hd=compute_hd)
+        if test_mode:
+            self.train()
+        return test_loss, b_predictions
 
     def get_dice_losses(self, average=False):
         if not average:

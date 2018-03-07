@@ -58,3 +58,8 @@ def uncertainity_estimate(X, model, iters, l2):
     y_variance += (1. / tau)
     y_std = np.sqrt(y_variance)
     return y_mean, y_std
+
+
+def logsumexp(a):
+    a_max = a.max(axis=0)
+    return np.log(np.sum(np.exp(a - a_max), axis=0)) + a_max

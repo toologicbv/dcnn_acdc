@@ -82,7 +82,7 @@ class TwoDimBatchHandler(BatchHandler):
     def get_labels(self):
         return self.b_labels_per_class
 
-    def generate_batch_2d(self, images, labels, save_batch=False):
+    def generate_batch_2d(self, images, labels, save_batch=False, logger=None):
         """
         Variable images and labels are LISTS containing image slices, hence len(images) = number of total slices
         Each image slice (and label slice) has the following tensor dimensions:
@@ -114,6 +114,8 @@ class TwoDimBatchHandler(BatchHandler):
             offx = np.random.randint(0, img.shape[1] - self.ps_wp)
             offy = np.random.randint(0, img.shape[2] - self.ps_wp)
             self.offsets.append(tuple((offx, offy)))
+            if logger is not None:
+                logger.info("Random: {} {} {}".format(ind, offx, offy))
             img = img[:, offx:offx + self.ps_wp, offy:offy + self.ps_wp]
 
             b_images[idx, :, :, :] = img
@@ -153,7 +155,7 @@ class TwoDimBatchHandler(BatchHandler):
                 offy = self.config.pad_size
                 img = self.b_images[i].data.cpu().numpy()[phase, offx:offx+self.patch_size + 1,
                       offy:offy+self.patch_size + 1]
-                print(self.b_images[i].size(), img.shape)
+
                 # we don't need to swap the axis because the image is 2D only
                 write_numpy_to_image(img, filename=filename_img)
                 cls_offset = phase * 4
@@ -163,7 +165,6 @@ class TwoDimBatchHandler(BatchHandler):
 
                         filename_lbl = os.path.join(self.config.data_dir, "b" + str(i + 1).zfill(2) + "_lbl_ph"
                                                     + str(phase) + "_cls" + str(cls) + ".nii")
-                        print(i, cls, np.unique(cls_lbl), cls_lbl.shape)
                         write_numpy_to_image(cls_lbl.astype("float32"), filename=filename_lbl)
                         # if object that store predictions is non None we save them as well for analysis
                         if self.b_pred_labels_per_class is not None:
