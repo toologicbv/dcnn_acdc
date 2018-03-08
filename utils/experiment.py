@@ -129,6 +129,37 @@ class ExperimentHandler(object):
         model.train()
         del val_batch
 
+    def test(self, model, test_set, image_num=1, mc_samples=1, sample_weights=False):
+
+        for batch_image, batch_labels in test_set.batch_generator(image_num):
+            # IMPORTANT: if we want to sample weights from the "posterior" over model weights, we
+            # need to "tell" pytorch that we use "train" mode even during testing, otherwise dropout is disabled
+            pytorch_test_mode = not sample_weights
+            b_predictions = np.zeros((mc_samples, batch_labels.shape[1], batch_labels.shape[2], batch_labels.shape[3]))
+            b_test_losses = np.zeros(mc_samples)
+            for s in np.arange(mc_samples):
+                test_loss, test_pred = model.do_test(batch_image, batch_labels,
+                                                     voxel_spacing=test_set.new_voxel_spacing,
+                                                     compute_hd=True, test_mode=pytorch_test_mode)
+                b_predictions[s, :, :, :] = test_pred.data.cpu().numpy()
+                b_test_losses[s] = test_loss.data.cpu().numpy()
+                # dice_loss_es, dice_loss_ed = model.get_dice_losses(average=True)
+                # hd_stats, test_hausdorff = model.get_hausdorff()
+
+            mean_test_pred, std_test_pred = np.mean(b_predictions, axis=0, keepdims=True), \
+                                            np.std(b_predictions, axis=0)
+            means_test_loss = np.mean(b_test_losses)
+            test_set.set_pred_labels(mean_test_pred)
+            test_set.set_uncertainty_map(std_test_pred)
+            test_accuracy = test_set.get_accuracy()
+            print("Test accuracy: test loss {:.3f}\t "
+    
+                  "dice(RV/Myo/LV): ES {:.3f}/{:.3f}/{:.3f} --- "
+                  "ED {:.3f}/{:.3f}/{:.3f}".format(means_test_loss,
+                                                   test_accuracy[1], test_accuracy[2],
+                                                   test_accuracy[3], test_accuracy[5],
+                                                   test_accuracy[6], test_accuracy[7]))
+
     def set_lr(self, lr):
         self.exper.epoch_stats["lr"][self.exper.epoch_id - 1] = lr
 

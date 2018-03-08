@@ -5,6 +5,7 @@ import os
 import glob
 from tqdm import tqdm
 from in_out.read_save_images import load_mhd_to_numpy, write_numpy_to_image
+from utils.dice_metric import dice_coefficient
 from utils.img_sampling import resample_image_scipy
 from torch.autograd import Variable
 import torch
@@ -39,8 +40,11 @@ class ACDC2017TestHandler(object):
         self.labels = []
         self.spacings = []
         self.b_pred_labels = None
+        self.b_pred_probs = None
+        self.b_uncertainty_map = None
         self.b_image = None
         self.b_labels = None
+        self.b_orig_spacing = None
         self.debug = debug
         self._set_pathes()
 
@@ -154,24 +158,6 @@ class ACDC2017TestHandler(object):
 
         return labels_per_class
 
-    def generate_batch(self, image_num=0, use_labels=False, use_volatile=False, save_batch=False):
-        """
-            Remember that self.image is a list, containing images with shape [2, height, width, depth]
-            Object self.labels is also a list but with shape [8, height, width, depth]
-
-        """
-        self.b_labels = None
-        batch_dim = self.images[image_num].shape[3]
-        img = self.images[image_num]
-        self.b_image = np.reshape(img, (batch_dim, 2, img.shape[1], img.shape[2]))
-        if use_labels:
-            labels = self.labels[image_num]
-            self.b_labels = np.reshape(labels, (labels.shape[3], labels.shape[0], labels.shape[1], labels.shape[2]))
-            self.b_pred_labels = np.zeros_like(self.b_labels)
-
-        if save_batch:
-            self.save_batch_img_to_files()
-
     def batch_generator(self, image_num=0, use_labels=True, use_volatile=True):
         """
             Remember that self.image is a list, containing images with shape [2, height, width, depth]
@@ -181,9 +167,11 @@ class ACDC2017TestHandler(object):
         b_label = None
         self.slice_counter = -1
         self.b_image = self.images[image_num]
-
+        self.b_orig_spacing = self.spacings[image_num]
+        self.b_uncertainty_map = np.zeros_like(self.b_labels)
         if use_labels:
             self.b_labels = self.labels[image_num]
+            self.b_pred_probs = np.zeros_like(self.b_labels)
             self.b_pred_labels = np.zeros_like(self.b_labels)
         batch_dim = self.b_image.shape[3]
 
@@ -202,54 +190,201 @@ class ACDC2017TestHandler(object):
             self.slice_counter += 1
             yield b_image, b_label
 
-    def set_pred_labels(self, pred_labels):
+    def set_pred_labels(self, pred_probs):
+        if isinstance(pred_probs.data, torch.cuda.FloatTensor) or isinstance(pred_probs.data, torch.FloatTensor):
+            pred_probs = pred_probs.data.cpu().numpy()
+        pred_labels_es = np.argmax(pred_probs[:, 0:self.num_of_classes, :, :], axis=1)
+        pred_labels_ed = np.argmax(pred_probs[:, self.num_of_classes:self.num_of_classes+self.num_of_classes,
+                                   :, :], axis=1)
 
-        if isinstance(pred_labels.data, torch.cuda.FloatTensor) or isinstance(pred_labels.data, torch.FloatTensor):
-            pred_labels = pred_labels.data.cpu().numpy()
+        for cls in np.arange(self.num_of_classes):
+            self.b_pred_labels[cls, :, :, self.slice_counter] = pred_labels_es == cls
+            self.b_pred_labels[cls + self.num_of_classes, :, :, self.slice_counter] = pred_labels_ed == cls
 
-        self.b_pred_labels[:, :, :, self.slice_counter] = pred_labels
+        self.b_pred_probs[:, :, :, self.slice_counter] = pred_probs
 
-    def visualize_test_slices(self, width=8, height=6, num_of_images=None):
+    def set_uncertainty_map(self, slice_std):
+        """
+            Important: we assume slice_std is a numpy array with shape [num_classes, width, height]
 
-        fig = plt.figure(figsize=(width, height))
+        """
+        print(self.b_uncertainty_map.shape)
+        self.b_uncertainty_map[:, :, :, self.slice_counter] = slice_std
+
+    def get_accuracy(self):
+        """
+
+            Compute the dice coefficients for the complete 3D volume
+            (1) self.b_label contains the ground truth: [num_of_classes, x, y, z]
+            (2) self.b_pred_labels contains predicted softmax scores [2, x, y, z]
+                                                                    (0=ED, 1=ES)
+
+        """
+        dices = np.zeros(2 * self.num_of_classes)
+        for cls in np.arange(self.num_of_classes):
+            dices[cls] = dice_coefficient(self.b_labels[cls, :, :, :], self.b_pred_labels[cls, :, :, :])
+            dices[cls + self.num_of_classes] = dice_coefficient(self.b_labels[cls + self.num_of_classes, :, :, :],
+                                                                self.b_pred_labels[cls + self.num_of_classes, :, :, :])
+        return dices
+
+    def visualize_test_slices(self, width=8, height=6, slice_range=None):
+        """
+
+        Remember that self.image is a list, containing images with shape [2, height, width, depth]
+        NOTE: self.b_pred_labels only contains the image that we just processed and NOT the complete list
+        of images as in self.images and self.labels!!!
+
+        NOTE: we only visualize 1 image (given by image_idx)
+
+        """
+        if slice_range is None:
+            slice_range = np.arange(0, self.b_image.shape[3] // 2)
+
+        _ = plt.figure(figsize=(width, height))
         counter = 1
         columns = self.num_of_classes + 1
         if self.b_pred_labels is not None:
             rows = 4
             plot_preds = True
+        else:
+            rows = 2
+            plot_preds = False
 
+        num_of_subplots = rows * 1 * columns  # +1 because the original image is included
+        if len(slice_range) * num_of_subplots > 100:
+            print("WARNING: need to limit number of subplots")
+            slice_range = slice_range[:5]
+        str_slice_range = [str(i) for i in slice_range]
+        print("Number of subplots {} columns {} rows {} slices {}".format(num_of_subplots, columns, rows,
+                                                                          ",".join(str_slice_range)))
+        for idx in slice_range:
+            # get the slice and then split ED and ES slices
+            img = self.b_image[:, :, :, idx]
+            labels = self.b_labels[:, :, :, idx]
+            if plot_preds:
+                pred_labels = self.b_pred_labels[:, :, :, idx]
+            img_ed = img[0]  # INDEX 0 = end-diastole image
+            img_es = img[1]  # INDEX 1 = end-systole image
 
-    def save_batch_img_to_files(self, num_of_images=None, save_dir=None):
+            ax1 = plt.subplot(num_of_subplots, columns, counter)
+            ax1.set_title("End-systole image, reference and predictions")
+            offx = self.config.pad_size
+            offy = self.config.pad_size
+            # get rid of the padding that we needed for the image processing
+            img_ed = img_ed[offx:-offx, offy:-offy]
+            plt.imshow(img_ed, cmap=cm.gray)
+            counter += 1
+            for cls1 in np.arange(self.num_of_classes):
+                _ = plt.subplot(num_of_subplots, columns, counter)
+                plt.imshow(labels[cls1], cmap=cm.gray)
+                if plot_preds:
+                    _ = plt.subplot(num_of_subplots, columns, counter + columns)
+                    plt.imshow(pred_labels[cls1], cmap=cm.gray)
+                counter += 1
 
-        print("Batch-size {} ".format(len(self.images)))
-        if num_of_images is None:
-            num_of_images = len(self.images)
+            cls1 += 1
+            counter += columns
+            ax2 = plt.subplot(num_of_subplots, columns, counter)
+            ax2.set_title("End-diastole image, reference and predictions")
+            img_es = img_es[offx:-offx, offy:-offy]
+            plt.imshow(img_es, cmap=cm.gray)
+
+            counter += 1
+            for cls2 in np.arange(self.num_of_classes):
+                _ = plt.subplot(num_of_subplots, columns, counter)
+                plt.imshow(labels[cls1 + cls2], cmap=cm.gray)
+                if plot_preds:
+                    _ = plt.subplot(num_of_subplots, columns, counter + columns)
+                    plt.imshow(pred_labels[cls1 + cls2], cmap=cm.gray)
+                counter += 1
+
+            counter += columns
+        plt.show()
+
+    def visualize_uncertainty(self, width=12, height=12, slice_range=None):
+
+        if slice_range is None:
+            slice_range = np.arange(0, self.b_image.shape[3] // 2)
+
+        _ = plt.figure(figsize=(width, height))
+        counter = 1
+        columns = self.num_of_classes + 1  # currently only original image and uncertainty map
+        rows = 2
+
+        num_of_subplots = rows * 1 * columns  # +1 because the original image is included
+        str_slice_range = [str(i) for i in slice_range]
+        print("Number of subplots {} columns {} rows {} slices {}".format(num_of_subplots, columns, rows,
+                                                                          ",".join(str_slice_range)))
+        for idx in slice_range:
+            # get the slice and then split ED and ES slices
+            image = self.b_image[:, :, :, idx]
+            true_labels = self.b_labels[:, :, :, idx]
+            uncertainty = self.b_uncertainty_map[:, :, :, idx]
+            for phase in np.arange(2):
+                
+                img = image[phase]  # INDEX 0 = end-systole image
+                ax1 = plt.subplot(num_of_subplots, columns, counter)
+                if phase == 0:
+                    ax1.set_title("End-systole image, reference and predictions")
+                else:
+                    ax1.set_title("End-diastole image, reference and predictions")
+                offx = self.config.pad_size
+                offy = self.config.pad_size
+                # get rid of the padding that we needed for the image processing
+                img = img[offx:-offx, offy:-offy]
+                plt.imshow(img, cmap=cm.gray)
+                counter += 1
+                cls_offset = phase * self.num_of_classes
+                for cls in np.arange(self.num_of_classes):
+                    std = uncertainty[cls + cls_offset]
+                    _ = plt.subplot(num_of_subplots, columns, counter)
+                    plt.imshow(std, cmap=cm.coolwarm)
+                    counter += 1
+                    cls_labels = true_labels[cls + cls_offset]
+
+                    _ = plt.subplot(num_of_subplots, columns, counter + self.num_of_classes)
+                    plt.imshow(cls_labels, cmap=cm.gray)
+
+                counter += 5
+
+    def save_batch_img_to_files(self, slice_range=None, save_dir=None, wo_padding=True):
+
         if save_dir is None:
             save_dir = self.config.data_dir
+        if slice_range is None:
+            # basically save all slices
+            slice_range = np.arange(0, self.b_image.shape[3])
 
-        for i in np.arange(num_of_images):
+        for i in slice_range:
             # each input contains 2 images: 0=ED and 1=ES
             for phase in np.arange(2):
                 if phase == 0:
-                    suffix = "ed"
-                else:
                     suffix = "es"
+                else:
+                    suffix = "ed"
                 filename_img = os.path.join(save_dir, str(i+1).zfill(2) + "_img_ph_"
                                             + suffix + ".nii")
-                img = self.images[i][phase, :, :, :]
-                orig_spacing = self.spacings[i]
+                img = self.b_image[phase, :, :, :]
+                if wo_padding:
+                    img = img[ACDC2017TestHandler.pad_size:-ACDC2017TestHandler.pad_size,
+                              ACDC2017TestHandler.pad_size:-ACDC2017TestHandler.pad_size, :]
                 new_spacing = tuple((ACDC2017TestHandler.new_voxel_spacing, ACDC2017TestHandler.new_voxel_spacing,
-                                     orig_spacing[2]))
+                                     self.b_orig_spacing[2]))
                 # we need to swap the axis because the image is 3D only
                 write_numpy_to_image(img, filename=filename_img, swap_axis=True, spacing=new_spacing)
                 cls_offset = phase * 4
                 for cls in np.arange(self.num_of_classes):
                     if cls != 0 and cls != 4:
-                        cls_lbl = self.labels[i][cls_offset + cls]
-                        cls_lbl = np.pad(cls_lbl, ((ACDC2017TestHandler.pad_size, ACDC2017TestHandler.pad_size - 1),
-                                               (ACDC2017TestHandler.pad_size, ACDC2017TestHandler.pad_size - 1),
-                                               (0, 0)),
-                                       'constant', constant_values=(0,)).astype(ACDC2017TestHandler.pixel_dta_type)
+                        cls_lbl = self.b_labels[cls_offset + cls]
+                        if wo_padding:
+                            # do nothing
+                            pass
+                        else:
+                            cls_lbl = np.pad(cls_lbl, ((ACDC2017TestHandler.pad_size, ACDC2017TestHandler.pad_size - 1),
+                                                       (ACDC2017TestHandler.pad_size, ACDC2017TestHandler.pad_size - 1),
+                                                       (0, 0)),
+                                             'constant', constant_values=(0,)).astype(
+                                ACDC2017TestHandler.pixel_dta_type)
 
                         filename_lbl = os.path.join(save_dir, str(i + 1).zfill(2) + "_lbl_ph"
                                                     + suffix + "_cls" + str(cls) + ".nii")
@@ -257,8 +392,8 @@ class ACDC2017TestHandler(object):
                                              spacing=new_spacing)
                         # if object that store predictions is non None we save them as well for analysis
                         if self.b_pred_labels is not None:
-                            pred_cls_lbl = self.b_pred_labels[i][cls_offset+cls]
-                            filename_lbl = os.path.join(self.config.data_dir, str(i + 1).zfill(2) + "_pred_lbl_ph"
+                            pred_cls_lbl = self.b_pred_labels[cls_offset+cls]
+                            filename_lbl = os.path.join(save_dir, str(i + 1).zfill(2) + "_pred_lbl_ph"
                                                         + suffix + "_cls" + str(cls) + ".nii")
                             write_numpy_to_image(pred_cls_lbl.astype("float32"), filename=filename_lbl, swap_axis=True,
                                                  spacing=new_spacing)

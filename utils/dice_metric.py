@@ -42,15 +42,21 @@ def dice_coefficient(pred_labels, true_labels):
 
     """
 
-    if not (isinstance(pred_labels, Variable) or isinstance(true_labels, torch.FloatTensor)):
-        raise TypeError('expected torch.autograd.Variable or torch.FloatTensor, but got: {}'
-                        .format(torch.typename(true_labels)))
+    if not (isinstance(pred_labels, Variable) or isinstance(true_labels.data, torch.FloatTensor) or
+            isinstance(pred_labels, torch.cuda.FloatTensor)):
+        np_true_labels = pred_labels
+        np_pred_labels = true_labels
     else:
         np_true_labels = true_labels.data.cpu().squeeze().numpy()
         np_pred_labels = pred_labels.data.cpu().squeeze().numpy()
 
+    # if there are no true labels AND we predicated no labels then we reach dice of 1.
+    if np.sum(np_pred_labels == 1) == 0 and np.sum(np_pred_labels == 1) == 0:
+        return 1.
+
     intersection = np.sum((np_pred_labels == 1) * (np_true_labels == 1))
     denominator = np.sum(np_pred_labels == 1) + np.sum(np_true_labels == 1)
+
     try:
         dice = 2 * float(intersection) / float(denominator)
     except ZeroDivisionError:
