@@ -8,6 +8,7 @@ from in_out.read_save_images import load_mhd_to_numpy, write_numpy_to_image
 from utils.dice_metric import dice_coefficient
 from utils.img_sampling import resample_image_scipy
 from torch.autograd import Variable
+from utils.medpy_metrics import hd
 import torch
 if "/home/jogi/.local/lib/python2.7/site-packages" in sys.path:
     sys.path.remove("/home/jogi/.local/lib/python2.7/site-packages")
@@ -44,6 +45,7 @@ class ACDC2017TestHandler(object):
         self.b_uncertainty_map = None
         self.b_image = None
         self.b_labels = None
+        self.b_new_spacing = None
         self.b_orig_spacing = None
         self.debug = debug
         self._set_pathes()
@@ -168,11 +170,15 @@ class ACDC2017TestHandler(object):
         self.slice_counter = -1
         self.b_image = self.images[image_num]
         self.b_orig_spacing = self.spacings[image_num]
-        self.b_uncertainty_map = np.zeros_like(self.b_labels)
+        self.b_new_spacing = tuple((ACDC2017TestHandler.new_voxel_spacing, ACDC2017TestHandler.new_voxel_spacing,
+                                    self.b_orig_spacing[2]))
+
         if use_labels:
             self.b_labels = self.labels[image_num]
             self.b_pred_probs = np.zeros_like(self.b_labels)
             self.b_pred_labels = np.zeros_like(self.b_labels)
+        # TO DO: actually it could happen now that b_uncertainty has undefined shape (because b_labels is not used
+        self.b_uncertainty_map = np.zeros_like(self.b_labels)
         batch_dim = self.b_image.shape[3]
 
         for slice in np.arange(batch_dim):
@@ -208,24 +214,39 @@ class ACDC2017TestHandler(object):
             Important: we assume slice_std is a numpy array with shape [num_classes, width, height]
 
         """
-        print(self.b_uncertainty_map.shape)
+        # print(self.b_uncertainty_map.shape)
         self.b_uncertainty_map[:, :, :, self.slice_counter] = slice_std
 
-    def get_accuracy(self):
+    def get_accuracy(self, compute_hd=False):
         """
 
             Compute the dice coefficients for the complete 3D volume
             (1) self.b_label contains the ground truth: [num_of_classes, x, y, z]
             (2) self.b_pred_labels contains predicted softmax scores [2, x, y, z]
-                                                                    (0=ED, 1=ES)
+                                                                    (0=ES, 1=ED)
 
+            compute_hd: Boolean indicating whether or not to compute Hausdorff distance
         """
         dices = np.zeros(2 * self.num_of_classes)
+        hausdff = np.zeros(2 * self.num_of_classes)
         for cls in np.arange(self.num_of_classes):
             dices[cls] = dice_coefficient(self.b_labels[cls, :, :, :], self.b_pred_labels[cls, :, :, :])
             dices[cls + self.num_of_classes] = dice_coefficient(self.b_labels[cls + self.num_of_classes, :, :, :],
                                                                 self.b_pred_labels[cls + self.num_of_classes, :, :, :])
-        return dices
+            if compute_hd:
+                # only compute distance if both contours are actually in images
+                if 0 != np.count_nonzero(self.b_pred_labels[cls, :, :, :]) and \
+                        0 != np.count_nonzero(self.b_labels[cls, :, :, :]):
+                    hausdff[cls] = hd(self.b_pred_labels[cls, :, :, :], self.b_labels[cls, :, :, :],
+                                      voxelspacing=self.b_new_spacing, connectivity=1)
+                if 0 != np.count_nonzero(self.b_pred_labels[cls + self.num_of_classes, :, :, :]) and \
+                        0 != np.count_nonzero(self.b_labels[cls + self.num_of_classes, :, :, :]):
+                    hausdff[cls + self.num_of_classes] = \
+                        hd(self.b_pred_labels[cls + self.num_of_classes, :, :, :],
+                           self.b_labels[cls + self.num_of_classes, :, :, :],
+                           voxelspacing=self.b_new_spacing, connectivity=1)
+
+        return dices, hausdff
 
     def visualize_test_slices(self, width=8, height=6, slice_range=None):
         """
@@ -261,6 +282,7 @@ class ACDC2017TestHandler(object):
             # get the slice and then split ED and ES slices
             img = self.b_image[:, :, :, idx]
             labels = self.b_labels[:, :, :, idx]
+
             if plot_preds:
                 pred_labels = self.b_pred_labels[:, :, :, idx]
             img_ed = img[0]  # INDEX 0 = end-diastole image
@@ -303,10 +325,11 @@ class ACDC2017TestHandler(object):
 
     def visualize_uncertainty(self, width=12, height=12, slice_range=None):
 
+        column_lbls = ["bg", "RV", "MYO", "LV"]
         if slice_range is None:
             slice_range = np.arange(0, self.b_image.shape[3] // 2)
 
-        _ = plt.figure(figsize=(width, height))
+        fig = plt.figure(figsize=(width, height))
         counter = 1
         columns = self.num_of_classes + 1  # currently only original image and uncertainty map
         rows = 2
@@ -319,6 +342,8 @@ class ACDC2017TestHandler(object):
             # get the slice and then split ED and ES slices
             image = self.b_image[:, :, :, idx]
             true_labels = self.b_labels[:, :, :, idx]
+            pred_labels = self.b_pred_labels[:, :, :, idx]
+            pred_probs = self.b_pred_probs[:, :, :, idx]
             uncertainty = self.b_uncertainty_map[:, :, :, idx]
             for phase in np.arange(2):
                 
@@ -334,18 +359,22 @@ class ACDC2017TestHandler(object):
                 img = img[offx:-offx, offy:-offy]
                 plt.imshow(img, cmap=cm.gray)
                 counter += 1
+                # we use the cls_offset to plot ES and ED images in one loop (phase variable)
                 cls_offset = phase * self.num_of_classes
                 for cls in np.arange(self.num_of_classes):
                     std = uncertainty[cls + cls_offset]
-                    _ = plt.subplot(num_of_subplots, columns, counter)
+                    ax2 = plt.subplot(num_of_subplots, columns, counter)
                     plt.imshow(std, cmap=cm.coolwarm)
+                    ax2.set_title(column_lbls[cls])
                     counter += 1
-                    cls_labels = true_labels[cls + cls_offset]
+                    true_cls_labels = true_labels[cls + cls_offset]
+                    pred_cls_labels = pred_labels[cls + cls_offset]
+                    errors = true_cls_labels != pred_cls_labels
+                    ax3 = plt.subplot(num_of_subplots, columns, counter + self.num_of_classes)
+                    ax3.set_title("Errors {}".format(column_lbls[cls]))
+                    plt.imshow(errors, cmap=cm.gray)
 
-                    _ = plt.subplot(num_of_subplots, columns, counter + self.num_of_classes)
-                    plt.imshow(cls_labels, cmap=cm.gray)
-
-                counter += 5
+                counter += self.num_of_classes + 1  # move counter forward in subplot
 
     def save_batch_img_to_files(self, slice_range=None, save_dir=None, wo_padding=True):
 

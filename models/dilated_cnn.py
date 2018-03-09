@@ -135,7 +135,7 @@ class BaseDilated2DCNN(nn.Module):
                         np_pred_labels = pred_labels[i_idx].data.cpu().numpy()
                         # only compute distance if both contours are actually in images
                         if 0 != np.count_nonzero(np_gt_labels) and 0 != np.count_nonzero(np_pred_labels):
-                            batch_hd_cls.append(hd(np_gt_labels, np_pred_labels, voxelspacing=zooms, connectivity=1))
+                            batch_hd_cls.append(hd(np_pred_labels, np_gt_labels, voxelspacing=zooms, connectivity=1))
 
                     # compute mean for this class over batches
                     self.hausdorff_list.append(batch_hd_cls)

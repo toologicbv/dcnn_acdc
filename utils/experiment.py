@@ -12,6 +12,7 @@ from common.common import create_logger, create_exper_label
 from config.config import config, DEFAULT_DCNN_MC_2D, DEFAULT_DCNN_2D
 from utils.batch_handlers import TwoDimBatchHandler
 import models.dilated_cnn
+from utils.test_results import TestResults
 
 
 class ExperimentHandler(object):
@@ -21,6 +22,7 @@ class ExperimentHandler(object):
     def __init__(self, exper, logger=None, use_logfile=True):
 
         self.exper = exper
+        self.test_results = None
         self.logger = None
         if logger is None:
             self.logger = create_logger(self.exper, file_handler=use_logfile)
@@ -129,36 +131,53 @@ class ExperimentHandler(object):
         model.train()
         del val_batch
 
-    def test(self, model, test_set, image_num=1, mc_samples=1, sample_weights=False):
+    def test(self, model, test_set, image_num=1, mc_samples=1, sample_weights=False, compute_hd=False):
 
+        if self.test_results is None:
+            self.test_results = TestResults()
+        # b_predictions has shape [mc_samples, classes, width, height, slices]
+        b_predictions = np.zeros(tuple([mc_samples] + list(test_set.labels[image_num].shape)))
+        # print("b_predictions ", b_predictions.shape)
         for batch_image, batch_labels in test_set.batch_generator(image_num):
             # IMPORTANT: if we want to sample weights from the "posterior" over model weights, we
             # need to "tell" pytorch that we use "train" mode even during testing, otherwise dropout is disabled
             pytorch_test_mode = not sample_weights
-            b_predictions = np.zeros((mc_samples, batch_labels.shape[1], batch_labels.shape[2], batch_labels.shape[3]))
             b_test_losses = np.zeros(mc_samples)
             for s in np.arange(mc_samples):
                 test_loss, test_pred = model.do_test(batch_image, batch_labels,
                                                      voxel_spacing=test_set.new_voxel_spacing,
                                                      compute_hd=True, test_mode=pytorch_test_mode)
-                b_predictions[s, :, :, :] = test_pred.data.cpu().numpy()
+                b_predictions[s, :, :, :, test_set.slice_counter] = test_pred.data.cpu().numpy()
                 b_test_losses[s] = test_loss.data.cpu().numpy()
                 # dice_loss_es, dice_loss_ed = model.get_dice_losses(average=True)
                 # hd_stats, test_hausdorff = model.get_hausdorff()
 
-            mean_test_pred, std_test_pred = np.mean(b_predictions, axis=0, keepdims=True), \
-                                            np.std(b_predictions, axis=0)
+            mean_test_pred, std_test_pred = np.mean(b_predictions[:, :, :, :, test_set.slice_counter],
+                                                    axis=0, keepdims=True), \
+                                            np.std(b_predictions[:, :, :, :, test_set.slice_counter], axis=0)
             means_test_loss = np.mean(b_test_losses)
             test_set.set_pred_labels(mean_test_pred)
             test_set.set_uncertainty_map(std_test_pred)
-            test_accuracy = test_set.get_accuracy()
+
+        test_accuracy, test_hd = test_set.get_accuracy(compute_hd=compute_hd)
+        self.test_results.add_results(test_set.b_image, test_set.b_labels,
+                                      test_set.b_pred_labels, b_predictions,
+                                      test_accuracy, test_hd)
+        print("Test accuracy: test loss {:.3f}\t "
+
+              "dice(RV/Myo/LV): ES {:.2f}/{:.2f}/{:.2f} --- "
+              "ED {:.2f}/{:.2f}/{:.2f}".format(means_test_loss,
+                                               test_accuracy[1], test_accuracy[2],
+                                               test_accuracy[3], test_accuracy[5],
+                                               test_accuracy[6], test_accuracy[7]))
+        if compute_hd:
             print("Test accuracy: test loss {:.3f}\t "
-    
-                  "dice(RV/Myo/LV): ES {:.3f}/{:.3f}/{:.3f} --- "
-                  "ED {:.3f}/{:.3f}/{:.3f}".format(means_test_loss,
-                                                   test_accuracy[1], test_accuracy[2],
-                                                   test_accuracy[3], test_accuracy[5],
-                                                   test_accuracy[6], test_accuracy[7]))
+
+                  "Hausdorff(RV/Myo/LV): ES {:.2f}/{:.2f}/{:.2f} --- "
+                  "ED {:.2f}/{:.2f}/{:.2f}".format(means_test_loss,
+                                                   test_hd[1], test_hd[2],
+                                                   test_hd[3], test_hd[5],
+                                                   test_hd[6], test_hd[7]))
 
     def set_lr(self, lr):
         self.exper.epoch_stats["lr"][self.exper.epoch_id - 1] = lr
