@@ -135,6 +135,11 @@ class ExperimentHandler(object):
 
         if self.test_results is None:
             self.test_results = TestResults()
+        # correct the divisor for calculation of stdev when low number of samples (biased), used in np.std
+        if mc_samples <= 25:
+            ddof = 1
+        else:
+            ddof = 0
         # b_predictions has shape [mc_samples, classes, width, height, slices]
         b_predictions = np.zeros(tuple([mc_samples] + list(test_set.labels[image_num].shape)))
         # print("b_predictions ", b_predictions.shape)
@@ -148,20 +153,23 @@ class ExperimentHandler(object):
                                                      voxel_spacing=test_set.new_voxel_spacing,
                                                      compute_hd=True, test_mode=pytorch_test_mode)
                 b_predictions[s, :, :, :, test_set.slice_counter] = test_pred.data.cpu().numpy()
+
                 b_test_losses[s] = test_loss.data.cpu().numpy()
                 # dice_loss_es, dice_loss_ed = model.get_dice_losses(average=True)
                 # hd_stats, test_hausdorff = model.get_hausdorff()
 
             mean_test_pred, std_test_pred = np.mean(b_predictions[:, :, :, :, test_set.slice_counter],
                                                     axis=0, keepdims=True), \
-                                            np.std(b_predictions[:, :, :, :, test_set.slice_counter], axis=0)
+                                            np.std(b_predictions[:, :, :, :, test_set.slice_counter], axis=0,
+                                                   ddof=ddof)
+
             means_test_loss = np.mean(b_test_losses)
             test_set.set_pred_labels(mean_test_pred)
             test_set.set_uncertainty_map(std_test_pred)
 
         test_accuracy, test_hd = test_set.get_accuracy(compute_hd=compute_hd)
         self.test_results.add_results(test_set.b_image, test_set.b_labels,
-                                      test_set.b_pred_labels, b_predictions,
+                                      test_set.b_pred_labels, b_predictions, test_set.b_uncertainty_map,
                                       test_accuracy, test_hd)
         print("Test accuracy: test loss {:.3f}\t "
 

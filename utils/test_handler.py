@@ -258,6 +258,8 @@ class ACDC2017TestHandler(object):
         NOTE: we only visualize 1 image (given by image_idx)
 
         """
+        column_lbls = ["bg", "RV", "MYO", "LV"]
+
         if slice_range is None:
             slice_range = np.arange(0, self.b_image.shape[3] // 2)
 
@@ -289,7 +291,7 @@ class ACDC2017TestHandler(object):
             img_es = img[1]  # INDEX 1 = end-systole image
 
             ax1 = plt.subplot(num_of_subplots, columns, counter)
-            ax1.set_title("End-systole image, reference and predictions")
+            ax1.set_title("End-systole image")
             offx = self.config.pad_size
             offy = self.config.pad_size
             # get rid of the padding that we needed for the image processing
@@ -297,27 +299,31 @@ class ACDC2017TestHandler(object):
             plt.imshow(img_ed, cmap=cm.gray)
             counter += 1
             for cls1 in np.arange(self.num_of_classes):
-                _ = plt.subplot(num_of_subplots, columns, counter)
+                ax2 = plt.subplot(num_of_subplots, columns, counter)
                 plt.imshow(labels[cls1], cmap=cm.gray)
+                ax2.set_title(column_lbls[cls1] + " (true labels)")
                 if plot_preds:
-                    _ = plt.subplot(num_of_subplots, columns, counter + columns)
+                    ax3 = plt.subplot(num_of_subplots, columns, counter + columns)
                     plt.imshow(pred_labels[cls1], cmap=cm.gray)
+                    ax3.set_title(column_lbls[cls1] + " (pred labels)")
                 counter += 1
 
             cls1 += 1
             counter += columns
             ax2 = plt.subplot(num_of_subplots, columns, counter)
-            ax2.set_title("End-diastole image, reference and predictions")
+            ax2.set_title("End-diastole image")
             img_es = img_es[offx:-offx, offy:-offy]
             plt.imshow(img_es, cmap=cm.gray)
 
             counter += 1
             for cls2 in np.arange(self.num_of_classes):
-                _ = plt.subplot(num_of_subplots, columns, counter)
+                ax4 = plt.subplot(num_of_subplots, columns, counter)
                 plt.imshow(labels[cls1 + cls2], cmap=cm.gray)
+                ax4.set_title(column_lbls[cls2] + " (true labels)")
                 if plot_preds:
-                    _ = plt.subplot(num_of_subplots, columns, counter + columns)
+                    ax5 = plt.subplot(num_of_subplots, columns, counter + columns)
                     plt.imshow(pred_labels[cls1 + cls2], cmap=cm.gray)
+                    ax5.set_title(column_lbls[cls2] + " (pred labels)")
                 counter += 1
 
             counter += columns
