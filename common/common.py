@@ -63,3 +63,13 @@ def uncertainity_estimate(X, model, iters, l2):
 def logsumexp(a):
     a_max = a.max(axis=0)
     return np.log(np.sum(np.exp(a - a_max), axis=0)) + a_max
+
+
+def setSeed(use_cuda=False):
+    SEED = 4325
+    torch.manual_seed(SEED)
+    torch.cuda.manual_seed(SEED)
+    if use_cuda:
+        torch.backends.cudnn.enabled = True
+
+    np.random.seed(SEED)

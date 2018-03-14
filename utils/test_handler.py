@@ -196,12 +196,27 @@ class ACDC2017TestHandler(object):
             self.slice_counter += 1
             yield b_image, b_label
 
-    def set_pred_labels(self, pred_probs):
+    def set_pred_labels(self, pred_probs, pred_stddev=None, threshold=0.2):
         if isinstance(pred_probs.data, torch.cuda.FloatTensor) or isinstance(pred_probs.data, torch.FloatTensor):
             pred_probs = pred_probs.data.cpu().numpy()
         pred_labels_es = np.argmax(pred_probs[:, 0:self.num_of_classes, :, :], axis=1)
         pred_labels_ed = np.argmax(pred_probs[:, self.num_of_classes:self.num_of_classes+self.num_of_classes,
                                    :, :], axis=1)
+        if pred_stddev is not None:
+            # ommit pixels with high uncertainty and "just" set them to the most common class = background
+            pred_stddev_es = np.mean(pred_stddev[0:self.num_of_classes, :, :], axis=0, keepdims=True)
+            true_lbl_es = np.argmax(pred_probs[:, 0:self.num_of_classes, :, :], axis=1)
+            pred_labels_es[pred_stddev_es >= threshold] = true_lbl_es[pred_stddev_es >= threshold]
+            pred_stddev_ed = np.mean(pred_stddev[self.num_of_classes:self.num_of_classes+self.num_of_classes,
+                                     :, :], axis=0, keepdims=True)
+            discarded_es = np.count_nonzero(pred_stddev_es >= threshold)
+            discarded_ed = np.count_nonzero(pred_stddev_ed >= threshold)
+            true_lbl_ed = np.argmax(pred_probs[:, self.num_of_classes:self.num_of_classes+self.num_of_classes,
+                                    :, :], axis=1)
+            # print("Sum labels before {}".format(np.sum(pred_labels_ed[pred_stddev_ed >= threshold])))
+            pred_labels_ed[pred_stddev_ed >= threshold] = true_lbl_ed[pred_stddev_ed >= threshold]
+            # print("Sum labels after {}".format(np.sum(pred_labels_ed[pred_stddev_ed >= threshold])))
+            print("Discarded ES/ED {} / {}".format(discarded_es, discarded_ed))
 
         for cls in np.arange(self.num_of_classes):
             self.b_pred_labels[cls, :, :, self.slice_counter] = pred_labels_es == cls

@@ -8,7 +8,7 @@ from pytz import timezone
 import dill
 from common.parsing import create_def_argparser, run_dict
 
-from common.common import create_logger, create_exper_label
+from common.common import create_logger, create_exper_label, setSeed
 from config.config import config, DEFAULT_DCNN_MC_2D, DEFAULT_DCNN_2D
 from utils.batch_handlers import TwoDimBatchHandler
 import models.dilated_cnn
@@ -139,10 +139,13 @@ class ExperimentHandler(object):
         model.train()
         del val_batch
 
-    def test(self, model, test_set, image_num=1, mc_samples=1, sample_weights=False, compute_hd=False):
+    def test(self, model, test_set, image_num=1, mc_samples=1, sample_weights=False, compute_hd=False,
+             use_uncertainty=False, use_seed=True):
 
+        if use_seed:
+            setSeed(self.exper.run_args.cuda)
         if self.test_results is None:
-            self.test_results = TestResults()
+            self.test_results = TestResults(self.exper)
         # correct the divisor for calculation of stdev when low number of samples (biased), used in np.std
         if mc_samples <= 25 and mc_samples != 1:
             ddof = 1
@@ -165,14 +168,18 @@ class ExperimentHandler(object):
                 b_test_losses[s] = test_loss.data.cpu().numpy()
                 # dice_loss_es, dice_loss_ed = model.get_dice_losses(average=True)
                 # hd_stats, test_hausdorff = model.get_hausdorff()
-
+            # mean/std for each pixel for each class
             mean_test_pred, std_test_pred = np.mean(b_predictions[:, :, :, :, test_set.slice_counter],
                                                     axis=0, keepdims=True), \
                                             np.std(b_predictions[:, :, :, :, test_set.slice_counter], axis=0,
                                                    ddof=ddof)
 
             means_test_loss = np.mean(b_test_losses)
-            test_set.set_pred_labels(mean_test_pred)
+            if use_uncertainty:
+                test_set.set_pred_labels(mean_test_pred, pred_stddev=std_test_pred)
+            else:
+                test_set.set_pred_labels(mean_test_pred)
+
             test_set.set_uncertainty_map(std_test_pred)
 
         test_accuracy, test_hd = test_set.get_accuracy(compute_hd=compute_hd)
@@ -264,6 +271,7 @@ class Experiment(object):
         self.epoch_id = 0
         self.chkpnt_dir = None
         self.logger = None
+        # will be set to a relative path w.r.t. root directory of python project
         self.output_dir = None
         self.optimizer = None
         # set this later

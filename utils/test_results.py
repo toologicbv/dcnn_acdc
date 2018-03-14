@@ -11,9 +11,125 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 
 
+def get_mean_pred_per_slice(img_slice, img_probs, img_stds, labels, pred_labels, half_classes, stats):
+    """
+
+    Note that for detecting the correct and incorrect classified pixels, we only need to look at the background
+    class, because the incorrect pixels in this class are the summation of the other 3 classes (for ES and ED
+    separately).
+
+    :param img_probs: predicted probabilities for image pixels for the 8 classes [classes, width, height, slices]
+            0-3: ES and 4-7 ED
+    :param img_stds: standard deviation for image pixels. One for ES and one for ED [classes, width, height, slices]
+    :param labels: true labels with [num_of_classes, width, height, slices]
+    :param pred_labels: [num_of_classes, width, height, slices]
+    :param half_classes: in this case 4
+    :param stats: object that holds the dictionaries that capture results of test run
+    :return:
+    """
+
+    for phase in np.arange(2):
+        # start with ES
+        bg_class_idx = phase * half_classes
+        s_labels_ph = labels[bg_class_idx, :, :, img_slice].flatten()
+        s_pred_labels_ph = pred_labels[bg_class_idx, :, :, img_slice].flatten()
+        s_labels_ph = np.atleast_1d(s_labels_ph.astype(np.bool))
+        s_pred_labels_ph = np.atleast_1d(s_pred_labels_ph.astype(np.bool))
+        errors = np.argwhere((~s_pred_labels_ph & s_labels_ph) | (s_pred_labels_ph & ~s_labels_ph))
+        correct = np.argwhere((s_pred_labels_ph & s_labels_ph))
+
+        if phase == 0:
+            # compute mean stddev (over 4 classes)
+            slice_stds_ph = np.mean(img_stds[:half_classes, :, :, img_slice], axis=0).flatten()
+            slice_probs_ph = img_probs[:half_classes, :, :, img_slice]
+        else:
+            # compute mean stddev (over 4 classes)
+            slice_stds_ph = np.mean(img_stds[half_classes:, :, :, img_slice], axis=0).flatten()
+
+            slice_probs_ph = img_probs[half_classes:, :, :, img_slice]
+        slice_probs_ph = np.reshape(slice_probs_ph, (slice_probs_ph.shape[0],
+                                                     slice_probs_ph.shape[1] *
+                                                     slice_probs_ph.shape[2]))
+        # at this moment slice_probs_ph should be [half_classes, num_of_pixels]
+        # and slice_stds_ph contains the pixel stddev for ES or ED [num_of_pixels]
+        err_probs = slice_probs_ph.T[errors].flatten()
+        err_std = slice_stds_ph[errors].flatten()
+        pos_probs = slice_probs_ph.T[correct].flatten()
+        pos_std = slice_stds_ph[correct].flatten()
+        if phase == 0:
+            stats["es_mean_err_p"] = err_probs
+            stats["es_mean_cor_p"] = pos_probs
+            stats["es_mean_err_std"] = err_std
+            stats["es_mean_cor_std"] = pos_std
+        else:
+            stats["ed_mean_err_p"] = err_probs
+            stats["ed_mean_cor_p"] = pos_probs
+            stats["ed_mean_err_std"] = err_std
+            stats["ed_mean_cor_std"] = pos_std
+
+
+def get_img_stats_per_slice_class(img_slice_probs, img_slice, phase, half_classes,
+                                  p_err_std, p_corr_std, p_err_prob, p_corr_prob):
+
+    for cls in np.arange(half_classes):
+
+        if img_slice == 0:
+            if phase == 0:
+                p_err_prob = np.array(img_slice_probs["es_err_p"][cls])
+                p_corr_prob = np.array(img_slice_probs["es_cor_p"][cls])
+                p_err_std = np.array(img_slice_probs["es_err_std"][cls])
+                p_corr_std = np.array(img_slice_probs["es_cor_std"][cls])
+            else:
+                p_err_prob = np.array(img_slice_probs["ed_err_p"][cls])
+                p_corr_prob = np.array(img_slice_probs["ed_cor_p"][cls])
+                p_err_std = np.array(img_slice_probs["ed_err_std"][cls])
+                p_corr_std = np.array(img_slice_probs["ed_cor_std"][cls])
+        else:
+            if phase == 0:
+                p_err_prob = np.concatenate((p_err_prob, np.array(img_slice_probs["es_err_p"][cls])))
+                p_corr_prob = np.concatenate((p_corr_prob, np.array(img_slice_probs["es_cor_p"][cls])))
+                p_err_std = np.concatenate((p_err_std, np.array(img_slice_probs["es_err_std"][cls])))
+                p_corr_std = np.concatenate((p_corr_std, np.array(img_slice_probs["es_cor_std"][cls])))
+            else:
+                p_err_prob = np.concatenate((p_err_prob, np.array(img_slice_probs["ed_err_p"][cls])))
+                p_corr_prob = np.concatenate((p_corr_prob, np.array(img_slice_probs["ed_cor_p"][cls])))
+                p_err_std = np.concatenate((p_err_std, np.array(img_slice_probs["ed_err_std"][cls])))
+                p_corr_std = np.concatenate((p_corr_std, np.array(img_slice_probs["ed_cor_std"][cls])))
+
+    return p_err_std, p_corr_std, p_err_prob, p_corr_prob
+
+
+def get_img_stats_per_slice(img_slice_probs, img_slice, phase, p_err_std, p_corr_std, p_err_prob, p_corr_prob):
+
+    if img_slice == 0:
+        if phase == 0:
+            p_err_prob = img_slice_probs["es_mean_err_p"]
+            p_corr_prob = img_slice_probs["es_mean_cor_p"]
+            p_err_std = img_slice_probs["es_mean_err_std"]
+            p_corr_std = img_slice_probs["es_mean_cor_std"]
+        else:
+            p_err_prob = img_slice_probs["ed_mean_err_p"]
+            p_corr_prob = img_slice_probs["ed_mean_cor_p"]
+            p_err_std = img_slice_probs["ed_mean_err_std"]
+            p_corr_std = img_slice_probs["ed_mean_cor_std"]
+    else:
+        if phase == 0:
+            p_err_prob = np.concatenate((p_err_prob, np.array(img_slice_probs["es_mean_err_p"])))
+            p_corr_prob = np.concatenate((p_corr_prob, np.array(img_slice_probs["es_mean_cor_p"])))
+            p_err_std = np.concatenate((p_err_std, np.array(img_slice_probs["es_mean_err_std"])))
+            p_corr_std = np.concatenate((p_corr_std, np.array(img_slice_probs["es_mean_cor_std"])))
+        else:
+            p_err_prob = np.concatenate((p_err_prob, np.array(img_slice_probs["ed_mean_err_p"])))
+            p_corr_prob = np.concatenate((p_corr_prob, np.array(img_slice_probs["ed_mean_cor_p"])))
+            p_err_std = np.concatenate((p_err_std, np.array(img_slice_probs["ed_mean_err_std"])))
+            p_corr_std = np.concatenate((p_corr_std, np.array(img_slice_probs["ed_mean_cor_std"])))
+
+    return p_err_std, p_corr_std, p_err_prob, p_corr_prob
+
+
 class TestResults(object):
 
-    def __init__(self):
+    def __init__(self, exper):
         """
             numpy arrays in self.pred_probs have shape [slices, classes, width, height]
                             self.pred_labels [classes, width, height, slices]
@@ -33,8 +149,28 @@ class TestResults(object):
         # the correct and wrongs labeled pixels for the two cardiac phase ES and ED.
         self.image_probs_categorized = []
 
+        # set path in order to save results and figures
+        self.fig_output_dir = os.path.join(exper.config.root_dir,
+                                           os.path.join(exper.output_dir, exper.config.figure_path))
+        self.save_output_dir = os.path.join(exper.config.root_dir,
+                                            os.path.join(exper.output_dir, exper.config.stats_path))
+
     def add_results(self, batch_image, batch_labels, pred_labels, b_predictions, uncertainty_map,
                     test_accuracy, test_hd):
+        """
+
+        :param batch_image: [2, width, height, slices]
+        :param batch_labels:
+        :param pred_labels:
+        :param b_predictions:
+        :param uncertainty_map:
+        :param test_accuracy:
+        :param test_hd:
+        :return:
+        """
+        # get rid off padding around image
+        batch_image = batch_image[:, config.pad_size:-config.pad_size, config.pad_size:-config.pad_size, :]
+
         self.images.append(batch_image)
         self.labels.append(batch_labels)
         self.pred_labels.append(pred_labels)
@@ -77,7 +213,17 @@ class TestResults(object):
             # object that holds probabilities per image slice
             probs_per_cls = {"es_err_p": OrderedDict(), "es_cor_p": OrderedDict(), "ed_err_p": OrderedDict(),
                              "ed_cor_p": OrderedDict(), "es_err_std": OrderedDict(), "es_cor_std": OrderedDict(),
-                             "ed_err_std": OrderedDict(), "ed_cor_std": OrderedDict()}
+                             "ed_err_std": OrderedDict(), "ed_cor_std": OrderedDict(),
+                             "es_mean_err_p": np.zeros(half_classes), "es_mean_cor_p": np.zeros(half_classes),
+                             "ed_mean_err_p": np.zeros(half_classes), "ed_mean_cor_p": np.zeros(half_classes),
+                             "es_mean_err_std": np.zeros(half_classes), "es_mean_cor_std": np.zeros(half_classes),
+                             "ed_mean_err_std": np.zeros(half_classes), "ed_mean_cor_std": np.zeros(half_classes)
+                             }
+
+            # mean per class
+            get_mean_pred_per_slice(slice, mean_pred_probs, std_pred_probs, labels, pred_labels,
+                                    half_classes, probs_per_cls)
+
             for cls in np.arange(num_classes):
                 s_labels = labels[cls, :, :, slice].flatten()
                 s_pred_labels = pred_labels[cls, :, :, slice].flatten()
@@ -139,7 +285,8 @@ class TestResults(object):
 
         self.image_probs_categorized.insert(insert_idx, probs_per_img_slice)
 
-    def visualize_model_uncertainty(self, image_num=0, width=16, height=10, info_type="uncertainty"):
+    def visualize_uncertainty_stats(self, image_num=0, width=16, height=10, info_type="uncertainty",
+                                    use_class_stats=False, do_save=False, fig_name=None):
 
         image_probs = self.image_probs_categorized[image_num]
         label = self.labels[image_num]
@@ -161,34 +308,19 @@ class TestResults(object):
                 str_phase = "ES"
             else:
                 str_phase = "ED"
+
             p_err_std, p_corr_std, p_err_prob, p_corr_prob = None, None, None, None
-            for slice in np.arange(num_of_slices):
-                img_slice_probs = image_probs[slice]
+            for img_slice in np.arange(num_of_slices):
 
-                for cls in np.arange(half_classes):
-
-                    if slice == 0:
-                        if phase == 0:
-                            p_err_prob = np.array(img_slice_probs["es_err_p"][cls])
-                            p_corr_prob = np.array(img_slice_probs["es_cor_p"][cls])
-                            p_err_std = np.array(img_slice_probs["es_err_std"][cls])
-                            p_corr_std = np.array(img_slice_probs["es_cor_std"][cls])
-                        else:
-                            p_err_prob = np.array(img_slice_probs["ed_err_p"][cls])
-                            p_corr_prob = np.array(img_slice_probs["ed_cor_p"][cls])
-                            p_err_std = np.array(img_slice_probs["ed_err_std"][cls])
-                            p_corr_std = np.array(img_slice_probs["ed_cor_std"][cls])
-                    else:
-                        if phase == 0:
-                            p_err_prob = np.concatenate((p_err_prob, np.array(img_slice_probs["es_err_p"][cls])))
-                            p_corr_prob = np.concatenate((p_corr_prob, np.array(img_slice_probs["es_cor_p"][cls])))
-                            p_err_std = np.concatenate((p_err_std, np.array(img_slice_probs["es_err_std"][cls])))
-                            p_corr_std = np.concatenate((p_corr_std, np.array(img_slice_probs["es_cor_std"][cls])))
-                        else:
-                            p_err_prob = np.concatenate((p_err_prob, np.array(img_slice_probs["ed_err_p"][cls])))
-                            p_corr_prob = np.concatenate((p_corr_prob, np.array(img_slice_probs["ed_cor_p"][cls])))
-                            p_err_std = np.concatenate((p_err_std, np.array(img_slice_probs["ed_err_std"][cls])))
-                            p_corr_std = np.concatenate((p_corr_std, np.array(img_slice_probs["ed_cor_std"][cls])))
+                img_slice_probs = image_probs[img_slice]
+                if use_class_stats:
+                    p_err_std, p_corr_std, p_err_prob, p_corr_prob = \
+                        get_img_stats_per_slice_class(img_slice_probs, img_slice, phase, half_classes, p_err_std,
+                                                      p_corr_std, p_err_prob, p_corr_prob)
+                else:
+                    p_err_std, p_corr_std, p_err_prob, p_corr_prob = \
+                        get_img_stats_per_slice(img_slice_probs, img_slice, phase, p_err_std, p_corr_std, p_err_prob,
+                                            p_corr_prob)
 
             print("{} correct/error(fp+fn) {} / {}".format(str_phase, p_corr_std.shape, p_err_std.shape))
             ax2 = plt.subplot(num_of_subplots, columns, counter)
@@ -237,90 +369,29 @@ class TestResults(object):
                     ax3.set_xlabel("model uncertainty")
                     ax3.legend(loc="best")
 
+                if info_type == "uncertainty":
+                    ax2.set_xlabel("model uncertainty", **config.axis_font)
+                else:
+                    ax2.set_xlabel(r"softmax $p(y|x)$", **config.axis_font)
                 ax2.set_title("All classes ({})".format(str_phase), **config.title_font_medium)
                 ax2.legend(loc="best", prop={'size': 16})
                 ax2.set_ylabel("density", **config.axis_font)
-                ax2.set_xlabel("model uncertainty", **config.axis_font)
+
             counter += 1
-
         fig.tight_layout()
+        if do_save:
+            if fig_name is None:
+                fig_name = info_type + "_densities_" + str(use_class_stats)
+            fig_name = os.path.join(self.fig_output_dir, fig_name + ".png")
+
+            plt.savefig(fig_name, bbox_inches='tight')
+            print("INFO - Successfully saved fig %s" % fig_name)
+
         plt.show()
+        plt.close()
 
-    def visualize_pred_prob_dists(self, image_num=0, width=12, height=12, slice_range=None):
-
-        column_lbls = ["bg", "RV", "MYO", "LV"]
-        image_probs = self.image_probs_categorized[image_num]
-        image = self.images[image_num]
-        label = self.labels[image_num]
-        img_pred_labels = self.pred_labels[image_num]
-        num_of_classes = label.shape[0]
-        half_classes = num_of_classes / 2
-        num_of_slices = label.shape[3]
-        if slice_range is None:
-            slice_range = np.arange(num_of_slices)
-
-        _ = plt.figure(figsize=(width, height))
-        counter = 1
-        columns = half_classes + 1  # currently only original image and uncertainty map
-        rows = 2
-
-        num_of_subplots = rows * 1 * columns  # +1 because the original image is included
-
-        print("Number of subplots {} columns {} rows {}".format(num_of_subplots, columns, rows))
-        for idx in slice_range:
-            # get the slice and then split ED and ES slices
-            img_slice = image[:, :, :, idx]
-            true_labels = label[:, :, :, idx]
-            img_slice_pred_labels = img_pred_labels[:, :, :, idx]
-            # this is a dictionary...see above
-            img_slice_probs = image_probs[idx]
-            for phase in np.arange(2):
-                img = img_slice[phase]  # INDEX 0 = end-systole image
-                ax1 = plt.subplot(num_of_subplots, columns, counter)
-                if phase == 0:
-                    ax1.set_title("End-systole image")
-                else:
-                    ax1.set_title("End-diastole image")
-                offx = config.pad_size
-                offy = config.pad_size
-                # get rid of the padding that we needed for the image processing
-                img = img[offx:-offx, offy:-offy]
-                plt.imshow(img, cmap=cm.gray)
-                counter += 1
-                for cls in np.arange(half_classes):
-                    p_err, p_err_std = None, None
-                    if phase == 0:
-                        if cls in img_slice_probs["es_err_p"]:
-                            p_err = np.array(img_slice_probs["es_err_p"][cls])
-                            p_err_std = np.array(img_slice_probs["es_err_std"][cls])
-                        if cls in img_slice_probs["es_cor_p"]:
-                            p_corr = np.array(img_slice_probs["es_cor_p"][cls])
-                            p_corr_std = np.array(img_slice_probs["es_cor_std"][cls])
-                    else:
-                        if cls in img_slice_probs["ed_err_p"]:
-                            p_err = np.array(img_slice_probs["ed_err_p"][cls])
-                            p_err_std = np.array(img_slice_probs["ed_err_std"][cls])
-                        if cls in img_slice_probs["ed_cor_p"]:
-                            p_corr = np.array(img_slice_probs["ed_cor_p"][cls])
-                            p_corr_std = np.array(img_slice_probs["ed_cor_std"][cls])
-                    ax2 = plt.subplot(num_of_subplots, columns, counter)
-                    if p_err is not None:
-                        density_err = gaussian_kde(p_err)
-                        xs_err = np.linspace(0, p_err.max(), 200)
-                        density_err.covariance_factor = lambda: .25
-                        density_err._compute_covariance()
-                        ax2.fill_between(xs_err, density_err(xs_err), label="errors", color="b", alpha=0.2)
-                    if p_corr is not None:
-                        density_cor = gaussian_kde(p_corr)
-                        xs_cor = np.linspace(0, p_corr.max(), 200)
-                        density_cor.covariance_factor = lambda: .25
-                        density_cor._compute_covariance()
-                        ax2.fill_between(xs_cor, density_cor(xs_cor), label="correct", color="g", alpha=0.2)
-                    ax2.set_title(column_lbls[cls])
-                    ax2.legend(loc="best")
-                    counter += 1
-
-    def visualize_test_slices(self, image_num=0, width=8, height=6, slice_range=None, errors_only=False):
+    def visualize_test_slices(self, image_num=0, width=8, height=6, slice_range=None, do_save=False,
+                              fig_name=None):
         """
 
         Remember that self.image is a list, containing images with shape [2, height, width, depth]
@@ -341,7 +412,7 @@ class TestResults(object):
         if slice_range is None:
             slice_range = np.arange(0, num_of_slices // 2)
 
-        _ = plt.figure(figsize=(width, height))
+        fig = plt.figure(figsize=(width, height))
         counter = 1
         columns = half_classes + 1
         if img_pred_labels is not None:
@@ -370,10 +441,6 @@ class TestResults(object):
 
             ax1 = plt.subplot(num_of_subplots, columns, counter)
             ax1.set_title("End-systole image", **config.title_font_medium)
-            offx = config.pad_size
-            offy = config.pad_size
-            # get rid of the padding that we needed for the image processing
-            img_ed = img_ed[offx:-offx, offy:-offy]
             plt.imshow(img_ed, cmap=cm.gray)
             plt.axis('off')
             counter += 1
@@ -393,7 +460,6 @@ class TestResults(object):
             counter += columns
             ax2 = plt.subplot(num_of_subplots, columns, counter)
             ax2.set_title("End-diastole image", **config.title_font_medium)
-            img_es = img_es[offx:-offx, offy:-offy]
             plt.imshow(img_es, cmap=cm.gray)
             plt.axis('off')
             counter += 1
@@ -410,9 +476,20 @@ class TestResults(object):
                 counter += 1
 
             counter += columns
+
+        fig.tight_layout()
+        if do_save:
+            file_suffix = "_".join(str_slice_range)
+            if fig_name is None:
+                fig_name = "test_img{}".format(image_num) + "_vis_pred_" + file_suffix
+            fig_name = os.path.join(self.fig_output_dir, fig_name + ".png")
+
+            plt.savefig(fig_name, bbox_inches='tight')
+            print("INFO - Successfully saved fig %s" % fig_name)
         plt.show()
 
-    def visualize_uncertainty(self, image_num=0, width=12, height=12, slice_range=None):
+    def visualize_prediction_uncertainty(self, image_num=0, width=12, height=12, slice_range=None, do_save=False,
+                                         fig_name=None):
 
         column_lbls = ["bg", "RV", "MYO", "LV"]
         image = self.images[image_num]
@@ -426,7 +503,7 @@ class TestResults(object):
         if slice_range is None:
             slice_range = np.arange(0, num_of_slices // 2)
 
-        _ = plt.figure(figsize=(width, height))
+        fig = plt.figure(figsize=(width, height))
         counter = 1
         columns = half_classes + 1  # currently only original image and uncertainty map
         rows = 2
@@ -449,19 +526,19 @@ class TestResults(object):
                     ax1.set_title("End-systole image", **config.title_font_medium)
                 else:
                     ax1.set_title("End-diastole image", **config.title_font_medium)
-                offx = config.pad_size
-                offy = config.pad_size
-                # get rid of the padding that we needed for the image processing
-                img = img[offx:-offx, offy:-offy]
+
                 plt.imshow(img, cmap=cm.gray)
                 plt.axis('off')
                 counter += 1
                 # we use the cls_offset to plot ES and ED images in one loop (phase variable)
                 cls_offset = phase * half_classes
+                mean_stddev = 0.
                 for cls in np.arange(half_classes):
                     std = uncertainty[cls + cls_offset]
+                    mean_stddev += std
                     ax2 = plt.subplot(num_of_subplots, columns, counter)
-                    plt.imshow(std, cmap=cm.coolwarm)
+                    x2_plot = ax2.imshow(std, cmap=cm.coolwarm, vmin=0.0, vmax=0.6)
+                    plt.colorbar(x2_plot, cax=ax2)
                     ax2.set_title(r"$\sigma_{{pred}}$ {}".format(column_lbls[cls]), **config.title_font_medium)
                     plt.axis('off')
                     counter += 1
@@ -472,7 +549,25 @@ class TestResults(object):
                     ax3.set_title("Errors {}".format(column_lbls[cls]), **config.title_font_medium)
                     plt.imshow(errors, cmap=cm.gray)
                     plt.axis('off')
+
+                # plot the average uncertainty per pixel (over classes)
+                mean_stddev = 1./float(half_classes) * mean_stddev
+                ax4 = plt.subplot(num_of_subplots, columns, counter )
+                ax4_plot = ax4.imshow(mean_stddev, cmap=cm.coolwarm, vmin=0.0, vmax=0.6)
+                # plt.colorbar(ax4_plot, cax=ax4_plot)
+                ax4.set_title(r"$\sigma_{{pred}}$ {}".format("mean"), **config.title_font_medium)
+                plt.axis('off')
+                # move to the correct subplot space for the next phase (ES/ED)
                 counter += half_classes + 1  # move counter forward in subplot
+        fig.tight_layout()
+        if do_save:
+            file_suffix = "_".join(str_slice_range)
+            if fig_name is None:
+                fig_name = "test_img{}".format(image_num) + "_vis_pred_uncertainty_" + file_suffix
+            fig_name = os.path.join(self.fig_output_dir, fig_name + ".png")
+
+            plt.savefig(fig_name, bbox_inches='tight')
+            print("INFO - Successfully saved fig %s" % fig_name)
 
     @property
     def N(self):
@@ -482,7 +577,9 @@ class TestResults(object):
 
         if outfile is None:
             rnd = np.random.randint(0, 1000)
-            outfile = os.path.join(os.environ.get("HOME"), "test_results_{}".format(rnd) + ".dll")
+            outfile = "test_results_{}".format(rnd)
+
+        outfile = os.path.join(self.save_output_dir, outfile + ".dll")
 
         try:
             with open(outfile, 'wb') as f:
