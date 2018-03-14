@@ -91,7 +91,11 @@ class BaseConfig(object):
             self.val_batch_size = 64
 
         # plotting
-        self.title_font = {'fontname': 'Arial', 'size': '14', 'color': 'black', 'weight': 'normal'}
+        self.title_font_large = {'fontname': 'Arial', 'size': '36', 'color': 'black', 'weight': 'normal'}
+        self.title_font_medium = {'fontname': 'Arial', 'size': '16', 'color': 'black', 'weight': 'normal'}
+
+        self.axis_font = {'fontname': 'Arial', 'size': '16', 'color': 'black', 'weight': 'normal'}
+
         self.figure_ext = ".png"
 
     def copy_from_object(self, obj):

@@ -220,7 +220,7 @@ class ACDC2017TestHandler(object):
     def get_accuracy(self, compute_hd=False):
         """
 
-            Compute the dice coefficients for the complete 3D volume
+            Compute dice coefficients for the complete 3D volume
             (1) self.b_label contains the ground truth: [num_of_classes, x, y, z]
             (2) self.b_pred_labels contains predicted softmax scores [2, x, y, z]
                                                                     (0=ES, 1=ED)
@@ -291,39 +291,44 @@ class ACDC2017TestHandler(object):
             img_es = img[1]  # INDEX 1 = end-systole image
 
             ax1 = plt.subplot(num_of_subplots, columns, counter)
-            ax1.set_title("End-systole image")
+            ax1.set_title("End-systole image", **config.title_font_medium)
             offx = self.config.pad_size
             offy = self.config.pad_size
             # get rid of the padding that we needed for the image processing
             img_ed = img_ed[offx:-offx, offy:-offy]
             plt.imshow(img_ed, cmap=cm.gray)
+            plt.axis('off')
             counter += 1
             for cls1 in np.arange(self.num_of_classes):
                 ax2 = plt.subplot(num_of_subplots, columns, counter)
                 plt.imshow(labels[cls1], cmap=cm.gray)
-                ax2.set_title(column_lbls[cls1] + " (true labels)")
+                ax2.set_title(column_lbls[cls1] + " (true labels)", **config.title_font_medium)
+                plt.axis('off')
                 if plot_preds:
                     ax3 = plt.subplot(num_of_subplots, columns, counter + columns)
                     plt.imshow(pred_labels[cls1], cmap=cm.gray)
-                    ax3.set_title(column_lbls[cls1] + " (pred labels)")
+                    plt.axis('off')
+                    ax3.set_title(column_lbls[cls1] + " (pred labels)", **config.title_font_medium)
                 counter += 1
 
             cls1 += 1
             counter += columns
             ax2 = plt.subplot(num_of_subplots, columns, counter)
-            ax2.set_title("End-diastole image")
+            ax2.set_title("End-diastole image", **config.title_font_medium)
             img_es = img_es[offx:-offx, offy:-offy]
             plt.imshow(img_es, cmap=cm.gray)
-
+            plt.axis('off')
             counter += 1
             for cls2 in np.arange(self.num_of_classes):
                 ax4 = plt.subplot(num_of_subplots, columns, counter)
                 plt.imshow(labels[cls1 + cls2], cmap=cm.gray)
-                ax4.set_title(column_lbls[cls2] + " (true labels)")
+                ax4.set_title(column_lbls[cls2] + " (true labels)", **config.title_font_medium)
+                plt.axis('off')
                 if plot_preds:
                     ax5 = plt.subplot(num_of_subplots, columns, counter + columns)
                     plt.imshow(pred_labels[cls1 + cls2], cmap=cm.gray)
-                    ax5.set_title(column_lbls[cls2] + " (pred labels)")
+                    ax5.set_title(column_lbls[cls2] + " (pred labels)", **config.title_font_medium)
+                    plt.axis('off')
                 counter += 1
 
             counter += columns
@@ -339,8 +344,8 @@ class ACDC2017TestHandler(object):
         counter = 1
         columns = self.num_of_classes + 1  # currently only original image and uncertainty map
         rows = 2
-
-        num_of_subplots = rows * 1 * columns  # +1 because the original image is included
+        num_of_slices = len(slice_range)
+        num_of_subplots = rows * num_of_slices * columns  # +1 because the original image is included
         str_slice_range = [str(i) for i in slice_range]
         print("Number of subplots {} columns {} rows {} slices {}".format(num_of_subplots, columns, rows,
                                                                           ",".join(str_slice_range)))
@@ -356,14 +361,15 @@ class ACDC2017TestHandler(object):
                 img = image[phase]  # INDEX 0 = end-systole image
                 ax1 = plt.subplot(num_of_subplots, columns, counter)
                 if phase == 0:
-                    ax1.set_title("End-systole image, reference and predictions")
+                    ax1.set_title("End-systole image", **config.title_font_medium)
                 else:
-                    ax1.set_title("End-diastole image, reference and predictions")
+                    ax1.set_title("End-diastole image", **config.title_font_medium)
                 offx = self.config.pad_size
                 offy = self.config.pad_size
                 # get rid of the padding that we needed for the image processing
                 img = img[offx:-offx, offy:-offy]
                 plt.imshow(img, cmap=cm.gray)
+                plt.axis('off')
                 counter += 1
                 # we use the cls_offset to plot ES and ED images in one loop (phase variable)
                 cls_offset = phase * self.num_of_classes
@@ -371,15 +377,16 @@ class ACDC2017TestHandler(object):
                     std = uncertainty[cls + cls_offset]
                     ax2 = plt.subplot(num_of_subplots, columns, counter)
                     plt.imshow(std, cmap=cm.coolwarm)
-                    ax2.set_title(column_lbls[cls])
+                    ax2.set_title(r"$\sigma_{{pred}}$ {}".format(column_lbls[cls]), **config.title_font_medium)
+                    plt.axis('off')
                     counter += 1
                     true_cls_labels = true_labels[cls + cls_offset]
                     pred_cls_labels = pred_labels[cls + cls_offset]
                     errors = true_cls_labels != pred_cls_labels
                     ax3 = plt.subplot(num_of_subplots, columns, counter + self.num_of_classes)
-                    ax3.set_title("Errors {}".format(column_lbls[cls]))
+                    ax3.set_title("Errors {}".format(column_lbls[cls]), **config.title_font_medium)
                     plt.imshow(errors, cmap=cm.gray)
-
+                    plt.axis('off')
                 counter += self.num_of_classes + 1  # move counter forward in subplot
 
     def save_batch_img_to_files(self, slice_range=None, save_dir=None, wo_padding=True):

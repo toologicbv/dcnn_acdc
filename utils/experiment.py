@@ -73,6 +73,11 @@ class ExperimentHandler(object):
         if checkpoint is None:
             checkpoint = self.exper.epoch_id
 
+        if self.logger is None:
+            use_logger = False
+        else:
+            use_logger = True
+
         str_classname = "BaseDilated2DCNN"
         checkpoint_file = str_classname + "checkpoint" + str(checkpoint).zfill(5) + ".pth.tar"
         act_class = getattr(models.dilated_cnn, str_classname)
@@ -100,8 +105,11 @@ class ExperimentHandler(object):
             model.load_state_dict(checkpoint["state_dict"])
             if self.exper.run_args.cuda:
                 model.cuda()
-
-            self.logger.info("INFO - loaded existing model from checkpoint {}".format(abs_checkpoint_dir))
+            if verbose:
+                if use_logger:
+                    self.logger.info("INFO - loaded existing model from checkpoint {}".format(abs_checkpoint_dir))
+                else:
+                    print("INFO - loaded existing model from checkpoint {}".format(abs_checkpoint_dir))
         else:
             raise IOError("Path to checkpoint not found {}".format(abs_checkpoint_dir))
 
@@ -136,7 +144,7 @@ class ExperimentHandler(object):
         if self.test_results is None:
             self.test_results = TestResults()
         # correct the divisor for calculation of stdev when low number of samples (biased), used in np.std
-        if mc_samples <= 25:
+        if mc_samples <= 25 and mc_samples != 1:
             ddof = 1
         else:
             ddof = 0
