@@ -3,12 +3,26 @@ from scipy.stats import gaussian_kde
 import os
 import dill
 import sys
+from tqdm import tqdm
 from collections import OrderedDict
 from config.config import config
+from utils.dice_metric import dice_coefficient
+from utils.medpy_metrics import hd
 if "/home/jogi/.local/lib/python2.7/site-packages" in sys.path:
     sys.path.remove("/home/jogi/.local/lib/python2.7/site-packages")
 import matplotlib.pyplot as plt
 from matplotlib import cm
+from common.common import datestr
+
+
+def get_accuracies_all(pred_labels, true_labels):
+
+    total = pred_labels.flatten().shape[0]
+    tp = np.count_nonzero(pred_labels & true_labels)
+    fn = np.count_nonzero(~pred_labels & true_labels)
+    fp = np.count_nonzero(pred_labels & ~true_labels)
+    tn = np.count_nonzero(~pred_labels & ~true_labels)
+    return total, tp, fn, fp, tn
 
 
 def get_mean_pred_per_slice(img_slice, img_probs, img_stds, labels, pred_labels, half_classes, stats):
@@ -179,7 +193,11 @@ class TestResults(object):
         self.test_accuracy.append(test_accuracy)
         self.test_hd.append(test_hd)
 
-    def split_probs_per_slice_class(self, image_num=0):
+    def generate_all_statistics(self):
+        for image_num in np.arange(self.N):
+            self.generate_slice_statistics(image_num=image_num)
+
+    def generate_slice_statistics(self, image_num=0):
         """
 
         For a detailed analysis of the likelihoods p(y* | x*, theta) we split the predicted probabilities
@@ -237,11 +255,7 @@ class TestResults(object):
                 # get the indices for the errors and the correct classified pixels in this slice/per class
                 s_pred_labels = np.atleast_1d(s_pred_labels.astype(np.bool))
                 s_labels = np.atleast_1d(s_labels.astype(np.bool))
-                # total_l = s_labels.flatten().shape[0]
-                # tp = np.count_nonzero(s_pred_labels & s_labels)
-                # fn = np.count_nonzero(~s_pred_labels & s_labels)
-                # fp = np.count_nonzero(s_pred_labels & ~s_labels)
-                # tn = np.count_nonzero(~s_pred_labels & ~s_labels)
+
                 # errors: fn + fp
                 # correct: tp
                 errors = np.argwhere((~s_pred_labels & s_labels) | (s_pred_labels & ~s_labels))
@@ -489,7 +503,12 @@ class TestResults(object):
         plt.show()
 
     def visualize_prediction_uncertainty(self, image_num=0, width=12, height=12, slice_range=None, do_save=False,
-                                         fig_name=None):
+                                         fig_name=None, std_threshold=None):
+
+        if std_threshold is None:
+            use_uncertainty = False
+        else:
+            use_uncertainty = True
 
         column_lbls = ["bg", "RV", "MYO", "LV"]
         image = self.images[image_num]
@@ -523,9 +542,11 @@ class TestResults(object):
                 img = image_slice[phase]  # INDEX 0 = end-systole image
                 ax1 = plt.subplot(num_of_subplots, columns, counter)
                 if phase == 0:
-                    ax1.set_title("End-systole image", **config.title_font_medium)
+                    ax1.set_title("Slice {}: End-systole".format(idx+1), **config.title_font_medium)
+                    phase_str = "ES"
                 else:
-                    ax1.set_title("End-diastole image", **config.title_font_medium)
+                    ax1.set_title("Slice {}: End-diastole".format(idx+1), **config.title_font_medium)
+                    phase_str = "ED"
 
                 plt.imshow(img, cmap=cm.gray)
                 plt.axis('off')
@@ -538,7 +559,7 @@ class TestResults(object):
                     mean_stddev += std
                     ax2 = plt.subplot(num_of_subplots, columns, counter)
                     x2_plot = ax2.imshow(std, cmap=cm.coolwarm, vmin=0.0, vmax=0.6)
-                    plt.colorbar(x2_plot, cax=ax2)
+                    # plt.colorbar(x2_plot, cax=ax2)
                     ax2.set_title(r"$\sigma_{{pred}}$ {}".format(column_lbls[cls]), **config.title_font_medium)
                     plt.axis('off')
                     counter += 1
@@ -546,8 +567,45 @@ class TestResults(object):
                     pred_cls_labels = pred_labels[cls + cls_offset]
                     errors = true_cls_labels != pred_cls_labels
                     ax3 = plt.subplot(num_of_subplots, columns, counter + half_classes)
-                    ax3.set_title("Errors {}".format(column_lbls[cls]), **config.title_font_medium)
-                    plt.imshow(errors, cmap=cm.gray)
+                    dice_before = dice_coefficient(true_cls_labels.flatten(), pred_cls_labels.flatten())
+                    if 0 != np.count_nonzero(pred_cls_labels) and 0 != np.count_nonzero(true_cls_labels):
+                        hausdorff_before = hd(pred_cls_labels, true_cls_labels, voxelspacing=1.4, connectivity=1)
+                    else:
+                        hausdorff_before = 0.
+                    if use_uncertainty:
+                        error_std = np.copy(std)
+                        error_std[~errors] = 0.
+                        pred_cls_labels_filtered = np.copy(pred_cls_labels)
+                        error_idx = error_std > std_threshold
+                        pred_cls_labels_filtered[error_idx] = 0
+                        error_std[error_idx] = 0.
+                        errors_after = true_cls_labels != pred_cls_labels_filtered
+                        dice_after = dice_coefficient(true_cls_labels, pred_cls_labels_filtered)
+                        if 0 != np.count_nonzero(pred_cls_labels_filtered) and 0 != np.count_nonzero(true_cls_labels):
+                            hausdorff_after = hd(pred_cls_labels_filtered, true_cls_labels, voxelspacing=1.4,
+                                                 connectivity=1)
+                        else:
+                            hausdorff_after = 0.
+
+                        if False:
+                            plt.imshow(error_std, cmap=cm.coolwarm, vmin=0.0, vmax=std_threshold)
+                        else:
+                            plt.imshow(errors_after, cmap=cm.gray)
+                        ax3.set_title("{} errors: {}".format(column_lbls[cls], np.count_nonzero(errors_after)),
+                                      **config.title_font_medium)
+                        if cls != 0:
+                            print("Slice {} - {} - Class {} before/after: errors {} {} || dice {:.2f} / {:.2f} || "
+                                  "hd  {:.2f} / {:.2f}".format(idx + 1, phase_str, cls, np.count_nonzero(errors),
+                                                               np.count_nonzero(errors_after), dice_before, dice_after,
+                                                               hausdorff_before, hausdorff_after))
+                    else:
+                        plt.imshow(errors, cmap=cm.gray)
+                        ax3.set_title("{} errors: {}".format(column_lbls[cls], np.count_nonzero(errors)),
+                                      **config.title_font_medium)
+                        if cls != 0:
+                            print("Slice {} - {} - Class {}: errors {} || dice {:.2f} || "
+                                  "hd  {:.2f}".format(idx + 1, phase_str, cls, np.count_nonzero(errors),
+                                                      dice_before, hausdorff_before))
                     plt.axis('off')
 
                 # plot the average uncertainty per pixel (over classes)
@@ -575,9 +633,17 @@ class TestResults(object):
 
     def save_results(self, outfile=None):
 
+        # Saving the list with dictionaries for the slice statistics (probs, stddev) is amazingly slow.
+        # So we don't save this object(s), but we can generate these stats when loading the object (see below).
+        # We temporary save the object here and assign it back to the object property after we saved.
+        image_probs_categorized = self.image_probs_categorized
+        self.image_probs_categorized = []
+
         if outfile is None:
             rnd = np.random.randint(0, 1000)
-            outfile = "test_results_{}".format(rnd)
+            print("Random number {}".format(rnd))
+            jetzt = datestr()
+            outfile = "test_results_{}".format(jetzt)
 
         outfile = os.path.join(self.save_output_dir, outfile + ".dll")
 
@@ -588,6 +654,8 @@ class TestResults(object):
         except IOError as e:
             print "I/O error({0}): {1}".format(e.errno, e.strerror)
             print("ERROR - can't save results to {}".format(outfile))
+
+        self.image_probs_categorized = image_probs_categorized
 
     @property
     def mean_accuracy(self):
@@ -601,16 +669,21 @@ class TestResults(object):
         return np.mean(mean_acc, axis=0)
 
     @staticmethod
-    def load_results(path_to_exp, full_path=False):
+    def load_results(path_to_exp, generate_stats=False):
 
-        print("Load from {}".format(path_to_exp))
+        print("INFO - Loading results from file {}".format(path_to_exp))
         try:
             with open(path_to_exp, 'rb') as f:
                 test_results = dill.load(f)
 
         except IOError as e:
             print "I/O error({0}): {1}".format(e.errno, e.strerror)
-            print("Can't open file {}".format(path_to_exp))
+            print("ERROR - Can't open file {}".format(path_to_exp))
             raise IOError
+        if generate_stats:
+            print("INFO - Generating slice statistics for all {} images.".format(test_results.N))
+            for image_num in tqdm(np.arange(len(test_results.N))):
+                test_results.generate_slice_statistics(image_num)
 
+        print("INFO - Successfully loaded TestResult object.")
         return test_results

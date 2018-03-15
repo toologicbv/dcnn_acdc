@@ -1,16 +1,20 @@
 from config.config import config
 import logging
 import os
-import time
+from datetime import datetime
 import numpy as np
 
 import torch
 from tqdm import trange
+from pytz import timezone
 
 
 def datestr():
-    now = time.gmtime()
-    return '{}{:02}{:02}_{:02}{:02}'.format(now.tm_year, now.tm_mon, now.tm_mday, now.tm_hour, now.tm_min)
+    jetzt = datetime.now(timezone('Europe/Berlin')).strftime('%Y_%m_%d_%H_%M_%S.%f')[:-10]
+    jetzt = jetzt.replace(" ", "_")
+    # jetzt = jetzt.replace(":", "_")
+    # jetzt = jetzt.replace("-", "_")
+    return jetzt
 
 
 def create_logger(exper=None, file_handler=False, output_dir=None):

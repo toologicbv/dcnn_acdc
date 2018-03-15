@@ -196,31 +196,59 @@ class ACDC2017TestHandler(object):
             self.slice_counter += 1
             yield b_image, b_label
 
-    def set_pred_labels(self, pred_probs, pred_stddev=None, threshold=0.2):
+    def set_pred_labels(self, pred_probs, pred_stddev=None, std_threshold=0.2, verbose=False):
+        """
+
+        :param pred_probs: [1, num_of_classes(8), width, height]
+        :param pred_stddev: [num_of_classes(8), width, heigth]
+        :param threshold: only used if pred_stddev object is non None. Used to filter prediction errors based
+        on standard deviation (uncertainty)
+        Also note that object self.b_labels has dims [num_classes(8), width, height, slices]
+        :return:
+        """
         if isinstance(pred_probs.data, torch.cuda.FloatTensor) or isinstance(pred_probs.data, torch.FloatTensor):
             pred_probs = pred_probs.data.cpu().numpy()
-        pred_labels_es = np.argmax(pred_probs[:, 0:self.num_of_classes, :, :], axis=1)
-        pred_labels_ed = np.argmax(pred_probs[:, self.num_of_classes:self.num_of_classes+self.num_of_classes,
-                                   :, :], axis=1)
-        if pred_stddev is not None:
-            # ommit pixels with high uncertainty and "just" set them to the most common class = background
-            pred_stddev_es = np.mean(pred_stddev[0:self.num_of_classes, :, :], axis=0, keepdims=True)
-            true_lbl_es = np.argmax(pred_probs[:, 0:self.num_of_classes, :, :], axis=1)
-            pred_labels_es[pred_stddev_es >= threshold] = true_lbl_es[pred_stddev_es >= threshold]
-            pred_stddev_ed = np.mean(pred_stddev[self.num_of_classes:self.num_of_classes+self.num_of_classes,
-                                     :, :], axis=0, keepdims=True)
-            discarded_es = np.count_nonzero(pred_stddev_es >= threshold)
-            discarded_ed = np.count_nonzero(pred_stddev_ed >= threshold)
-            true_lbl_ed = np.argmax(pred_probs[:, self.num_of_classes:self.num_of_classes+self.num_of_classes,
-                                    :, :], axis=1)
-            # print("Sum labels before {}".format(np.sum(pred_labels_ed[pred_stddev_ed >= threshold])))
-            pred_labels_ed[pred_stddev_ed >= threshold] = true_lbl_ed[pred_stddev_ed >= threshold]
-            # print("Sum labels after {}".format(np.sum(pred_labels_ed[pred_stddev_ed >= threshold])))
-            print("Discarded ES/ED {} / {}".format(discarded_es, discarded_ed))
 
+        # remember dim0 of pred_probs is 1, so we squeeze it by taking index "0". Hence the argmax is over
+        # axis 0, because we lost the original dim0
+        pred_labels_es = np.argmax(pred_probs[0, 0:self.num_of_classes, :, :], axis=0)
+        pred_labels_ed = np.argmax(pred_probs[0, self.num_of_classes:self.num_of_classes+self.num_of_classes,
+                                   :, :], axis=0)
         for cls in np.arange(self.num_of_classes):
-            self.b_pred_labels[cls, :, :, self.slice_counter] = pred_labels_es == cls
-            self.b_pred_labels[cls + self.num_of_classes, :, :, self.slice_counter] = pred_labels_ed == cls
+            pred_labels_cls_es = (pred_labels_es == cls).astype(np.int)
+            pred_labels_cls_ed = (pred_labels_ed == cls).astype(np.int)
+            true_labels_cls_es = self.b_labels[cls, :, :, self.slice_counter]
+            true_labels_cls_ed = self.b_labels[cls + self.num_of_classes, :, :, self.slice_counter]
+            dice_es_before = dice_coefficient(true_labels_cls_es, pred_labels_cls_es)
+            dice_ed_before = dice_coefficient(true_labels_cls_ed, pred_labels_cls_ed)
+            if pred_stddev is not None:
+                pixel_std_es = pred_stddev[cls]
+                pixel_std_ed = pred_stddev[cls + self.num_of_classes]
+                errors_es = pred_labels_cls_es != self.b_labels[cls, :, :, self.slice_counter]
+                errors_ed = pred_labels_cls_ed != self.b_labels[cls + self.num_of_classes, :, :, self.slice_counter]
+                pixel_std_es[~errors_es] = 0.
+                pixel_std_ed[~errors_ed] = 0.
+                error_es_idx = pixel_std_es > std_threshold
+                error_ed_idx = pixel_std_ed > std_threshold
+                pred_labels_cls_es[error_es_idx] = 0.
+                pred_labels_cls_ed[error_ed_idx] = 0.
+                errors_es_filtered = pred_labels_cls_es != true_labels_cls_es
+                errors_ed_filtered = pred_labels_cls_ed != true_labels_cls_ed
+
+                dice_es_after = dice_coefficient(true_labels_cls_es, pred_labels_cls_es)
+                dice_ed_after = dice_coefficient(true_labels_cls_ed, pred_labels_cls_ed)
+                if cls != 0 and verbose:
+                    print("Slice {} - Class {}: before/after ES: errors: {}/{} dice: {:.2f}/{:.2f} "
+                          "ED errors {}/{} dice: {:.2f}/{:.2f}".format(self.slice_counter+1, cls,
+                                                                       np.count_nonzero(errors_es),
+                                                                       np.count_nonzero(errors_es_filtered),
+                                                                       dice_es_before, dice_es_after,
+                                                                       np.count_nonzero(errors_ed),
+                                                                       np.count_nonzero(errors_ed_filtered),
+                                                                       dice_ed_before, dice_ed_after))
+
+            self.b_pred_labels[cls, :, :, self.slice_counter] = pred_labels_cls_es
+            self.b_pred_labels[cls + self.num_of_classes, :, :, self.slice_counter] = pred_labels_cls_ed
 
         self.b_pred_probs[:, :, :, self.slice_counter] = pred_probs
 

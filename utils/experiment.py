@@ -139,8 +139,8 @@ class ExperimentHandler(object):
         model.train()
         del val_batch
 
-    def test(self, model, test_set, image_num=1, mc_samples=1, sample_weights=False, compute_hd=False,
-             use_uncertainty=False, use_seed=True):
+    def test(self, model, test_set, image_num=0, mc_samples=1, sample_weights=False, compute_hd=False,
+             use_uncertainty=False, std_threshold=None, use_seed=False):
 
         if use_seed:
             setSeed(self.exper.run_args.cuda)
@@ -168,6 +168,10 @@ class ExperimentHandler(object):
                 b_test_losses[s] = test_loss.data.cpu().numpy()
                 # dice_loss_es, dice_loss_ed = model.get_dice_losses(average=True)
                 # hd_stats, test_hausdorff = model.get_hausdorff()
+                # print("Test loss mc/slice {:.3} || HD(RV/Myo/LV): "
+                #      "ES {:.2f}/{:.2f}/{:.2f} "
+                #      "ED {:.2f}/{:.2f}/{:.2f}".format(b_test_losses[s], hd_stats[0], hd_stats[1], hd_stats[2],
+                #                                       hd_stats[3], hd_stats[4], hd_stats[5]))
             # mean/std for each pixel for each class
             mean_test_pred, std_test_pred = np.mean(b_predictions[:, :, :, :, test_set.slice_counter],
                                                     axis=0, keepdims=True), \
@@ -176,7 +180,7 @@ class ExperimentHandler(object):
 
             means_test_loss = np.mean(b_test_losses)
             if use_uncertainty:
-                test_set.set_pred_labels(mean_test_pred, pred_stddev=std_test_pred)
+                test_set.set_pred_labels(mean_test_pred, pred_stddev=std_test_pred, std_threshold=std_threshold)
             else:
                 test_set.set_pred_labels(mean_test_pred)
 
@@ -186,18 +190,17 @@ class ExperimentHandler(object):
         self.test_results.add_results(test_set.b_image, test_set.b_labels,
                                       test_set.b_pred_labels, b_predictions, test_set.b_uncertainty_map,
                                       test_accuracy, test_hd)
-        print("Test accuracy: test loss {:.3f}\t "
-
+        print("Image {} - Test accuracy: test loss {:.3f}\t "
               "dice(RV/Myo/LV): ES {:.2f}/{:.2f}/{:.2f} --- "
-              "ED {:.2f}/{:.2f}/{:.2f}".format(means_test_loss,
+              "ED {:.2f}/{:.2f}/{:.2f}".format(image_num+1, means_test_loss,
                                                test_accuracy[1], test_accuracy[2],
                                                test_accuracy[3], test_accuracy[5],
                                                test_accuracy[6], test_accuracy[7]))
         if compute_hd:
-            print("Test accuracy: test loss {:.3f}\t "
+            print("Image {} - Test accuracy: test loss {:.3f}\t "
 
                   "Hausdorff(RV/Myo/LV): ES {:.2f}/{:.2f}/{:.2f} --- "
-                  "ED {:.2f}/{:.2f}/{:.2f}".format(means_test_loss,
+                  "ED {:.2f}/{:.2f}/{:.2f}".format(image_num+1, means_test_loss,
                                                    test_hd[1], test_hd[2],
                                                    test_hd[3], test_hd[5],
                                                    test_hd[6], test_hd[7]))

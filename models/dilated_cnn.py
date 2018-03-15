@@ -188,15 +188,15 @@ class BaseDilated2DCNN(nn.Module):
     def get_hausdorff(self, compute_statistics=True):
         num_of_classes = len(self.hausdorff_list)
         # store mean and stdev
-        hd_stats = np.zeros((num_of_classes, 2))
+        hd_stats = np.zeros(num_of_classes)
         if compute_statistics:
             for cls in np.arange(num_of_classes):
                 # can happen, with small batch-sizes that e.g. for RV class there were no contours, check here
                 if len(self.hausdorff_list[cls]) != 0:
                     hd = np.array(self.hausdorff_list[cls])
-                    hd_stats[cls] = np.array([np.mean(hd), np.std(hd)])
+                    hd_stats[cls] = np.mean(hd)
                 else:
-                    hd_stats[cls] = np.array([0, 0])
+                    hd_stats[cls] = 0.
 
         return hd_stats, self.hausdorff_list
 
