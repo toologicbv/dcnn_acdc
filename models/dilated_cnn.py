@@ -16,7 +16,7 @@ from common.losses import compute_brier_score
 class BaseDilated2DCNN(nn.Module):
 
     def __init__(self, architecture, optimizer=torch.optim.Adam, lr=1e-4, weight_decay=0.,
-                 use_cuda=False, verbose=True, cycle_length=0):
+                 use_cuda=False, verbose=True, cycle_length=0, loss_function="softdice"):
         super(BaseDilated2DCNN, self).__init__()
         self.architecture = architecture
         self.use_cuda = use_cuda
@@ -35,6 +35,7 @@ class BaseDilated2DCNN(nn.Module):
         self.np_dice_losses = None
         self.np_dice_coeffs = None
         self.hausdorff_list = None
+        self.loss_function = loss_function
 
         if self.use_cuda:
             self.cuda()
@@ -98,7 +99,7 @@ class BaseDilated2DCNN(nn.Module):
 
         return out
 
-    def get_loss(self, predictions, labels, zooms=None, compute_hd=False, loss_func="softdice"):
+    def get_loss(self, predictions, labels, zooms=None, compute_hd=False):
         """
             we need to reshape the tensors because CrossEntropy expects 2D tensor (N, C) where C is num of classes
             the input tensor is in our case [batch_size, 2 * num_of_classes, height, width]
@@ -120,7 +121,7 @@ class BaseDilated2DCNN(nn.Module):
         _, pred_labels_es = torch.max(predictions[:, 0:num_of_classes / 2, :, :], dim=1)
         _, pred_labels_ed = torch.max(predictions[:, num_of_classes / 2:num_of_classes, :, :], dim=1)
         for cls in np.arange(labels.size(1)):
-            if loss_func == "softdice":
+            if self.loss_function == "softdice":
                 losses[cls] = soft_dice_score(predictions[:, cls, :, :], labels[:, cls, :, :])
             else:
                 losses[cls] = compute_brier_score(predictions[:, cls, :, :], labels[:, cls, :, :])
@@ -160,7 +161,7 @@ class BaseDilated2DCNN(nn.Module):
         self.np_dice_coeffs = dices.data.cpu().numpy()
         # NOTE: we want to minimize the loss, but the soft-dice-loss is actually increasing when our predictions
         # get better. HENCE, we need to multiply by minus one here.
-        if loss_func == "softdice":
+        if self.loss_function == "softdice":
             return (-1.) * torch.sum(losses)
         else:
             losses = torch.mean(losses[0:half_classes]) + torch.mean(losses[half_classes:])

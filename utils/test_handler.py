@@ -46,6 +46,7 @@ class ACDC2017TestHandler(object):
         self.b_pred_labels = None
         self.b_pred_probs = None
         self.b_uncertainty_map = None
+        self.b_bald_map = None  # [2, width, height, #slices] one map for each heart phase ES/ED
         self.b_image = None
         self.b_image_id = None  # store the filename from "above" used as identification during testing
         self.b_labels = None
@@ -186,6 +187,8 @@ class ACDC2017TestHandler(object):
             self.b_pred_labels = np.zeros_like(self.b_labels)
         # TO DO: actually it could happen now that b_uncertainty has undefined shape (because b_labels is not used
         self.b_uncertainty_map = np.zeros_like(self.b_labels)
+        # b_bald_map shape: [2, width, height, #slices]
+        self.b_bald_map = np.zeros((2, self.b_labels.shape[1], self.b_labels.shape[2], self.b_labels.shape[3]))
         batch_dim = self.b_image.shape[3]
 
         for slice in np.arange(batch_dim):
@@ -271,6 +274,16 @@ class ACDC2017TestHandler(object):
         """
         # print(self.b_uncertainty_map.shape)
         self.b_uncertainty_map[:, :, :, self.slice_counter] = slice_std
+
+    def set_bald_map(self, slice_bald):
+        """
+        Important: we assume slice_bald is a numpy array with shape [2, width, height].
+        First dim has shape two because we need maps for ES and ED phase
+        :param slice_bald: contains the BALD values per pixel (for one slice) [2, width, height]
+        :return:
+        """
+
+        self.b_bald_map[:, :, :, self.slice_counter] = slice_bald
 
     def get_accuracy(self, compute_hd=False):
         """

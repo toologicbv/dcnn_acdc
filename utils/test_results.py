@@ -67,7 +67,7 @@ def get_accuracies_all(pred_labels, true_labels):
     return total, tp, fn, fp, tn
 
 
-def get_mean_pred_per_slice(img_slice, img_probs, img_stds, labels, pred_labels, half_classes, stats):
+def get_mean_pred_per_slice(img_slice, img_probs, img_stds, img_balds, labels, pred_labels, half_classes, stats):
     """
 
     Note that for detecting the correct and incorrect classified pixels, we only need to look at the background
@@ -98,30 +98,38 @@ def get_mean_pred_per_slice(img_slice, img_probs, img_stds, labels, pred_labels,
             # compute mean stddev (over 4 classes)
             slice_stds_ph = np.mean(img_stds[:half_classes, :, :, img_slice], axis=0).flatten()
             slice_probs_ph = img_probs[:half_classes, :, :, img_slice]
+            slice_bald_ph = img_balds[phase, :, :, img_slice].flatten()
         else:
             # compute mean stddev (over 4 classes)
             slice_stds_ph = np.mean(img_stds[half_classes:, :, :, img_slice], axis=0).flatten()
-
+            slice_bald_ph = img_balds[phase, :, :, img_slice].flatten()
             slice_probs_ph = img_probs[half_classes:, :, :, img_slice]
         slice_probs_ph = np.reshape(slice_probs_ph, (slice_probs_ph.shape[0],
                                                      slice_probs_ph.shape[1] *
                                                      slice_probs_ph.shape[2]))
         # at this moment slice_probs_ph should be [half_classes, num_of_pixels]
         # and slice_stds_ph contains the pixel stddev for ES or ED [num_of_pixels]
+
         err_probs = slice_probs_ph.T[errors].flatten()
         err_std = slice_stds_ph[errors].flatten()
+        err_bald = slice_bald_ph[errors].flatten()
         pos_probs = slice_probs_ph.T[correct].flatten()
         pos_std = slice_stds_ph[correct].flatten()
+        pos_bald = slice_bald_ph[correct].flatten()
         if phase == 0:
             stats["es_mean_err_p"] = err_probs
             stats["es_mean_cor_p"] = pos_probs
             stats["es_mean_err_std"] = err_std
             stats["es_mean_cor_std"] = pos_std
+            stats["es_err_bald"] = err_bald
+            stats["es_cor_bald"] = pos_bald
         else:
             stats["ed_mean_err_p"] = err_probs
             stats["ed_mean_cor_p"] = pos_probs
             stats["ed_mean_err_std"] = err_std
             stats["ed_mean_cor_std"] = pos_std
+            stats["ed_err_bald"] = err_bald
+            stats["ed_cor_bald"] = pos_bald
 
 
 def get_img_stats_per_slice_class(img_slice_probs, img_slice, phase, half_classes,
@@ -198,6 +206,7 @@ class TestResults(object):
         self.pred_labels = []
         self.mc_pred_probs = []
         self.uncertainty_maps = []
+        self.bald_maps = []
         self.test_accuracy = []
         self.test_hd = []
         self.dice_results = None
@@ -216,7 +225,7 @@ class TestResults(object):
                                             os.path.join(exper.output_dir, exper.config.stats_path))
 
     def add_results(self, batch_image, batch_labels, image_id, pred_labels, b_predictions, uncertainty_map,
-                    test_accuracy, test_hd, store_all=False):
+                    test_accuracy, test_hd, store_all=False, bald_maps=None):
         """
 
         :param batch_image: [2, width, height, slices]
@@ -236,6 +245,7 @@ class TestResults(object):
             self.pred_labels.append(pred_labels)
             self.mc_pred_probs.append(b_predictions)
             self.uncertainty_maps.append(uncertainty_map)
+            self.bald_maps.append(bald_maps)
         self.image_ids.append(image_id)
         self.test_accuracy.append(test_accuracy)
         self.test_hd.append(test_hd)
@@ -299,6 +309,7 @@ class TestResults(object):
         mc_pred_probs = self.mc_pred_probs[image_num]
         mean_pred_probs = np.mean(mc_pred_probs, axis=0)
         std_pred_probs = self.uncertainty_maps[image_num]
+        bald_maps = self.bald_maps[image_num]
         num_slices = labels.shape[3]
         num_classes = labels.shape[0]
         half_classes = num_classes / 2
@@ -316,11 +327,15 @@ class TestResults(object):
                              "es_mean_err_p": np.zeros(half_classes), "es_mean_cor_p": np.zeros(half_classes),
                              "ed_mean_err_p": np.zeros(half_classes), "ed_mean_cor_p": np.zeros(half_classes),
                              "es_mean_err_std": np.zeros(half_classes), "es_mean_cor_std": np.zeros(half_classes),
-                             "ed_mean_err_std": np.zeros(half_classes), "ed_mean_cor_std": np.zeros(half_classes)
+                             "ed_mean_err_std": np.zeros(half_classes), "ed_mean_cor_std": np.zeros(half_classes),
+                             "es_err_bald": np.zeros(half_classes),
+                             "es_cor_bald": np.zeros(half_classes),
+                             "ed_err_bald": np.zeros(half_classes),
+                             "ed_cor_bald": np.zeros(half_classes),
                              }
 
             # mean per class
-            get_mean_pred_per_slice(slice, mean_pred_probs, std_pred_probs, labels, pred_labels,
+            get_mean_pred_per_slice(slice, mean_pred_probs, std_pred_probs, bald_maps, labels, pred_labels,
                                     half_classes, probs_per_cls)
 
             for cls in np.arange(num_classes):
@@ -716,7 +731,7 @@ class TestResults(object):
 
     def visualize_uncertainty_histograms(self, image_num=0, width=16, height=10, info_type="stddev", std_threshold=0.,
                                          do_save=False, fig_name=None, slice_range=None, errors_only=False,
-                                         do_show=False, model_name=""):
+                                         do_show=False, model_name="", use_bald=True):
 
         column_lbls = ["bg", "RV", "MYO", "LV"]
         image = self.images[image_num]
@@ -724,6 +739,12 @@ class TestResults(object):
         pred_labels = self.pred_labels[image_num]
         label = self.labels[image_num]
         uncertainty_map = self.uncertainty_maps[image_num]
+        if use_bald:
+            bald_map = self.bald_maps[image_num]  # shape [2, width, height, #slices] 0=ES balds, 1=ED balds so per phase
+            bald_min, bald_max = np.min(bald_map), np.max(bald_map)
+        else:
+            bald_map = None
+
         num_of_classes = label.shape[0]
         half_classes = num_of_classes / 2
         mc_samples = self.mc_pred_probs[image_num].shape[0]
@@ -736,9 +757,12 @@ class TestResults(object):
         str_slice_range = "_".join(str_slice_range)
         columns = half_classes
         if errors_only:
-            rows = num_of_slices * 4  # multiply with 2 because one row ES, one row ED for each slice
+            rows = num_of_slices * 4  # multiply with 4 because two rows ES, two rows ED for each slice
+        elif not use_bald:
+            rows = num_of_slices * 8  # multiply with 2 because four rows ES, four rows ED for each slice
         else:
-            rows = num_of_slices * 8  # multiply with 2 because one row ES, one row ED for each slice
+            rows = num_of_slices * 12  # multiply with 2 because five rows ES, five rows ED for each slice
+
         row = 0
         _ = rows * num_of_slices * columns
         height = height * num_of_slices
@@ -787,9 +811,38 @@ class TestResults(object):
                                                                                           cls_errors[3]),
                           bbox={'facecolor': 'white', 'pad': 18})
                 ax1b.set_title("Prediction errors", **config.title_font_medium)
-                # add 2 because the above images span two rows
                 plt.axis('off')
-                # counter += 1
+                if use_bald:
+                    row += 2
+                    # show 2 image for BALD measure (1) BALD per pixel, on the left side
+                    slice_bald = bald_map[phase, :, :, img_slice]
+                    ax4 = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
+                    ax4plot = ax4.imshow(slice_bald, cmap=plt.get_cmap('jet'), vmin=bald_min, vmax=bald_max)
+                    fig.colorbar(ax4plot, ax=ax4, fraction=0.046, pad=0.04)
+                    ax4.set_title("Slice {} {}: BALD-values".format(img_slice+1, str_phase),
+                                  **config.title_font_medium)
+                    plt.axis('off')
+                    # make histograms
+                    if phase == 0:
+                        bald_corr = img_slice_probs["es_cor_bald"]
+                        bald_err = img_slice_probs["es_err_bald"]
+                    else:
+                        bald_corr = img_slice_probs["ed_cor_bald"]
+                        bald_err = img_slice_probs["ed_err_bald"]
+                    xs = np.linspace(0, bald_max, 20)
+                    ax5 = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
+                    if bald_err is not None:
+                        ax5.hist(bald_err[bald_err >= std_threshold], bins=xs,
+                                 label=r"$bald_{{pred(fp+fn)}}({})$".format(bald_err.shape[0])
+                                 , color="r", alpha=0.2)
+
+                    if bald_corr is not None:
+                        pass
+                        # ax5.hist(bald_corr[bald_corr >= std_threshold], bins=xs,
+                        #         label=r"$bald_{{pred(tp)}}({})$".format(bald_corr.shape[0]),
+                        #         color="g", alpha=0.2)
+                # In case we're only showing the error segmentation map we skip the next part (histgrams and
+                # stddev uncertainty maps per class
                 if not errors_only:
                     row += 2
                     for cls in np.arange(half_classes):

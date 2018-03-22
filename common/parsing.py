@@ -48,6 +48,7 @@ def create_def_argparser(**kwargs):
     args.cycle_length = kwargs['cycle_length']
     args.quick_run = kwargs['quick_run']
     args.drop_prob = kwargs['drop_prob']
+    args.loss_function = kwargs['loss_function']
 
     args.cuda = args.use_cuda and torch.cuda.is_available()
     args.chkpnt = os.path.join(config.checkpoint_path, "default.tar")
@@ -62,6 +63,8 @@ def do_parse_args():
     parser.add_argument('--version', type=str, default='v1')
     parser.add_argument('--root_dir', default=config.root_dir)
     parser.add_argument('--log_dir', default=None)
+    parser.add_argument('--loss_function', type=str, choices=['softdice', 'brier'], default='softdice',
+                        help='Loss function for training the model (default: softdice)')
     parser.add_argument('--use_cuda', action='store_true', default=False,
                         help='use GPU')
     parser.add_argument('--batch_size', type=int, default=64, metavar='N',
@@ -84,7 +87,7 @@ def do_parse_args():
                         metavar='x.xx', help='dropout probability (default: 0.5)')
 
     parser.add_argument('--cycle_length', type=int, default=0, metavar='N',
-                        help='Cycle length for update of learning rate (and snapshot ensemble) (default: 0)')
+                        help='Cycle length for update of leardcnn_mcning rate (and snapshot ensemble) (default: 0)')
 
     parser.add_argument('--retrain', action='store_true')
     parser.add_argument('--chkpnt', action='store_true')

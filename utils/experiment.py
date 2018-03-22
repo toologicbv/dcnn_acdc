@@ -13,6 +13,7 @@ from config.config import config, DEFAULT_DCNN_MC_2D, DEFAULT_DCNN_2D
 from utils.batch_handlers import TwoDimBatchHandler
 import models.dilated_cnn
 from utils.test_results import TestResults
+from common.acquisition_functions import bald_function
 
 
 class ExperimentHandler(object):
@@ -173,10 +174,14 @@ class ExperimentHandler(object):
         # print("b_predictions ", b_predictions.shape)
         slice_idx = 0
         for batch_image, batch_labels in test_set.batch_generator(image_num):
+
+            # NOTE: batch image shape (autograd.Variable): [1, 2, width, height] 1=batch size, 2=ES/ED image
+            #       batch labels shape (autograd.Variable): [1, #classes, width, height] 8 classes, 4ES, 4ED
             # IMPORTANT: if we want to sample weights from the "posterior" over model weights, we
             # need to "tell" pytorch that we use "train" mode even during testing, otherwise dropout is disabled
             pytorch_test_mode = not sample_weights
             b_test_losses = np.zeros(mc_samples)
+            bald_values = np.zeros((2, batch_labels.shape[2], batch_labels.shape[3]))
             for s in np.arange(mc_samples):
                 test_loss, test_pred = model.do_test(batch_image, batch_labels,
                                                      voxel_spacing=test_set.new_voxel_spacing,
@@ -190,6 +195,8 @@ class ExperimentHandler(object):
                                                     axis=0, keepdims=True), \
                                             np.std(b_predictions[:, :, :, :, test_set.slice_counter], axis=0,
                                                    ddof=ddof)
+            bald_values[0] = bald_function(b_predictions[:, 0:4, :, :, test_set.slice_counter])
+            bald_values[1] = bald_function(b_predictions[:, 4:, :, :, test_set.slice_counter])
 
             means_test_loss = np.mean(b_test_losses)
             if use_uncertainty:
@@ -199,6 +206,7 @@ class ExperimentHandler(object):
                 test_set.set_pred_labels(mean_test_pred)
 
             test_set.set_uncertainty_map(std_test_pred)
+            test_set.set_bald_map(bald_values)
             if False:
                 slice_acc, slice_hd = test_set.get_slice_accuracy(slice_idx=slice_idx, compute_hd=compute_hd)
                 print("Test img/slice/sample {}/{}/{} || HD(RV/Myo/LV): "
@@ -211,7 +219,8 @@ class ExperimentHandler(object):
         test_accuracy, test_hd = test_set.get_accuracy(compute_hd=compute_hd)
         self.test_results.add_results(test_set.b_image, test_set.b_labels, test_set.b_image_id,
                                       test_set.b_pred_labels, b_predictions, test_set.b_uncertainty_map,
-                                      test_accuracy, test_hd, store_all=store_details)
+                                      test_accuracy, test_hd, store_all=store_details,
+                                      bald_maps=test_set.b_bald_map)
         print("Image {} - Test accuracy: test loss {:.3f}\t "
               "dice(RV/Myo/LV): ES {:.2f}/{:.2f}/{:.2f} --- "
               "ED {:.2f}/{:.2f}/{:.2f}".format(image_num+1, means_test_loss,
