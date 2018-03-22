@@ -140,7 +140,24 @@ class ExperimentHandler(object):
         del val_batch
 
     def test(self, model, test_set, image_num=0, mc_samples=1, sample_weights=False, compute_hd=False,
-             use_uncertainty=False, std_threshold=None, use_seed=False):
+             use_uncertainty=False, std_threshold=None, use_seed=False, verbose=False, store_details=False):
+        """
+
+        :param model:
+        :param test_set:
+        :param image_num:
+        :param mc_samples:
+        :param sample_weights:
+        :param compute_hd:
+        :param use_uncertainty:
+        :param std_threshold:
+        :param use_seed:
+        :param verbose:
+        :param store_details: if TRUE TestResult object will hold all images/labels/predicted labels, mc-stats etc.
+        which basically results in a very large object. Should not be used for evaluation of many test images,
+        most certainly only for 1-3 images in order to generate some figures.
+        :return:
+        """
 
         if use_seed:
             setSeed(self.exper.run_args.cuda)
@@ -154,6 +171,7 @@ class ExperimentHandler(object):
         # b_predictions has shape [mc_samples, classes, width, height, slices]
         b_predictions = np.zeros(tuple([mc_samples] + list(test_set.labels[image_num].shape)))
         # print("b_predictions ", b_predictions.shape)
+        slice_idx = 0
         for batch_image, batch_labels in test_set.batch_generator(image_num):
             # IMPORTANT: if we want to sample weights from the "posterior" over model weights, we
             # need to "tell" pytorch that we use "train" mode even during testing, otherwise dropout is disabled
@@ -167,11 +185,6 @@ class ExperimentHandler(object):
 
                 b_test_losses[s] = test_loss.data.cpu().numpy()
                 # dice_loss_es, dice_loss_ed = model.get_dice_losses(average=True)
-                # hd_stats, test_hausdorff = model.get_hausdorff()
-                # print("Test loss mc/slice {:.3} || HD(RV/Myo/LV): "
-                #      "ES {:.2f}/{:.2f}/{:.2f} "
-                #      "ED {:.2f}/{:.2f}/{:.2f}".format(b_test_losses[s], hd_stats[0], hd_stats[1], hd_stats[2],
-                #                                       hd_stats[3], hd_stats[4], hd_stats[5]))
             # mean/std for each pixel for each class
             mean_test_pred, std_test_pred = np.mean(b_predictions[:, :, :, :, test_set.slice_counter],
                                                     axis=0, keepdims=True), \
@@ -180,16 +193,25 @@ class ExperimentHandler(object):
 
             means_test_loss = np.mean(b_test_losses)
             if use_uncertainty:
-                test_set.set_pred_labels(mean_test_pred, pred_stddev=std_test_pred, std_threshold=std_threshold)
+                test_set.set_pred_labels(mean_test_pred, pred_stddev=std_test_pred, std_threshold=std_threshold,
+                                         verbose=verbose)
             else:
                 test_set.set_pred_labels(mean_test_pred)
 
             test_set.set_uncertainty_map(std_test_pred)
+            if False:
+                slice_acc, slice_hd = test_set.get_slice_accuracy(slice_idx=slice_idx, compute_hd=compute_hd)
+                print("Test img/slice/sample {}/{}/{} || HD(RV/Myo/LV): "
+                      "ES {:.2f}/{:.2f}/{:.2f} "
+                      "ED {:.2f}/{:.2f}/{:.2f}".format(image_num, slice_idx, s+1, slice_hd[0],
+                                                       slice_hd[1], slice_hd[2],
+                                                       slice_hd[3], slice_hd[4], slice_hd[5]))
+            slice_idx += 1
 
         test_accuracy, test_hd = test_set.get_accuracy(compute_hd=compute_hd)
-        self.test_results.add_results(test_set.b_image, test_set.b_labels,
+        self.test_results.add_results(test_set.b_image, test_set.b_labels, test_set.b_image_id,
                                       test_set.b_pred_labels, b_predictions, test_set.b_uncertainty_map,
-                                      test_accuracy, test_hd)
+                                      test_accuracy, test_hd, store_all=store_details)
         print("Image {} - Test accuracy: test loss {:.3f}\t "
               "dice(RV/Myo/LV): ES {:.2f}/{:.2f}/{:.2f} --- "
               "ED {:.2f}/{:.2f}/{:.2f}".format(image_num+1, means_test_loss,
@@ -236,6 +258,9 @@ class ExperimentHandler(object):
 
     def get_epoch_dice_coeffients(self):
         return self.exper.epoch_stats["dice_coeff"][self.exper.epoch_id - 1]
+
+    def reset_results(self):
+        self.test_results = None
 
     @staticmethod
     def load_experiment(path_to_exp, full_path=False, epoch=None):

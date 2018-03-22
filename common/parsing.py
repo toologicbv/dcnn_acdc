@@ -58,7 +58,7 @@ def do_parse_args():
     # Training settings
     parser = argparse.ArgumentParser(description='PyTorch Dilated CNN')
 
-    parser.add_argument('--model', default="dcnn", choices=['dcnn', 'dcnn_mc'])
+    parser.add_argument('--model', default="dcnn", choices=['dcnn', 'dcnn_mc', 'dcnn_mc_mix', 'dcnn_mc_crelu'])
     parser.add_argument('--version', type=str, default='v1')
     parser.add_argument('--root_dir', default=config.root_dir)
     parser.add_argument('--log_dir', default=None)

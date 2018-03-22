@@ -42,8 +42,7 @@ def dice_coefficient(pred_labels, true_labels):
 
     """
 
-    if not (isinstance(pred_labels, Variable) or isinstance(true_labels.data, torch.FloatTensor) or
-            isinstance(pred_labels, torch.cuda.FloatTensor)):
+    if type(pred_labels) == np.ndarray:
         np_true_labels = pred_labels
         np_pred_labels = true_labels
     else:

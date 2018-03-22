@@ -13,6 +13,48 @@ if "/home/jogi/.local/lib/python2.7/site-packages" in sys.path:
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from common.common import datestr
+import copy
+
+
+def set_error_pixels(img_err, pred_labels, true_labels, cls_offset, stddev=None, std_threshold=0.):
+
+    #                       RV:RED           MYO:YELLOW    LV:GREEN
+    rgb_error_codes = [[], [255, 0, 0], [204, 204, 0], [0, 204, 0]]
+    num_of_errors = np.zeros(4).astype(np.int)
+
+    for cls in np.arange(pred_labels.shape[0] // 2):
+        error_idx = pred_labels[cls + cls_offset] != true_labels[cls + cls_offset]
+        errors_after = None
+        if std_threshold > 0.:
+            if cls == 1:
+                # filter for RV predictions with high stddev
+                # pred_cls_labels_filtered = np.copy(pred_labels[cls + cls_offset])
+                referral_idx = stddev[cls + cls_offset] > std_threshold
+                pred_labels[cls + cls_offset][referral_idx] = 0
+                errors_after = true_labels[cls + cls_offset] != pred_labels[cls + cls_offset]
+                print("WARNING - RV-errors using {:.2f} before/after {} / {}".format(std_threshold,
+                                                                                     np.count_nonzero(error_idx),
+                                                                                     np.count_nonzero(errors_after)))
+                # error_idx = np.copy(errors_after)
+                # pred_labels = np.copy(pred_cls_labels_filtered)
+        if cls != 0:
+            if errors_after is not None:
+                img_err[errors_after, :] = rgb_error_codes[cls]
+                num_of_errors[cls] = np.count_nonzero(errors_after)
+            else:
+                img_err[error_idx, :] = rgb_error_codes[cls]
+                num_of_errors[cls] = np.count_nonzero(error_idx)
+    return img_err, num_of_errors
+
+
+def to_rgb1a(im):
+
+    w, h = im.shape
+    ret = np.zeros((w, h, 3), dtype=np.uint8)
+
+    rgba = ((im - np.min(im)) / (np.max(im) - np.min(im))) * 255
+    ret[:, :, 2] = ret[:, :, 1] = ret[:, :, 0] = rgba
+    return ret
 
 
 def get_accuracies_all(pred_labels, true_labels):
@@ -151,12 +193,16 @@ class TestResults(object):
                             self.pred_probs: [mc_samples, classes, width, height, slices]
         """
         self.images = []
+        self.image_ids = []
         self.labels = []
         self.pred_labels = []
         self.mc_pred_probs = []
         self.uncertainty_maps = []
         self.test_accuracy = []
         self.test_hd = []
+        self.dice_results = None
+        self.hd_results = None
+        self.num_of_samples = []
         # for each image we are using during testing we append ONE LIST, which contains for each image slice
         # and ordered dictionary with the following keys a) es_err b) es_corr c) ed_err d) ed_corr
         # this object is used for the detailed analysis of the uncertainties per image-slice, distinguishing
@@ -169,8 +215,8 @@ class TestResults(object):
         self.save_output_dir = os.path.join(exper.config.root_dir,
                                             os.path.join(exper.output_dir, exper.config.stats_path))
 
-    def add_results(self, batch_image, batch_labels, pred_labels, b_predictions, uncertainty_map,
-                    test_accuracy, test_hd):
+    def add_results(self, batch_image, batch_labels, image_id, pred_labels, b_predictions, uncertainty_map,
+                    test_accuracy, test_hd, store_all=False):
         """
 
         :param batch_image: [2, width, height, slices]
@@ -184,14 +230,41 @@ class TestResults(object):
         """
         # get rid off padding around image
         batch_image = batch_image[:, config.pad_size:-config.pad_size, config.pad_size:-config.pad_size, :]
-
-        self.images.append(batch_image)
-        self.labels.append(batch_labels)
-        self.pred_labels.append(pred_labels)
-        self.mc_pred_probs.append(b_predictions)
-        self.uncertainty_maps.append(uncertainty_map)
+        if store_all:
+            self.images.append(batch_image)
+            self.labels.append(batch_labels)
+            self.pred_labels.append(pred_labels)
+            self.mc_pred_probs.append(b_predictions)
+            self.uncertainty_maps.append(uncertainty_map)
+        self.image_ids.append(image_id)
         self.test_accuracy.append(test_accuracy)
         self.test_hd.append(test_hd)
+        self.num_of_samples.append(b_predictions.shape[0])
+
+    def compute_mean_stats(self):
+
+        N = len(self.test_accuracy)
+        if len(self.test_accuracy) == 0 or len(self.test_hd) == 0:
+            raise ValueError("ERROR - there's no data that could be used to compute statistics!")
+
+        columns_dice = self.test_accuracy[0].shape[0]
+        columns_hd = self.test_hd[0].shape[0]
+        mean_dice = np.empty((0, columns_dice))
+        mean_hd = np.empty((0, columns_hd))
+
+        for img_idx in np.arange(N):
+            dice = self.test_accuracy[img_idx]
+            hausd = self.test_hd[img_idx]
+            mean_dice = np.vstack([mean_dice, dice]) if mean_dice.size else dice
+            mean_hd = np.vstack([mean_hd, hausd]) if mean_hd.size else hausd
+
+        if N > 1:
+            self.dice_results = np.array([np.mean(mean_dice, axis=0), np.std(mean_dice, axis=0)])
+            self.hd_results = np.array([np.mean(mean_hd, axis=0), np.std(mean_hd, axis=0)])
+        else:
+            # only one image tested, there is no mean or stddev
+            self.dice_results = np.array([mean_dice, np.zeros(mean_dice.shape[0])])
+            self.hd_results = np.array([mean_hd, np.zeros(mean_hd.shape[0])])
 
     def generate_all_statistics(self):
         for image_num in np.arange(self.N):
@@ -208,12 +281,15 @@ class TestResults(object):
         """
         # Reset object
         if len(self.image_probs_categorized) != 0:
-            if image_num in self.image_probs_categorized[image_num]:
-                del self.image_probs_categorized[image_num]
+            try:
+                if image_num in self.image_probs_categorized[image_num]:
+                    del self.image_probs_categorized[image_num]
+                    insert_idx = image_num
+                else:
+                    del self.image_probs_categorized[0]
+                    insert_idx = 0
+            except IndexError:
                 insert_idx = image_num
-            else:
-                del self.image_probs_categorized[0]
-                insert_idx = 0
         else:
             insert_idx = image_num
 
@@ -229,9 +305,14 @@ class TestResults(object):
         probs_per_img_slice = []
         for slice in np.arange(num_slices):
             # object that holds probabilities per image slice
-            probs_per_cls = {"es_err_p": OrderedDict(), "es_cor_p": OrderedDict(), "ed_err_p": OrderedDict(),
-                             "ed_cor_p": OrderedDict(), "es_err_std": OrderedDict(), "es_cor_std": OrderedDict(),
-                             "ed_err_std": OrderedDict(), "ed_cor_std": OrderedDict(),
+            probs_per_cls = {"es_err_p": OrderedDict((i, []) for i in np.arange(half_classes)),
+                             "es_cor_p": OrderedDict((i, []) for i in np.arange(half_classes)),
+                             "ed_err_p": OrderedDict((i, []) for i in np.arange(half_classes)),
+                             "ed_cor_p": OrderedDict((i, []) for i in np.arange(half_classes)),
+                             "es_err_std": OrderedDict((i, []) for i in np.arange(half_classes)),
+                             "es_cor_std": OrderedDict((i, []) for i in np.arange(half_classes)),
+                             "ed_err_std": OrderedDict((i, []) for i in np.arange(half_classes)),
+                             "ed_cor_std": OrderedDict((i, []) for i in np.arange(half_classes)),
                              "es_mean_err_p": np.zeros(half_classes), "es_mean_cor_p": np.zeros(half_classes),
                              "ed_mean_err_p": np.zeros(half_classes), "ed_mean_cor_p": np.zeros(half_classes),
                              "es_mean_err_std": np.zeros(half_classes), "es_mean_cor_std": np.zeros(half_classes),
@@ -299,13 +380,15 @@ class TestResults(object):
 
         self.image_probs_categorized.insert(insert_idx, probs_per_img_slice)
 
-    def visualize_uncertainty_stats(self, image_num=0, width=16, height=10, info_type="uncertainty",
-                                    use_class_stats=False, do_save=False, fig_name=None):
+    def visualize_uncertainty_stats(self, image_num=0, width=16, height=10, info_type="stddev",
+                                    use_class_stats=False, do_save=False, fig_name=None,
+                                    model_name=""):
 
         image_probs = self.image_probs_categorized[image_num]
         label = self.labels[image_num]
         num_of_classes = label.shape[0]
         half_classes = num_of_classes / 2
+        mc_samples = self.mc_pred_probs[image_num].shape[0]
         num_of_slices = label.shape[3]
         num_of_subplots = 2
         columns = 2
@@ -316,6 +399,7 @@ class TestResults(object):
             columns = 2
 
         fig = plt.figure(figsize=(width, height))
+        fig.suptitle("Uncertainty densities - model {}".format(model_name) , **config.title_font_medium)
 
         for phase in np.arange(2):
             if phase == 0:
@@ -340,7 +424,7 @@ class TestResults(object):
             ax2 = plt.subplot(num_of_subplots, columns, counter)
             if p_err_std is not None:
                 if kde:
-                    if info_type == "uncertainty":
+                    if info_type == "stddev":
                         density_err = gaussian_kde(p_err_std)
                         xs_err = np.linspace(0, p_err_std.max(), 200)
                         density_err.covariance_factor = lambda: .25
@@ -360,7 +444,7 @@ class TestResults(object):
 
             if p_corr_std is not None:
                 if kde:
-                    if info_type == "uncertainty":
+                    if info_type == "stddev":
                         density_cor = gaussian_kde(p_corr_std)
                         xs_cor = np.linspace(0, p_corr_std.max(), 200)
                         density_cor.covariance_factor = lambda: .25
@@ -383,19 +467,22 @@ class TestResults(object):
                     ax3.set_xlabel("model uncertainty")
                     ax3.legend(loc="best")
 
-                if info_type == "uncertainty":
+                if info_type == "stddev":
                     ax2.set_xlabel("model uncertainty", **config.axis_font)
                 else:
-                    ax2.set_xlabel(r"softmax $p(y|x)$", **config.axis_font)
-                ax2.set_title("All classes ({})".format(str_phase), **config.title_font_medium)
+                    ax2.set_xlabel(r"softmax $p(c|x)$", **config.axis_font)
+                ax2.set_title("{}: all classes ({}/{})".format(str_phase, p_corr_std.shape[0],
+                                                               p_err_std.shape[0]),
+                              **config.title_font_medium)
                 ax2.legend(loc="best", prop={'size': 16})
                 ax2.set_ylabel("density", **config.axis_font)
 
             counter += 1
-        fig.tight_layout()
+        # fig.tight_layout()
         if do_save:
             if fig_name is None:
-                fig_name = info_type + "_densities_" + str(use_class_stats)
+                fig_name = self.image_ids[image_num] + info_type + "_densities_s" + str(mc_samples) \
+                           + "_" + str(use_class_stats)
             fig_name = os.path.join(self.fig_output_dir, fig_name + ".png")
 
             plt.savefig(fig_name, bbox_inches='tight')
@@ -527,7 +614,7 @@ class TestResults(object):
         columns = half_classes + 1  # currently only original image and uncertainty map
         rows = 2
         num_of_slices = len(slice_range)
-        num_of_subplots = rows * num_of_slices * columns  # +1 because the original image is included
+        num_of_subplots = rows * num_of_slices * columns
         str_slice_range = [str(i) for i in slice_range]
         print("Number of subplots {} columns {} rows {} slices {}".format(num_of_subplots, columns, rows,
                                                                           ",".join(str_slice_range)))
@@ -627,6 +714,153 @@ class TestResults(object):
             plt.savefig(fig_name, bbox_inches='tight')
             print("INFO - Successfully saved fig %s" % fig_name)
 
+    def visualize_uncertainty_histograms(self, image_num=0, width=16, height=10, info_type="stddev", std_threshold=0.,
+                                         do_save=False, fig_name=None, slice_range=None, errors_only=False,
+                                         do_show=False, model_name=""):
+
+        column_lbls = ["bg", "RV", "MYO", "LV"]
+        image = self.images[image_num]
+        image_probs = self.image_probs_categorized[image_num]
+        pred_labels = self.pred_labels[image_num]
+        label = self.labels[image_num]
+        uncertainty_map = self.uncertainty_maps[image_num]
+        num_of_classes = label.shape[0]
+        half_classes = num_of_classes / 2
+        mc_samples = self.mc_pred_probs[image_num].shape[0]
+
+        image_name = self.image_ids[image_num][:self.image_ids[image_num].find("_")]
+        if slice_range is None:
+            slice_range = np.arange(0, image.shape[3])
+        num_of_slices = len(slice_range)
+        str_slice_range = [str(i) for i in slice_range]
+        str_slice_range = "_".join(str_slice_range)
+        columns = half_classes
+        if errors_only:
+            rows = num_of_slices * 4  # multiply with 2 because one row ES, one row ED for each slice
+        else:
+            rows = num_of_slices * 8  # multiply with 2 because one row ES, one row ED for each slice
+        row = 0
+        _ = rows * num_of_slices * columns
+        height = height * num_of_slices
+        fig = plt.figure(figsize=(width, height))
+        if std_threshold > 0.:
+            main_title = r"Model {} - Test image: {} - ($\sigma_{{Tr}}={:.2f}$)".format(model_name,
+                                                                                      image_name,
+                                                                                      std_threshold)
+        else:
+            main_title = "Model {} - Test image: {}".format(model_name, image_name)
+        fig.suptitle(main_title, **config.title_font_large)
+
+        for img_slice in slice_range:
+            # get the slice and then split ED and ES slices
+            image_slice = image[:, :, :, img_slice]
+            img_slice_probs = image_probs[img_slice]
+            # print("INFO - Slice {}".format(img_slice+1))
+            for phase in np.arange(2):
+                cls_offset = phase * half_classes
+                img = image_slice[phase]  # INDEX 0 = end-systole image
+                slice_pred_labels = copy.deepcopy(pred_labels[:, :, :, img_slice])
+                slice_true_labels = label[:, :, :, img_slice]
+                slice_stddev = uncertainty_map[:, :, :, img_slice]
+                # ax1 = plt.subplot(num_of_subplots, columns, counter)
+                counter = 0
+                # print("INFO-1 - row/counter {} / {}".format(row, counter))
+                ax1 = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
+                if phase == 0:
+                    ax1.set_title("Slice {}: End-systole".format(img_slice+1), **config.title_font_medium)
+                    str_phase = "ES"
+                else:
+                    ax1.set_title("Slice {}: End-diastole".format(img_slice+1), **config.title_font_medium)
+                    str_phase = "ED"
+                # the original image we are segmenting
+                ax1.imshow(img, cmap=cm.gray)
+                plt.axis('off')
+                # we also construct an image with the segmentation errors, placing it next to the original img
+                ax1b = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
+                rgb_img = to_rgb1a(img)
+                rgb_img, cls_errors = set_error_pixels(rgb_img, slice_pred_labels, slice_true_labels,
+                                                                          cls_offset,
+                                                                          slice_stddev, std_threshold=std_threshold)
+                ax1b.imshow(rgb_img, interpolation='nearest')
+                ax1b.text(20, 20, 'red: RV ({}), yellow: Myo ({}), green: LV ({})'.format(cls_errors[1],
+                                                                                          cls_errors[2],
+                                                                                          cls_errors[3]),
+                          bbox={'facecolor': 'white', 'pad': 18})
+                ax1b.set_title("Prediction errors", **config.title_font_medium)
+                # add 2 because the above images span two rows
+                plt.axis('off')
+                # counter += 1
+                if not errors_only:
+                    row += 2
+                    for cls in np.arange(half_classes):
+                        if phase == 0:
+                            p_err_prob = np.array(img_slice_probs["es_err_p"][cls])
+                            p_corr_prob = np.array(img_slice_probs["es_cor_p"][cls])
+                            p_err_std = np.array(img_slice_probs["es_err_std"][cls])
+                            p_corr_std = np.array(img_slice_probs["es_cor_std"][cls])
+                        else:
+                            p_err_prob = np.array(img_slice_probs["ed_err_p"][cls])
+                            p_corr_prob = np.array(img_slice_probs["ed_cor_p"][cls])
+                            p_err_std = np.array(img_slice_probs["ed_err_std"][cls])
+                            p_corr_std = np.array(img_slice_probs["ed_cor_std"][cls])
+
+                        # in the next subplot row we visualize the uncertainties per class
+                        ax3 = plt.subplot2grid((rows, columns), (row, counter), colspan=1)
+                        std_map_cls = slice_stddev[cls + cls_offset]
+                        cmap = plt.get_cmap('jet')
+                        std_rgba_img = cmap(std_map_cls)
+                        std_rgb_img = np.delete(std_rgba_img, 3, 2)
+                        ax3plot = ax3.imshow(std_rgb_img, vmin=0., vmax=0.6)
+                        if cls == half_classes - 1:
+                            fig.colorbar(ax3plot, ax=ax3, fraction=0.046, pad=0.04)
+                        ax3.set_title("{} stddev: {} ".format(str_phase, column_lbls[cls]),
+                                      **config.title_font_medium)
+                        plt.axis("off")
+                        # finally in the next row we plot the uncertainty densities per class
+                        ax2 = plt.subplot2grid((rows, columns), (row + 1, counter), colspan=1)
+                        std_max = max(p_err_std.max() if p_err_std.shape[0] > 0 else 0,
+                                      p_corr_std.max() if p_corr_std.shape[0] > 0 else 0.)
+
+                        xs = np.linspace(0, std_max, 20)
+                        if p_err_std is not None:
+                            ax2.hist(p_err_std[p_err_std >= std_threshold], bins=xs,
+                                     label=r"$\sigma_{{pred(fp+fn)}}({})$".format(cls_errors[cls])
+                                     , color="r", alpha=0.2)
+
+                        if p_corr_std is not None:
+                            ax2.hist(p_corr_std[p_corr_std >= std_threshold], bins=xs,
+                                     label=r"$\sigma_{{pred(tp)}}({})$".format(p_corr_std.shape[0]),
+                                     color="g", alpha=0.2)
+
+                        if info_type == "stddev":
+                            ax2.set_xlabel("model uncertainty", **config.axis_font)
+                        else:
+                            ax2.set_xlabel(r"softmax $p(c|x)$", **config.axis_font)
+                        ax2.set_title("{} slice-{}: {}".format(str_phase, img_slice+1, column_lbls[cls]),
+                                      **config.title_font_medium)
+                        ax2.legend(loc="best", prop={'size': 16})
+                        # ax2.set_ylabel("density", **config.axis_font)
+
+                        counter += 1
+                row += 2
+        # fig.tight_layout()
+        fig.tight_layout(rect=[0, 0.03, 1, 0.97])
+        if do_save:
+            if fig_name is None:
+                fig_name = self.image_ids[image_num] + "_seg_errors_" + str_slice_range + "_s" + str(mc_samples)
+                if std_threshold > 0.:
+                    tr_string = "_tr" + str(std_threshold).replace(".", "_")
+                    fig_name += tr_string
+                if errors_only:
+                    fig_name = fig_name + "_" + str(errors_only)
+            fig_name = os.path.join(self.fig_output_dir, fig_name + ".png")
+
+            plt.savefig(fig_name, bbox_inches='tight')
+            print("INFO - Successfully saved fig %s" % fig_name)
+        if do_show:
+            plt.show()
+        plt.close()
+
     @property
     def N(self):
         return len(self.pred_labels)
@@ -637,6 +871,12 @@ class TestResults(object):
         # So we don't save this object(s), but we can generate these stats when loading the object (see below).
         # We temporary save the object here and assign it back to the object property after we saved.
         image_probs_categorized = self.image_probs_categorized
+        images = self.images
+        labels = self.labels
+        pred_labels = self.pred_labels
+        self.images = []
+        self.labels = []
+        self.pred_labels = []
         self.image_probs_categorized = []
 
         if outfile is None:
@@ -655,18 +895,14 @@ class TestResults(object):
             print "I/O error({0}): {1}".format(e.errno, e.strerror)
             print("ERROR - can't save results to {}".format(outfile))
 
+        self.images = images
+        self.labels = labels
+        self.pred_labels = pred_labels
         self.image_probs_categorized = image_probs_categorized
-
-    @property
-    def mean_accuracy(self):
-
-        columns = self.test_accuracy[0].shape[0]
-        mean_acc = np.empty((0, columns))
-        for run in np.arange(self.N):
-            acc = self.test_accuracy[run]
-            mean_acc = np.vstack([mean_acc, acc]) if mean_acc.size else acc
-
-        return np.mean(mean_acc, axis=0)
+        del images
+        del labels
+        del pred_labels
+        del image_probs_categorized
 
     @staticmethod
     def load_results(path_to_exp, generate_stats=False):
@@ -687,3 +923,23 @@ class TestResults(object):
 
         print("INFO - Successfully loaded TestResult object.")
         return test_results
+
+    def show_results(self):
+        if self.dice_results is not None:
+            mean_dice = self.dice_results[0]
+            stddev = self.dice_results[1]
+            print("Test accuracy: \t "
+                  "dice(RV/Myo/LV): ES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f}) --- "
+                  "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(mean_dice[1], stddev[1], mean_dice[2],
+                                                                              stddev[2], mean_dice[3], stddev[3],
+                                                                              mean_dice[5], stddev[5], mean_dice[6],
+                                                                              stddev[6], mean_dice[7], stddev[7]))
+        if self.hd_results is not None:
+            mean_hd = self.hd_results[0]
+            stddev = self.hd_results[1]
+            print("Test accuracy: \t "
+                  "Hausdorff(RV/Myo/LV): ES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f}) --- "
+                  "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(mean_hd[1], stddev[1], mean_hd[2],
+                                                                              stddev[2], mean_hd[3], stddev[3],
+                                                                              mean_hd[5], stddev[5], mean_hd[6],
+                                                                              stddev[6], mean_hd[7], stddev[7]))

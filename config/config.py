@@ -2,6 +2,8 @@ import os
 import torch
 import torch.nn as nn
 import socket
+from models.nn_functions import CReLU
+
 
 DEFAULT_DCNN_2D = {'num_of_layers': 10,
                    'input_channels': 2,
@@ -88,7 +90,7 @@ class BaseConfig(object):
         if socket.gethostname() == "qiaubuntu" or socket.gethostname() == "ubuntu-toologic2":
             self.val_batch_size = 16
         else:
-            self.val_batch_size = 64
+            self.val_batch_size = 128
 
         # plotting
         self.title_font_large = {'fontname': 'Arial', 'size': '36', 'color': 'black', 'weight': 'normal'}
@@ -124,6 +126,7 @@ class BaseConfig(object):
         else:
             kwargs["drop_prob"] = 0.5
 
+        # print("WARNING - using drop-prob {:.3f}".format(kwargs["drop_prob"]))
         if model == "dcnn":
             architecture = {'num_of_layers': 10,
                             'input_channels': 2,
@@ -140,12 +143,12 @@ class BaseConfig(object):
                             'loss_function': nn.NLLLoss,
                             'description': 'DEFAULT_DCNN_2D'
                             }
-        elif model[:7] == "dcnn_mc":
+        elif model == "dcnn_mc":
             num_of_layers = 10
             architecture = {'num_of_layers': num_of_layers,
                             'input_channels': 2,
                             'kernels': [3, 3, 3, 3, 3, 3, 3, 3, 1, 1],
-                            'channels': [32, 32, 32, 32, 32, 32, 64, 128, 128, 4],
+                            'channels': [16, 16, 32, 32, 32, 32, 64, 128, 128, 4],
                             # NOTE: last channel is num_of_classes
                             'dilation': [1, 1, 2, 4, 8, 16, 32, 1, 1, 1],
                             'stride': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
@@ -153,9 +156,52 @@ class BaseConfig(object):
                             'non_linearity': [nn.ELU, nn.ELU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ELU,
                                               nn.ELU,
                                               nn.Softmax],
-                            'dropout': [kwargs["drop_prob"]] * num_of_layers,
+                            # 'dropout': [kwargs["drop_prob"]] * num_of_layers,
+                            'dropout': [kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"],
+                                        kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"],
+                                        kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"], 0.],
                             'loss_function': nn.NLLLoss,
                             'description': 'DCNN_2D_MC_DROPOUT_{}'.format(kwargs["drop_prob"])
+                            }
+        elif model == "dcnn_mc_mix":
+            num_of_layers = 10
+            architecture = {'num_of_layers': num_of_layers,
+                            'input_channels': 2,
+                            'kernels': [3, 3, 3, 3, 3, 3, 3, 3, 1, 1],
+                            'channels': [16, 16, 32, 32, 32, 32, 64, 128, 128, 4],
+                            # NOTE: last channel is num_of_classes
+                            'dilation': [1, 1, 2, 4, 8, 16, 32, 1, 1, 1],
+                            'stride': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                            'batch_norm': [False, True, True, True, True, True, True, True, True, False],
+                            'non_linearity': [nn.ELU, nn.ELU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ELU,
+                                              nn.ELU,
+                                              nn.Softmax],
+                            # 'dropout': [kwargs["drop_prob"]] * num_of_layers,
+                            'dropout': [kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"],
+                                        kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"],
+                                        kwargs["drop_prob"], 0.2, 0.2, 0.],
+                            'loss_function': nn.NLLLoss,
+                            'description': 'DCNN_2D_MC_DROPOUT_MIX2_{}'.format(kwargs["drop_prob"])
+                            }
+        elif model == "dcnn_mc_crelu":
+            num_of_layers = 10
+            architecture = {'num_of_layers': num_of_layers,
+                            'input_channels': 2,
+                            'kernels': [3, 3, 3, 3, 3, 3, 3, 3, 1, 1],
+                            'channels': [16, 16, 32, 32, 32, 32, 64, 128, 128, 4],
+                            # NOTE: last channel is num_of_classes
+                            'dilation': [1, 1, 2, 4, 8, 16, 32, 1, 1, 1],
+                            'stride': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                            'batch_norm': [False, True, True, True, True, True, True, True, True, False],
+                            'non_linearity': [CReLU, CReLU, CReLU, CReLU, CReLU, CReLU, CReLU, nn.ELU,
+                                              nn.ELU,
+                                              nn.Softmax],
+                            # 'dropout': [kwargs["drop_prob"]] * num_of_layers,
+                            'dropout': [kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"],
+                                        kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"],
+                                        kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"], 0.],
+                            'loss_function': nn.NLLLoss,
+                            'description': 'DCNN_2D_MC_DROPOUT_CRELU_{}'.format(kwargs["drop_prob"])
                             }
 
         return architecture

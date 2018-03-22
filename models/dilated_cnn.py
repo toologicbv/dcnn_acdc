@@ -10,6 +10,7 @@ from models.building_blocks import ConcatenateCNNBlock
 from utils.dice_metric import soft_dice_score, dice_coefficient
 from models.lr_schedulers import CycleLR
 from utils.medpy_metrics import hd
+from common.losses import compute_brier_score
 
 
 class BaseDilated2DCNN(nn.Module):
@@ -34,6 +35,7 @@ class BaseDilated2DCNN(nn.Module):
         self.np_dice_losses = None
         self.np_dice_coeffs = None
         self.hausdorff_list = None
+
         if self.use_cuda:
             self.cuda()
 
@@ -49,7 +51,11 @@ class BaseDilated2DCNN(nn.Module):
                 in_channels = self.architecture['input_channels']
             else:
                 # get previous output channel size
+
                 in_channels = self.architecture['channels'][l_id - 1]
+                # if self.architecture['non_linearity'][l_id - 1].__name__ == "CReLU":
+                #    print("INFO - double input channels")
+                #    in_channels = int(in_channels * 2)
             if self.verbose:
                 print("Constructing layer {}".format(l_id+1))
             if l_id < num_conv_layers - 1:
@@ -92,39 +98,49 @@ class BaseDilated2DCNN(nn.Module):
 
         return out
 
-    def get_loss(self, predictions, labels, zooms=None, compute_hd=False):
+    def get_loss(self, predictions, labels, zooms=None, compute_hd=False, loss_func="softdice"):
         """
             we need to reshape the tensors because CrossEntropy expects 2D tensor (N, C) where C is num of classes
             the input tensor is in our case [batch_size, 2 * num_of_classes, height, width]
             the labels are                  [batch_size, 2 * num_of_classes, height, width]
+
+            loss_func is: (1) softdice=soft_dice_score or (2) brier=compute_brier_score
         """
         num_of_classes = labels.size(1)
+        half_classes = int(num_of_classes / 2)
         losses = Variable(torch.FloatTensor(num_of_classes))
         dices = Variable(torch.FloatTensor(num_of_classes))
+        # brier_score = Variable(torch.FloatTensor(num_of_classes))
         self.hausdorff_list = []
         if self.use_cuda:
             losses = losses.cuda()
+
         # determine the predicted labels. IMPORTANT do this separately for each ES and ED which means
         # we have to split the network output on dim1 in to parts of size 4
         _, pred_labels_es = torch.max(predictions[:, 0:num_of_classes / 2, :, :], dim=1)
         _, pred_labels_ed = torch.max(predictions[:, num_of_classes / 2:num_of_classes, :, :], dim=1)
         for cls in np.arange(labels.size(1)):
-            losses[cls] = soft_dice_score(predictions[:, cls, :, :], labels[:, cls, :, :])
+            if loss_func == "softdice":
+                losses[cls] = soft_dice_score(predictions[:, cls, :, :], labels[:, cls, :, :])
+            else:
+                losses[cls] = compute_brier_score(predictions[:, cls, :, :], labels[:, cls, :, :])
+            # brier_score[cls] = compute_brier_score(predictions[:, cls, :, :], labels[:, cls, :, :])
             # for the dice coefficient we need to determine the class labels of the predictions
             # remember that the object labels contains binary labels for each class (hence dim=1 has size 8)
             # here we determine the max index for each prediction over the 8 classes, and then set all labels
             # to zero that are not relevant for this dice coeff.
-            # IMPORTANT: we DON't compute the DICE for the background class
-            if cls != config.class_lbl_background and cls != (num_of_classes / 2):
-                if cls < num_of_classes / 2:
-                    pred_labels = pred_labels_es == cls
-                else:
-                    # it looks kind of awkward but, cls stays in the range [0-7] but the two tensors pred_labels_es
-                    # and pred_labels_ed contain class values each from [0-3] and not from [0-7]. Hence for the ED
-                    # labels (which are situated in the second part of tensor "label" which acually has size 8 in dim1)
-                    # we make sure the comparison accounts for this (cls - num_of_classes / 2)
-                    pred_labels = pred_labels_ed == (cls - num_of_classes / 2)
-                dices[cls] = dice_coefficient(pred_labels, labels[:, cls, :, :])
+            if cls < num_of_classes / 2:
+                pred_labels = pred_labels_es == cls
+            else:
+                # it looks kind of awkward but, cls stays in the range [0-7] but the two tensors pred_labels_es
+                # and pred_labels_ed contain class values each from [0-3] and not from [0-7]. Hence for the ED
+                # labels (which are situated in the second part of tensor "label" which acually has size 8 in dim1)
+                # we make sure the comparison accounts for this (cls - num_of_classes / 2)
+                pred_labels = pred_labels_ed == (cls - half_classes)
+
+            dices[cls] = dice_coefficient(pred_labels, labels[:, cls, :, :])
+            # IMPORTANT: we DON't compute the HD for the background class
+            if cls != config.class_lbl_background and cls != half_classes:
                 if compute_hd:
                     # need this counter to calculate the mean afterwards, some cls contours can be empty
                     batch_hd_cls = []
@@ -144,7 +160,11 @@ class BaseDilated2DCNN(nn.Module):
         self.np_dice_coeffs = dices.data.cpu().numpy()
         # NOTE: we want to minimize the loss, but the soft-dice-loss is actually increasing when our predictions
         # get better. HENCE, we need to multiply by minus one here.
-        return (-1.) * torch.sum(losses)
+        if loss_func == "softdice":
+            return (-1.) * torch.sum(losses)
+        else:
+            losses = torch.mean(losses[0:half_classes]) + torch.mean(losses[half_classes:])
+            return losses
 
     def do_train(self, batch):
         self.zero_grad()
@@ -184,6 +204,9 @@ class BaseDilated2DCNN(nn.Module):
 
     def get_accuracy(self):
         return np.concatenate((self.np_dice_coeffs[1:4], self.np_dice_coeffs[5:8]))
+
+    def get_brier_score(self):
+        return self.brier_score
 
     def get_hausdorff(self, compute_statistics=True):
         num_of_classes = len(self.hausdorff_list)

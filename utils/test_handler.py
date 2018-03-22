@@ -38,12 +38,16 @@ class ACDC2017TestHandler(object):
         self.load_func = load_func
         self.abs_path_fold = os.path.join(self.data_dir, "fold")
         self.images = []
+        # storing a concatenated filename used as an identification during testing and used for the output
+        # filename of the figures printed during test evaluation e.g. patien007_frame001_frame007
+        self.img_file_names = []
         self.labels = []
         self.spacings = []
         self.b_pred_labels = None
         self.b_pred_probs = None
         self.b_uncertainty_map = None
         self.b_image = None
+        self.b_image_id = None  # store the filename from "above" used as identification during testing
         self.b_labels = None
         self.b_new_spacing = None
         self.b_orig_spacing = None
@@ -103,10 +107,11 @@ class ACDC2017TestHandler(object):
         for idx in tqdm(np.arange(0, len(batch_file_list), 2)):
             # tuple contains [0]=train file name and [1] reference file name
             img_file, ref_file = file_list[idx]
-            print("{} - {}".format(idx, img_file))
             # first frame is always the end-systolic MRI scan, filename ends with "1"
             mri_scan_es, origin, spacing = self.load_func(img_file, data_type=ACDC2017TestHandler.pixel_dta_type,
                                                           swap_axis=True)
+            es_file_name = os.path.splitext(os.path.basename(img_file))[0]
+            print("{} - {}".format(idx, img_file))
             self.spacings.append(spacing)
             mri_scan_es = self._preprocess(mri_scan_es, spacing, poly_order=3, do_pad=True)
             # print("INFO - Loading ES-file {}".format(img_file))
@@ -116,6 +121,8 @@ class ACDC2017TestHandler(object):
 
             # do the same for the End-diastole pair of images
             img_file, ref_file = file_list[idx+1]
+            ed_frame_num = (os.path.splitext(os.path.basename(img_file))[0]).split("_")[1]
+            self.img_file_names.append(es_file_name + "_" + ed_frame_num)
             print("{} - {}".format(idx+1, img_file))
             mri_scan_ed, _, _ = self.load_func(img_file, data_type=ACDC2017TestHandler.pixel_dta_type,
                                                swap_axis=True)
@@ -131,7 +138,6 @@ class ACDC2017TestHandler(object):
             labels = self._split_class_labels(reference_ed, reference_es)
             self.images.append(images)
             self.labels.append(labels)
-
         print("INFO - Successfully loaded {} ED/ES patient pairs".format(len(self.images)))
 
     def _preprocess(self, image, spacing, poly_order=3, do_pad=True):
@@ -169,6 +175,7 @@ class ACDC2017TestHandler(object):
         b_label = None
         self.slice_counter = -1
         self.b_image = self.images[image_num]
+        self.b_image_id = self.img_file_names[image_num]
         self.b_orig_spacing = self.spacings[image_num]
         self.b_new_spacing = tuple((ACDC2017TestHandler.new_voxel_spacing, ACDC2017TestHandler.new_voxel_spacing,
                                     self.b_orig_spacing[2]))
@@ -222,16 +229,21 @@ class ACDC2017TestHandler(object):
             dice_es_before = dice_coefficient(true_labels_cls_es, pred_labels_cls_es)
             dice_ed_before = dice_coefficient(true_labels_cls_ed, pred_labels_cls_ed)
             if pred_stddev is not None:
-                pixel_std_es = pred_stddev[cls]
-                pixel_std_ed = pred_stddev[cls + self.num_of_classes]
+                pixel_std_es = np.copy(pred_stddev[cls])
+                pixel_std_ed = np.copy(pred_stddev[cls + self.num_of_classes])
                 errors_es = pred_labels_cls_es != self.b_labels[cls, :, :, self.slice_counter]
                 errors_ed = pred_labels_cls_ed != self.b_labels[cls + self.num_of_classes, :, :, self.slice_counter]
-                pixel_std_es[~errors_es] = 0.
-                pixel_std_ed[~errors_ed] = 0.
+                # pixel_std_es[~errors_es] = 0.
+                # pixel_std_ed[~errors_ed] = 0.
                 error_es_idx = pixel_std_es > std_threshold
                 error_ed_idx = pixel_std_ed > std_threshold
-                pred_labels_cls_es[error_es_idx] = 0.
-                pred_labels_cls_ed[error_ed_idx] = 0.
+                # little subtlety, if bg class, the most common class label is 1, for all other classes it's 0
+                if cls == 0:
+                    pred_labels_cls_es[error_es_idx] = 1
+                    pred_labels_cls_ed[error_ed_idx] = 1
+                else:
+                    pred_labels_cls_es[error_es_idx] = 0.
+                    pred_labels_cls_ed[error_ed_idx] = 0.
                 errors_es_filtered = pred_labels_cls_es != true_labels_cls_es
                 errors_ed_filtered = pred_labels_cls_ed != true_labels_cls_ed
 
@@ -288,6 +300,39 @@ class ACDC2017TestHandler(object):
                         hd(self.b_pred_labels[cls + self.num_of_classes, :, :, :],
                            self.b_labels[cls + self.num_of_classes, :, :, :],
                            voxelspacing=self.b_new_spacing, connectivity=1)
+
+        return dices, hausdff
+
+    def get_slice_accuracy(self, slice_idx, compute_hd=False):
+        """
+
+            Compute dice coefficients for the complete 3D volume
+            (1) self.b_label contains the ground truth: [num_of_classes, x, y, z]
+            (2) self.b_pred_labels contains predicted softmax scores [2, x, y, z]
+                                                                    (0=ES, 1=ED)
+
+            compute_hd: Boolean indicating whether or not to compute Hausdorff distance
+        """
+        dices = np.zeros(2 * self.num_of_classes)
+        hausdff = np.zeros(2 * self.num_of_classes)
+        for cls in np.arange(self.num_of_classes):
+
+            dices[cls] = dice_coefficient(self.b_labels[cls, :, :, slice_idx], self.b_pred_labels[cls, :, :, slice_idx])
+            dices[cls + self.num_of_classes] = \
+                dice_coefficient(self.b_labels[cls + self.num_of_classes, :, :, slice_idx],
+                                 self.b_pred_labels[cls + self.num_of_classes, :, :, slice_idx])
+            if compute_hd:
+                # only compute distance if both contours are actually in images
+                if 0 != np.count_nonzero(self.b_pred_labels[cls, :, :, slice_idx]) and \
+                        0 != np.count_nonzero(self.b_labels[cls, :, :, slice_idx]):
+                    hausdff[cls] = hd(self.b_pred_labels[cls, :, :, slice_idx], self.b_labels[cls, :, :, slice_idx],
+                                      voxelspacing=ACDC2017TestHandler.new_voxel_spacing, connectivity=1)
+                if 0 != np.count_nonzero(self.b_pred_labels[cls + self.num_of_classes, :, :, slice_idx]) and \
+                        0 != np.count_nonzero(self.b_labels[cls + self.num_of_classes, :, :, slice_idx]):
+                    hausdff[cls + self.num_of_classes] = \
+                        hd(self.b_pred_labels[cls + self.num_of_classes, :, :, slice_idx],
+                           self.b_labels[cls + self.num_of_classes, :, :, slice_idx],
+                           voxelspacing=ACDC2017TestHandler.new_voxel_spacing, connectivity=1)
 
         return dices, hausdff
 

@@ -1,6 +1,15 @@
 import torch.nn as nn
 from torch.nn import init
+
 import torch
+
+
+class CReLU(nn.Module):
+    def __init__(self):
+        super(CReLU, self).__init__()
+
+    def forward(self, x):
+        return torch.cat((F.relu(x), F.relu(-x)), x.dim()-1)
 
 
 class ConcatenateCNNBlock(nn.Module):
@@ -83,8 +92,13 @@ class Basic2DCNNBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=(1, 1), apply_batch_norm=False,
                  prob_dropout=0., apply_non_linearity=None, verbose=False):
         super(Basic2DCNNBlock, self).__init__()
+        if apply_non_linearity.__name__ == "CReLU":
+            conv_out_channels = int(out_channels / 2)
+        else:
+            conv_out_channels = out_channels
+
         self.verbose = verbose
-        self.conv_layer = nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=padding,
+        self.conv_layer = nn.Conv2d(in_channels, conv_out_channels, kernel_size, stride=stride, padding=padding,
                                     dilation=dilation, bias=True)
         self.apply_non_linearity = apply_non_linearity
         self.apply_batch_norm = apply_batch_norm
@@ -115,12 +129,13 @@ class Basic2DCNNBlock(nn.Module):
             self.conv_layer.bias.data.fill_(0)
 
     def forward(self, x):
-        if self.apply_dropout:
-            x = self.layer_drop(x)
+
         out = self.conv_layer(x)
         if self.apply_non_linearity is not None:
             out = self.non_linearity(out)
         if self.apply_batch_norm:
             out = self.bn(out)
+        if self.apply_dropout:
+            out = self.layer_drop(out)
 
         return out
