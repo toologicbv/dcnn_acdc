@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 from common.common import datestr
 import copy
+from scipy.stats import wilcoxon, ttest_ind, mannwhitneyu
 
 
 def set_error_pixels(img_err, pred_labels, true_labels, cls_offset, stddev=None, std_threshold=0.):
@@ -35,15 +36,14 @@ def set_error_pixels(img_err, pred_labels, true_labels, cls_offset, stddev=None,
                 print("WARNING - RV-errors using {:.2f} before/after {} / {}".format(std_threshold,
                                                                                      np.count_nonzero(error_idx),
                                                                                      np.count_nonzero(errors_after)))
-                # error_idx = np.copy(errors_after)
-                # pred_labels = np.copy(pred_cls_labels_filtered)
-        if cls != 0:
-            if errors_after is not None:
+        if errors_after is not None:
+            if cls != 0:
                 img_err[errors_after, :] = rgb_error_codes[cls]
-                num_of_errors[cls] = np.count_nonzero(errors_after)
-            else:
+            num_of_errors[cls] = np.count_nonzero(errors_after)
+        else:
+            if cls != 0:
                 img_err[error_idx, :] = rgb_error_codes[cls]
-                num_of_errors[cls] = np.count_nonzero(error_idx)
+            num_of_errors[cls] = np.count_nonzero(error_idx)
     return img_err, num_of_errors
 
 
@@ -65,6 +65,29 @@ def get_accuracies_all(pred_labels, true_labels):
     fp = np.count_nonzero(pred_labels & ~true_labels)
     tn = np.count_nonzero(~pred_labels & ~true_labels)
     return total, tp, fn, fp, tn
+
+
+def compute_p_values(err_group, corr_group, phase, stats, uncertainty_type="std"):
+
+    u_type = uncertainty_type
+    if err_group.shape[0] > 0 and corr_group.shape[0] > 0:
+        _, p_value_ttest = ttest_ind(err_group, corr_group)
+        _, p_value_mannwhitneyu = mannwhitneyu(err_group, corr_group)
+    else:
+        p_value_ttest = np.NaN
+        p_value_mannwhitneyu = np.NaN
+
+    if phase == 0:
+        dict_key = "es_pvalue_ttest_" + u_type
+        stats[dict_key] = p_value_ttest
+        dict_key = "es_pvalue_mwhitu_" + u_type
+        stats[dict_key] = p_value_mannwhitneyu
+        # can't compute Wilcoxon p-value because the two groups have very different sample sizes
+        # _, stats["es_pvalue_wilc_" + u_type] = wilcoxon(err_group, corr_group)
+    else:
+        stats["ed_pvalue_ttest_" + u_type] = p_value_ttest
+        stats["ed_pvalue_mwhitu_" + u_type] = p_value_mannwhitneyu
+        # _, stats["ed_pvalue_wilc_" + u_type] = wilcoxon(err_group, corr_group)
 
 
 def get_mean_pred_per_slice(img_slice, img_probs, img_stds, img_balds, labels, pred_labels, half_classes, stats):
@@ -130,6 +153,14 @@ def get_mean_pred_per_slice(img_slice, img_probs, img_stds, img_balds, labels, p
             stats["ed_mean_cor_std"] = pos_std
             stats["ed_err_bald"] = err_bald
             stats["ed_cor_bald"] = pos_bald
+
+        # compute hypothesis test p-values for group (1) correct classified versus (2) incorrect classified
+        # using the uncertainty measures for both groups (TO DO: group (1) DOES NOT INCORPORATE "true negatives"
+        # is that CORRECT?
+        # (1) for stddev
+        compute_p_values(err_std, pos_std, phase, stats, uncertainty_type="std")
+        # (2) BALS values
+        compute_p_values(err_bald, pos_bald, phase, stats, uncertainty_type="bald")
 
 
 def get_img_stats_per_slice_class(img_slice_probs, img_slice, phase, half_classes,
@@ -332,6 +363,10 @@ class TestResults(object):
                              "es_cor_bald": np.zeros(half_classes),
                              "ed_err_bald": np.zeros(half_classes),
                              "ed_cor_bald": np.zeros(half_classes),
+                             "es_pvalue_ttest_std": 0, "es_pvalue_mwhitu_std": 0,
+                             "ed_pvalue_ttest_std": 0, "ed_pvalue_mwhitu_std": 0,
+                             "es_pvalue_ttest_bald": 0, "es_pvalue_mwhitu_bald": 0,
+                             "ed_pvalue_ttest_bald": 0, "ed_pvalue_mwhitu_bald": 0,
                              }
 
             # mean per class
@@ -438,24 +473,26 @@ class TestResults(object):
             print("{} correct/error(fp+fn) {} / {}".format(str_phase, p_corr_std.shape, p_err_std.shape))
             ax2 = plt.subplot(num_of_subplots, columns, counter)
             if p_err_std is not None:
+                ax2b = ax2.twinx()
                 if kde:
                     if info_type == "stddev":
+
                         density_err = gaussian_kde(p_err_std)
                         xs_err = np.linspace(0, p_err_std.max(), 200)
                         density_err.covariance_factor = lambda: .25
                         density_err._compute_covariance()
-                        ax2.fill_between(xs_err, density_err(xs_err), label="$\sigma_{pred(fp+fn)}$",
+                        p_err = ax2b.fill_between(xs_err, density_err(xs_err), label="$\sigma_{pred(fp+fn)}$",
                                          color="b", alpha=0.2)
                     else:
                         density_err = gaussian_kde(p_err_prob)
                         xs_err = np.linspace(0, p_err_prob.max(), 200)
                         density_err.covariance_factor = lambda: .25
                         density_err._compute_covariance()
-                        ax2.fill_between(xs_err, density_err(xs_err), label="$p_{pred(fp+fn)}(c|x)$",
+                        p_err = ax2b.fill_between(xs_err, density_err(xs_err), label="$p_{pred(fp+fn)}(c|x)$",
                                          color="b", alpha=0.2)
                 else:
                     xs_err = np.linspace(0, p_err_std.max(), 200)
-                    ax2.hist(p_err_std, bins=xs_err, label=r"$\sigma_{pred(fp+fn)}$", color="b", alpha=0.2)
+                    p_err = ax2b.hist(p_err_std, bins=xs_err, label=r"$\sigma_{pred(fp+fn)}$", color="b", alpha=0.2)
 
             if p_corr_std is not None:
                 if kde:
@@ -464,20 +501,20 @@ class TestResults(object):
                         xs_cor = np.linspace(0, p_corr_std.max(), 200)
                         density_cor.covariance_factor = lambda: .25
                         density_cor._compute_covariance()
-                        ax2.fill_between(xs_cor, density_cor(xs_cor), label=r"$\sigma_{pred(tp)}$",
+                        p_corr = ax2.fill_between(xs_cor, density_cor(xs_cor), label=r"$\sigma_{pred(tp)}$",
                                          color="g", alpha=0.2)
                     else:
                         density_cor = gaussian_kde(p_corr_prob)
                         xs_cor = np.linspace(0, p_corr_prob.max(), 200)
                         density_cor.covariance_factor = lambda: .25
                         density_cor._compute_covariance()
-                        ax2.fill_between(xs_cor, density_cor(xs_cor), label="$p_{pred(tp)}(c|x)$",
+                        p_corr = ax2.fill_between(xs_cor, density_cor(xs_cor), label="$p_{pred(tp)}(c|x)$",
                                          color="g", alpha=0.2)
                 else:
                     counter += 1
                     ax3 = plt.subplot(num_of_subplots, columns, counter)
                     xs_cor = np.linspace(0, p_corr_std.max(), 200)
-                    ax3.hist(p_corr_std, bins=xs_cor, label=r"$\sigma_{pred(tp)}$", color="g", alpha=0.2)
+                    p_corr = ax3.hist(p_corr_std, bins=xs_cor, label=r"$\sigma_{pred(tp)}$", color="g", alpha=0.2)
                     ax3.set_ylabel("density")
                     ax3.set_xlabel("model uncertainty")
                     ax3.legend(loc="best")
@@ -489,7 +526,9 @@ class TestResults(object):
                 ax2.set_title("{}: all classes ({}/{})".format(str_phase, p_corr_std.shape[0],
                                                                p_err_std.shape[0]),
                               **config.title_font_medium)
-                ax2.legend(loc="best", prop={'size': 16})
+                plots = [p_corr, p_err]
+                ax2.legend(plots, [l.get_label() for l in plots], loc="best", prop={'size': 16})
+                # ax2.legend(loc="best")
                 ax2.set_ylabel("density", **config.axis_font)
 
             counter += 1
@@ -733,6 +772,13 @@ class TestResults(object):
                                          do_save=False, fig_name=None, slice_range=None, errors_only=False,
                                          do_show=False, model_name="", use_bald=True):
 
+        if errors_only and use_bald:
+            # need to set BALD to False as well
+            print("WARNING - setting use_bald to False")
+            use_bald = False
+        plt.rcParams['font.family'] = 'serif'
+        plt.rcParams['font.serif'] = 'Ubuntu'
+        plt.rcParams['font.monospace'] = 'Ubuntu Mono'
         column_lbls = ["bg", "RV", "MYO", "LV"]
         image = self.images[image_num]
         image_probs = self.image_probs_categorized[image_num]
@@ -748,6 +794,7 @@ class TestResults(object):
         num_of_classes = label.shape[0]
         half_classes = num_of_classes / 2
         mc_samples = self.mc_pred_probs[image_num].shape[0]
+        max_stdddev = 0.5  # the maximum stddev we're dealing with (used in colorbar) because probs are between [0,1]
 
         image_name = self.image_ids[image_num][:self.image_ids[image_num].find("_")]
         if slice_range is None:
@@ -759,13 +806,17 @@ class TestResults(object):
         if errors_only:
             rows = num_of_slices * 4  # multiply with 4 because two rows ES, two rows ED for each slice
         elif not use_bald:
-            rows = num_of_slices * 8  # multiply with 2 because four rows ES, four rows ED for each slice
+            rows = num_of_slices * 8  # multiply with 8 because four rows ES, four rows ED for each slice
         else:
-            rows = num_of_slices * 12  # multiply with 2 because five rows ES, five rows ED for each slice
-
+            rows = num_of_slices * 14  # multiply with 2 because five rows ES, five rows ED for each slice
+        print("Rows/columns {}/{}".format(rows, columns))
         row = 0
         _ = rows * num_of_slices * columns
-        height = height * num_of_slices
+        if errors_only:
+            height = 15 * num_of_slices
+        else:
+            height = height * num_of_slices
+
         fig = plt.figure(figsize=(width, height))
         if std_threshold > 0.:
             main_title = r"Model {} - Test image: {} - ($\sigma_{{Tr}}={:.2f}$)".format(model_name,
@@ -787,7 +838,7 @@ class TestResults(object):
                 slice_true_labels = label[:, :, :, img_slice]
                 slice_stddev = uncertainty_map[:, :, :, img_slice]
                 # ax1 = plt.subplot(num_of_subplots, columns, counter)
-                counter = 0
+
                 # print("INFO-1 - row/counter {} / {}".format(row, counter))
                 ax1 = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
                 if phase == 0:
@@ -799,6 +850,7 @@ class TestResults(object):
                 # the original image we are segmenting
                 ax1.imshow(img, cmap=cm.gray)
                 plt.axis('off')
+                # -------------------------- Plot segmentation ERRORS per class on original image -----------
                 # we also construct an image with the segmentation errors, placing it next to the original img
                 ax1b = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
                 rgb_img = to_rgb1a(img)
@@ -812,39 +864,86 @@ class TestResults(object):
                           bbox={'facecolor': 'white', 'pad': 18})
                 ax1b.set_title("Prediction errors", **config.title_font_medium)
                 plt.axis('off')
+                # ARE WE SHOWING THE BALD value heatmap?
                 if use_bald:
                     row += 2
-                    # show 2 image for BALD measure (1) BALD per pixel, on the left side
+                    # show image for BALD measure (1) BALD per pixel, on the left side
                     slice_bald = bald_map[phase, :, :, img_slice]
+                    # print("Phase {} row {} - BALD heatmap".format(phase, row))
                     ax4 = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
                     ax4plot = ax4.imshow(slice_bald, cmap=plt.get_cmap('jet'), vmin=bald_min, vmax=bald_max)
                     fig.colorbar(ax4plot, ax=ax4, fraction=0.046, pad=0.04)
                     ax4.set_title("Slice {} {}: BALD-values".format(img_slice+1, str_phase),
                                   **config.title_font_medium)
                     plt.axis('off')
-                    # make histograms
+
+                if not errors_only:
+                    # plot (2) MEAN STD (over classes) next to BALD heatmap, so we can compare the two measures
+                    # get the stddev value for the first 4 or last 4 classes (ES/ED) and average over classes (dim0)
+                    if phase == 0:
+                        mean_slice_stddev = np.mean(slice_stddev[:half_classes], axis=0)
+                    else:
+                        mean_slice_stddev = np.mean(slice_stddev[half_classes:], axis=0)
+                    # print("Phase {} row {} - MEAN STDDEV heatmap".format(phase, row))
+                    ax4a = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
+                    ax4aplot = ax4a.imshow(mean_slice_stddev, cmap=plt.get_cmap('jet'),
+                                           vmin=0., vmax=max_stdddev)
+                    fig.colorbar(ax4aplot, ax=ax4a, fraction=0.046, pad=0.04)
+                    ax4a.set_title("Slice {} {}: MEAN stddev-values".format(img_slice + 1, str_phase),
+                                   **config.title_font_medium)
+                    plt.axis('off')
+
+                if use_bald:
+                    # create histogram
                     if phase == 0:
                         bald_corr = img_slice_probs["es_cor_bald"]
                         bald_err = img_slice_probs["es_err_bald"]
+                        p_value_ttest = img_slice_probs["es_pvalue_ttest_bald"]
+                        p_value_mannwhitu = img_slice_probs["es_pvalue_mwhitu_bald"]
                     else:
                         bald_corr = img_slice_probs["ed_cor_bald"]
                         bald_err = img_slice_probs["ed_err_bald"]
+                        p_value_ttest = img_slice_probs["ed_pvalue_ttest_bald"]
+                        p_value_mannwhitu = img_slice_probs["ed_pvalue_mwhitu_bald"]
+                        print("p-values ttest/Mann-Withney-U {:.2E}/{:.2E} ".format(p_value_ttest, p_value_mannwhitu))
+                    if p_value_ttest >= 0.001 or p_value_mannwhitu >= 0.001:
+
+                        str_p_value = "p={:.3f}/{:.3f}".format(p_value_ttest, p_value_mannwhitu)
+                    else:
+                        str_p_value = None
+
                     xs = np.linspace(0, bald_max, 20)
-                    ax5 = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
+                    ax5 = plt.subplot2grid((rows, columns), (row + 3, 0), rowspan=2, colspan=2)
+                    # print("Phase {} row {} - BALD histogram".format(phase, row + 2))
                     if bald_err is not None:
+
                         ax5.hist(bald_err[bald_err >= std_threshold], bins=xs,
                                  label=r"$bald_{{pred(fp+fn)}}({})$".format(bald_err.shape[0])
-                                 , color="r", alpha=0.2)
-
+                                 , color='C1' , alpha=0.3, histtype='stepfilled')
+                        ax5.legend(loc="best", prop={'size': 14})
+                        ax5.grid(False)
                     if bald_corr is not None:
-                        pass
-                        # ax5.hist(bald_corr[bald_corr >= std_threshold], bins=xs,
-                        #         label=r"$bald_{{pred(tp)}}({})$".format(bald_corr.shape[0]),
-                        #         color="g", alpha=0.2)
+                        ax5b = ax5.twinx()
+                        ax5b.hist(bald_corr[bald_corr >= std_threshold], bins=xs,
+                                 label=r"$bald_{{pred(tp)}}({})$".format(bald_corr.shape[0]),
+                                 color='C2', alpha=0.3, histtype='stepfilled')
+                        ax5b.legend(loc=2, prop={'size': 14})
+                        ax5b.grid(False)
+                    ax5.set_xlabel("BALD value", **config.axis_font)
+                    if str_p_value is not None:
+                        title_suffix = "(correct/incorrect " + str_p_value + ")"
+                    else:
+                        title_suffix = "(correct/incorrect)"
+                    ax5.set_title("Slice {} {}: Distribution of BALD values ".format(img_slice + 1, str_phase)
+                                  + title_suffix, ** config.title_font_medium)
+
                 # In case we're only showing the error segmentation map we skip the next part (histgrams and
                 # stddev uncertainty maps per class
                 if not errors_only:
                     row += 2
+                    row_offset = 1
+                    col_offset = 0
+                    counter = 0
                     for cls in np.arange(half_classes):
                         if phase == 0:
                             p_err_prob = np.array(img_slice_probs["es_err_p"][cls])
@@ -863,27 +962,31 @@ class TestResults(object):
                         cmap = plt.get_cmap('jet')
                         std_rgba_img = cmap(std_map_cls)
                         std_rgb_img = np.delete(std_rgba_img, 3, 2)
-                        ax3plot = ax3.imshow(std_rgb_img, vmin=0., vmax=0.6)
+                        ax3plot = ax3.imshow(std_rgb_img, vmin=0., vmax=max_stdddev)
                         if cls == half_classes - 1:
                             fig.colorbar(ax3plot, ax=ax3, fraction=0.046, pad=0.04)
                         ax3.set_title("{} stddev: {} ".format(str_phase, column_lbls[cls]),
                                       **config.title_font_medium)
                         plt.axis("off")
                         # finally in the next row we plot the uncertainty densities per class
-                        ax2 = plt.subplot2grid((rows, columns), (row + 1, counter), colspan=1)
+                        # print("cls {} col_offset {}".format(cls, col_offset))
+                        ax2 = plt.subplot2grid((rows, columns), (row + row_offset, 2 + col_offset), colspan=1)
+                        col_offset += 1
                         std_max = max(p_err_std.max() if p_err_std.shape[0] > 0 else 0,
                                       p_corr_std.max() if p_corr_std.shape[0] > 0 else 0.)
 
                         xs = np.linspace(0, std_max, 20)
                         if p_err_std is not None:
-                            ax2.hist(p_err_std[p_err_std >= std_threshold], bins=xs,
+                            ax2b = ax2.twinx()
+                            ax2b.hist(p_err_std[p_err_std >= std_threshold], bins=xs,
                                      label=r"$\sigma_{{pred(fp+fn)}}({})$".format(cls_errors[cls])
-                                     , color="r", alpha=0.2)
+                                     ,color="C1", alpha=0.3)
+                            ax2b.legend(loc=2, prop={'size': 14})
 
                         if p_corr_std is not None:
                             ax2.hist(p_corr_std[p_corr_std >= std_threshold], bins=xs,
                                      label=r"$\sigma_{{pred(tp)}}({})$".format(p_corr_std.shape[0]),
-                                     color="g", alpha=0.2)
+                                     color="C2", alpha=0.3)
 
                         if info_type == "stddev":
                             ax2.set_xlabel("model uncertainty", **config.axis_font)
@@ -891,11 +994,16 @@ class TestResults(object):
                             ax2.set_xlabel(r"softmax $p(c|x)$", **config.axis_font)
                         ax2.set_title("{} slice-{}: {}".format(str_phase, img_slice+1, column_lbls[cls]),
                                       **config.title_font_medium)
-                        ax2.legend(loc="best", prop={'size': 16})
+                        ax2.legend(loc="best", prop={'size': 14})
                         # ax2.set_ylabel("density", **config.axis_font)
-
+                        if cls == 1:
+                            row_offset += 1
+                            col_offset = 0
                         counter += 1
-                row += 2
+                if errors_only:
+                    row += 2
+                else:
+                    row += 3
         # fig.tight_layout()
         fig.tight_layout(rect=[0, 0.03, 1, 0.97])
         if do_save:
@@ -906,7 +1014,7 @@ class TestResults(object):
                     fig_name += tr_string
                 if errors_only:
                     fig_name = fig_name + "_" + str(errors_only)
-            fig_name = os.path.join(self.fig_output_dir, fig_name + ".png")
+            fig_name = os.path.join(self.fig_output_dir, fig_name + ".pdf")
 
             plt.savefig(fig_name, bbox_inches='tight')
             print("INFO - Successfully saved fig %s" % fig_name)
