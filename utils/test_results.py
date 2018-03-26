@@ -159,7 +159,7 @@ def get_mean_pred_per_slice(img_slice, img_probs, img_stds, img_balds, labels, p
         # is that CORRECT?
         # (1) for stddev
         compute_p_values(err_std, pos_std, phase, stats, uncertainty_type="std")
-        # (2) BALS values
+        # (2) BALD values
         compute_p_values(err_bald, pos_bald, phase, stats, uncertainty_type="bald")
 
 
@@ -237,6 +237,7 @@ class TestResults(object):
         self.pred_labels = []
         self.mc_pred_probs = []
         self.uncertainty_maps = []
+        self.seg_errors = []
         self.bald_maps = []
         self.test_accuracy = []
         self.test_hd = []
@@ -256,7 +257,7 @@ class TestResults(object):
                                             os.path.join(exper.output_dir, exper.config.stats_path))
 
     def add_results(self, batch_image, batch_labels, image_id, pred_labels, b_predictions, uncertainty_map,
-                    test_accuracy, test_hd, store_all=False, bald_maps=None):
+                    test_accuracy, test_hd, seg_errors, store_all=False, bald_maps=None):
         """
 
         :param batch_image: [2, width, height, slices]
@@ -280,6 +281,7 @@ class TestResults(object):
         self.image_ids.append(image_id)
         self.test_accuracy.append(test_accuracy)
         self.test_hd.append(test_hd)
+        self.seg_errors.append(seg_errors)
         self.num_of_samples.append(b_predictions.shape[0])
 
     def compute_mean_stats(self):
@@ -430,7 +432,7 @@ class TestResults(object):
 
         self.image_probs_categorized.insert(insert_idx, probs_per_img_slice)
 
-    def visualize_uncertainty_stats(self, image_num=0, width=16, height=10, info_type="stddev",
+    def visualize_uncertainty_stats(self, image_num=0, width=16, height=10, info_type="uncertainty",
                                     use_class_stats=False, do_save=False, fig_name=None,
                                     model_name=""):
 
@@ -475,7 +477,7 @@ class TestResults(object):
             if p_err_std is not None:
                 ax2b = ax2.twinx()
                 if kde:
-                    if info_type == "stddev":
+                    if info_type == "uncertainty":
 
                         density_err = gaussian_kde(p_err_std)
                         xs_err = np.linspace(0, p_err_std.max(), 200)
@@ -496,7 +498,7 @@ class TestResults(object):
 
             if p_corr_std is not None:
                 if kde:
-                    if info_type == "stddev":
+                    if info_type == "uncertainty":
                         density_cor = gaussian_kde(p_corr_std)
                         xs_cor = np.linspace(0, p_corr_std.max(), 200)
                         density_cor.covariance_factor = lambda: .25
@@ -519,7 +521,7 @@ class TestResults(object):
                     ax3.set_xlabel("model uncertainty")
                     ax3.legend(loc="best")
 
-                if info_type == "stddev":
+                if info_type == "uncertainty":
                     ax2.set_xlabel("model uncertainty", **config.axis_font)
                 else:
                     ax2.set_xlabel(r"softmax $p(c|x)$", **config.axis_font)
@@ -644,7 +646,7 @@ class TestResults(object):
         plt.show()
 
     def visualize_prediction_uncertainty(self, image_num=0, width=12, height=12, slice_range=None, do_save=False,
-                                         fig_name=None, std_threshold=None):
+                                         fig_name=None, std_threshold=None, verbose=False):
 
         if std_threshold is None:
             use_uncertainty = False
@@ -661,8 +663,10 @@ class TestResults(object):
         num_of_slices = labels.shape[3]
 
         if slice_range is None:
-            slice_range = np.arange(0, num_of_slices // 2)
+            slice_range = np.arange(num_of_slices)
+            num_of_slices = len(slice_range)
 
+        height = height * num_of_slices
         fig = plt.figure(figsize=(width, height))
         counter = 1
         columns = half_classes + 1  # currently only original image and uncertainty map
@@ -734,7 +738,7 @@ class TestResults(object):
                             plt.imshow(errors_after, cmap=cm.gray)
                         ax3.set_title("{} errors: {}".format(column_lbls[cls], np.count_nonzero(errors_after)),
                                       **config.title_font_medium)
-                        if cls != 0:
+                        if cls != 0 and verbose:
                             print("Slice {} - {} - Class {} before/after: errors {} {} || dice {:.2f} / {:.2f} || "
                                   "hd  {:.2f} / {:.2f}".format(idx + 1, phase_str, cls, np.count_nonzero(errors),
                                                                np.count_nonzero(errors_after), dice_before, dice_after,
@@ -743,7 +747,7 @@ class TestResults(object):
                         plt.imshow(errors, cmap=cm.gray)
                         ax3.set_title("{} errors: {}".format(column_lbls[cls], np.count_nonzero(errors)),
                                       **config.title_font_medium)
-                        if cls != 0:
+                        if cls != 0 and verbose:
                             print("Slice {} - {} - Class {}: errors {} || dice {:.2f} || "
                                   "hd  {:.2f}".format(idx + 1, phase_str, cls, np.count_nonzero(errors),
                                                       dice_before, hausdorff_before))
@@ -763,14 +767,14 @@ class TestResults(object):
             file_suffix = "_".join(str_slice_range)
             if fig_name is None:
                 fig_name = "test_img{}".format(image_num) + "_vis_pred_uncertainty_" + file_suffix
-            fig_name = os.path.join(self.fig_output_dir, fig_name + ".png")
+            fig_name = os.path.join(self.fig_output_dir, fig_name + ".pdf")
 
             plt.savefig(fig_name, bbox_inches='tight')
             print("INFO - Successfully saved fig %s" % fig_name)
 
-    def visualize_uncertainty_histograms(self, image_num=0, width=16, height=10, info_type="stddev", std_threshold=0.,
-                                         do_save=False, fig_name=None, slice_range=None, errors_only=False,
-                                         do_show=False, model_name="", use_bald=True):
+    def visualize_uncertainty_histograms(self, image_num=0, width=16, height=10, info_type="uncertainty",
+                                         std_threshold=0., do_show=False, model_name="", use_bald=True,
+                                         do_save=False, fig_name=None, slice_range=None, errors_only=False):
 
         if errors_only and use_bald:
             # need to set BALD to False as well
@@ -988,7 +992,7 @@ class TestResults(object):
                                      label=r"$\sigma_{{pred(tp)}}({})$".format(p_corr_std.shape[0]),
                                      color="C2", alpha=0.3)
 
-                        if info_type == "stddev":
+                        if info_type == "uncertainty":
                             ax2.set_xlabel("model uncertainty", **config.axis_font)
                         else:
                             ax2.set_xlabel(r"softmax $p(c|x)$", **config.axis_font)

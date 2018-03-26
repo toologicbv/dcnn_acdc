@@ -14,6 +14,35 @@ from utils.batch_handlers import TwoDimBatchHandler
 import models.dilated_cnn
 from utils.test_results import TestResults
 from common.acquisition_functions import bald_function
+from scipy.ndimage.measurements import label, mean, median
+from scipy.ndimage.morphology import generate_binary_structure
+
+
+def compute_img_uncertainty_measure(lbl_uncertainty, u_threshold=0., connectivity=2, eps=0.01):
+
+    # pred_lbl_bool = np.atleast_1d(pred_labels.astype(np.bool))
+    pred_uncertainty_bool = np.zeros(lbl_uncertainty.shape).astype(np.bool)
+    # index maps for uncertain pixels
+    idx_uncertain = lbl_uncertainty > eps
+    idx_uncertain_above_tre = lbl_uncertainty > u_threshold
+    pred_uncertainty_bool[idx_uncertain_above_tre] = True
+
+    # binary structure
+    footprint1 = generate_binary_structure(pred_uncertainty_bool.ndim, connectivity)
+    # footprint2 = generate_binary_structure(pred_uncertainty_bool.ndim, 2)
+    # label distinct binary objects
+    labelmap1, n_obj_result1 = label(pred_uncertainty_bool, footprint1)
+    # labelmap2, n_obj_result2 = label(pred_uncertainty_bool, footprint2)
+    # print("\t Number of connected regions l1/l2 {} / {}".format(n_obj_result1, n_obj_result2))
+    total_uncertainty = np.sum(lbl_uncertainty)
+
+    t_num_pixel_uncertain = np.count_nonzero(lbl_uncertainty[idx_uncertain])
+    t_num_pixel_uncertain_above_tre = np.count_nonzero(lbl_uncertainty[idx_uncertain_above_tre])
+
+    lblmap_idx = np.unique(labelmap1)
+    region_mean_uncertainty = mean(lbl_uncertainty, labels=labelmap1, index=lblmap_idx)
+
+    return total_uncertainty, t_num_pixel_uncertain, t_num_pixel_uncertain_above_tre, region_mean_uncertainty
 
 
 class ExperimentHandler(object):
@@ -141,7 +170,8 @@ class ExperimentHandler(object):
         del val_batch
 
     def test(self, model, test_set, image_num=0, mc_samples=1, sample_weights=False, compute_hd=False,
-             use_uncertainty=False, std_threshold=None, use_seed=False, verbose=False, store_details=False):
+             use_uncertainty=False, std_threshold=None, use_seed=False, verbose=False, store_details=False,
+             do_filter=True):
         """
 
         :param model:
@@ -154,6 +184,7 @@ class ExperimentHandler(object):
         :param std_threshold:
         :param use_seed:
         :param verbose:
+        :param do_filter: use post processing 6-connected components on predicted labels (per class)
         :param store_details: if TRUE TestResult object will hold all images/labels/predicted labels, mc-stats etc.
         which basically results in a very large object. Should not be used for evaluation of many test images,
         most certainly only for 1-3 images in order to generate some figures.
@@ -161,7 +192,7 @@ class ExperimentHandler(object):
         """
 
         if use_seed:
-            setSeed(self.exper.run_args.cuda)
+            setSeed(1234, self.exper.run_args.cuda)
         if self.test_results is None:
             self.test_results = TestResults(self.exper)
         # correct the divisor for calculation of stdev when low number of samples (biased), used in np.std
@@ -171,7 +202,8 @@ class ExperimentHandler(object):
             ddof = 0
         # b_predictions has shape [mc_samples, classes, width, height, slices]
         b_predictions = np.zeros(tuple([mc_samples] + list(test_set.labels[image_num].shape)))
-        # print("b_predictions ", b_predictions.shape)
+        num_of_slices = test_set.images[image_num].shape[3]
+        uncertainty_stats = np.zeros((2, num_of_slices, 4))  # [2(es/ed), #slices, 4-measures]
         slice_idx = 0
         for batch_image, batch_labels in test_set.batch_generator(image_num):
 
@@ -201,25 +233,47 @@ class ExperimentHandler(object):
             means_test_loss = np.mean(b_test_losses)
             if use_uncertainty:
                 test_set.set_pred_labels(mean_test_pred, pred_stddev=std_test_pred, std_threshold=std_threshold,
-                                         verbose=verbose)
+                                         verbose=verbose, do_filter=do_filter)
             else:
-                test_set.set_pred_labels(mean_test_pred)
+                test_set.set_pred_labels(mean_test_pred, verbose=verbose, do_filter=False)
 
             test_set.set_uncertainty_map(std_test_pred)
             test_set.set_bald_map(bald_values)
-            if False:
+            if sample_weights:
+                es_total_uncert, es_num_of_pixel_uncert, es_num_pixel_uncert_above_tre, es_region_mean_uncert = \
+                    compute_img_uncertainty_measure(bald_values[0], u_threshold=std_threshold,
+                                                    connectivity=2, eps=0.01)
+                ed_total_uncert, ed_num_of_pixel_uncert, ed_num_pixel_uncert_above_tre, ed_region_mean_uncert = \
+                    compute_img_uncertainty_measure(bald_values[1], u_threshold=std_threshold,
+                                                    connectivity=2, eps=0.01)
                 slice_acc, slice_hd = test_set.get_slice_accuracy(slice_idx=slice_idx, compute_hd=compute_hd)
-                print("Test img/slice/sample {}/{}/{} || HD(RV/Myo/LV): "
-                      "ES {:.2f}/{:.2f}/{:.2f} "
-                      "ED {:.2f}/{:.2f}/{:.2f}".format(image_num, slice_idx, s+1, slice_hd[0],
-                                                       slice_hd[1], slice_hd[2],
-                                                       slice_hd[3], slice_hd[4], slice_hd[5]))
+                es_seg_errors = np.sum(test_set.b_seg_errors[slice_idx, :4])
+                ed_seg_errors = np.sum(test_set.b_seg_errors[slice_idx, 4:])
+                uncertainty_stats[0, slice_idx] =
+                uncertainty_stats[1, slice_idx] =
+                if verbose:
+                    print("Test img/slice {}/{}".format(image_num, slice_idx))
+                    print("ES: Total BALD/seg-errors/#pixel/#pixel(tre) \tDice (RV/Myo/LV)\tHD (RV/Myo/LV)")
+                    print("  \t{:.2f}/{}/{}/{} \t\t\t{:.2f}/{:.2f}/{:.2f}"
+                          "\t\t{:.2f}/{:.2f}/{:.2f}".format(es_total_uncert, es_seg_errors, es_num_of_pixel_uncert,
+                                                                       es_num_pixel_uncert_above_tre,
+                                                                       slice_acc[1], slice_acc[2], slice_acc[3],
+                                                                       slice_hd[1], slice_hd[2], slice_hd[3]))
+                    # print(np.array_str(np.array(es_region_mean_uncert), precision=3))
+                    print("ED: Total BALD/seg-errors/#pixel/#pixel(tre)\tDice (RV/Myo/LV)\tHD (RV/Myo/LV)")
+                    print("  \t{:.2f}/{}/{}/{} \t\t\t{:.2f}/{:.2f}/{:.2f}"
+                          "\t\t{:.2f}/{:.2f}/{:.2f}".format(ed_total_uncert, ed_seg_errors, ed_num_of_pixel_uncert,
+                                                          ed_num_pixel_uncert_above_tre,
+                                                          slice_acc[5], slice_acc[6], slice_acc[7],
+                                                          slice_hd[5], slice_hd[6], slice_hd[7]))
+                    # print(np.array_str(np.array(ed_region_mean_uncert), precision=3))
+                    print("------------------------------------------------------------------------")
             slice_idx += 1
 
-        test_accuracy, test_hd = test_set.get_accuracy(compute_hd=compute_hd)
+        test_accuracy, test_hd = test_set.get_accuracy(compute_hd=compute_hd, do_filter=do_filter)
         self.test_results.add_results(test_set.b_image, test_set.b_labels, test_set.b_image_id,
                                       test_set.b_pred_labels, b_predictions, test_set.b_uncertainty_map,
-                                      test_accuracy, test_hd, store_all=store_details,
+                                      test_accuracy, test_hd, test_set.b_seg_errors, store_all=store_details,
                                       bald_maps=test_set.b_bald_map)
         print("Image {} - Test accuracy: test loss {:.3f}\t "
               "dice(RV/Myo/LV): ES {:.2f}/{:.2f}/{:.2f} --- "

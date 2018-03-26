@@ -67,11 +67,12 @@ def logsumexp(a):
     return np.log(np.sum(np.exp(a - a_max), axis=0)) + a_max
 
 
-def setSeed(use_cuda=False):
-    SEED = 4325
-    torch.manual_seed(SEED)
-    torch.cuda.manual_seed(SEED)
+def setSeed(seed=None, use_cuda=False):
+    if seed is None:
+        seed = 4325
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
     if use_cuda:
         torch.backends.cudnn.enabled = True
 
-    np.random.seed(SEED)
+    np.random.seed(seed)

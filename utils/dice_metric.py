@@ -31,7 +31,7 @@ def soft_dice_score(prob_c, true_label_c):
     return nominator/denominator
 
 
-def dice_coefficient(pred_labels, true_labels):
+def dice_coefficient(pred_labels, true_labels, cls=None):
     """
     Compute the Dice aka F1-score
 
@@ -51,11 +51,15 @@ def dice_coefficient(pred_labels, true_labels):
 
     # if there are no true labels AND we predicated no labels then we reach dice of 1.
     if np.sum(np_pred_labels == 1) == 0 and np.sum(np_true_labels == 1) == 0:
+        if cls is not None:
+            print("!!! WARNING !!! - Class {} no true positive and predicted positives) - dice=1".format(cls))
         return 1.
     elif np.sum(np_true_labels == 1) == 0:
-        # print("WARNING - no true positive - invert labels")
-        np_true_labels = (~np_true_labels.astype(np.bool)).astype(np.int)
-        np_pred_labels = (~np_pred_labels.astype(np.bool)).astype(np.int)
+        if cls is not None:
+            print("!!! WARNING !!! - Class {} no true positive) - dice=0".format(cls))
+        return 0.
+        # np_true_labels = (~np_true_labels.astype(np.bool)).astype(np.int)
+        # np_pred_labels = (~np_pred_labels.astype(np.bool)).astype(np.int)
 
     intersection = np.sum((np_pred_labels == 1) * (np_true_labels == 1))
     denominator = np.sum(np_pred_labels == 1) + np.sum(np_true_labels == 1)

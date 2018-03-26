@@ -9,6 +9,7 @@ from utils.dice_metric import dice_coefficient
 from utils.img_sampling import resample_image_scipy
 from torch.autograd import Variable
 from utils.medpy_metrics import hd
+from utils.post_processing import filter_connected_components
 import torch
 if "/home/jogi/.local/lib/python2.7/site-packages" in sys.path:
     sys.path.remove("/home/jogi/.local/lib/python2.7/site-packages")
@@ -52,6 +53,7 @@ class ACDC2017TestHandler(object):
         self.b_labels = None
         self.b_new_spacing = None
         self.b_orig_spacing = None
+        self.b_seg_errors = None
         self.debug = debug
         self._set_pathes()
 
@@ -180,6 +182,8 @@ class ACDC2017TestHandler(object):
         self.b_orig_spacing = self.spacings[image_num]
         self.b_new_spacing = tuple((ACDC2017TestHandler.new_voxel_spacing, ACDC2017TestHandler.new_voxel_spacing,
                                     self.b_orig_spacing[2]))
+        # store the segmentation errors. shape [#slices, #classes]
+        self.b_seg_errors = np.zeros((self.b_image.shape[3], self.num_of_classes * 2)).astype(np.int)
 
         if use_labels:
             self.b_labels = self.labels[image_num]
@@ -206,7 +210,7 @@ class ACDC2017TestHandler(object):
             self.slice_counter += 1
             yield b_image, b_label
 
-    def set_pred_labels(self, pred_probs, pred_stddev=None, std_threshold=0.2, verbose=False):
+    def set_pred_labels(self, pred_probs, pred_stddev=None, std_threshold=0., verbose=False, do_filter=True):
         """
 
         :param pred_probs: [1, num_of_classes(8), width, height]
@@ -224,22 +228,28 @@ class ACDC2017TestHandler(object):
         pred_labels_es = np.argmax(pred_probs[0, 0:self.num_of_classes, :, :], axis=0)
         pred_labels_ed = np.argmax(pred_probs[0, self.num_of_classes:self.num_of_classes+self.num_of_classes,
                                    :, :], axis=0)
+
         for cls in np.arange(self.num_of_classes):
             pred_labels_cls_es = (pred_labels_es == cls).astype(np.int)
             pred_labels_cls_ed = (pred_labels_ed == cls).astype(np.int)
+            if do_filter:
+                # use 6-connected components to filter out blobs that are not relevant for segmentation
+                pred_labels_cls_es = filter_connected_components(pred_labels_cls_es, cls, verbose=verbose)
+                pred_labels_cls_ed = filter_connected_components(pred_labels_cls_ed, cls, verbose=verbose)
             true_labels_cls_es = self.b_labels[cls, :, :, self.slice_counter]
             true_labels_cls_ed = self.b_labels[cls + self.num_of_classes, :, :, self.slice_counter]
             dice_es_before = dice_coefficient(true_labels_cls_es, pred_labels_cls_es)
             dice_ed_before = dice_coefficient(true_labels_cls_ed, pred_labels_cls_ed)
-            if pred_stddev is not None:
+            errors_es = pred_labels_cls_es != true_labels_cls_es
+            errors_ed = pred_labels_cls_ed != true_labels_cls_ed
+            if pred_stddev is not None and std_threshold > 0.:
                 pixel_std_es = np.copy(pred_stddev[cls])
                 pixel_std_ed = np.copy(pred_stddev[cls + self.num_of_classes])
-                errors_es = pred_labels_cls_es != self.b_labels[cls, :, :, self.slice_counter]
-                errors_ed = pred_labels_cls_ed != self.b_labels[cls + self.num_of_classes, :, :, self.slice_counter]
-                # pixel_std_es[~errors_es] = 0.
-                # pixel_std_ed[~errors_ed] = 0.
+                # IMPORTANT!!! - THE THRESHOLD MUST BE EQUAL TO 0, ONLY IF WE WANT TO USE THE THRESHOLD TO CORRECT
+                # LABELS WITH HIGH UNCERTAINTY, THE THRESOLD SHOULD BE ABOVE 0.
                 error_es_idx = pixel_std_es > std_threshold
                 error_ed_idx = pixel_std_ed > std_threshold
+
                 # little subtlety, if bg class, the most common class label is 1, for all other classes it's 0
                 if cls == 0:
                     pred_labels_cls_es[error_es_idx] = 1
@@ -249,7 +259,8 @@ class ACDC2017TestHandler(object):
                     pred_labels_cls_ed[error_ed_idx] = 0.
                 errors_es_filtered = pred_labels_cls_es != true_labels_cls_es
                 errors_ed_filtered = pred_labels_cls_ed != true_labels_cls_ed
-
+                self.b_seg_errors[self.slice_counter, cls] = np.count_nonzero(errors_es_filtered)
+                self.b_seg_errors[self.slice_counter, cls + self.num_of_classes] = np.count_nonzero(errors_ed_filtered)
                 dice_es_after = dice_coefficient(true_labels_cls_es, pred_labels_cls_es)
                 dice_ed_after = dice_coefficient(true_labels_cls_ed, pred_labels_cls_ed)
                 if cls != 0 and verbose:
@@ -261,6 +272,11 @@ class ACDC2017TestHandler(object):
                                                                        np.count_nonzero(errors_ed),
                                                                        np.count_nonzero(errors_ed_filtered),
                                                                        dice_ed_before, dice_ed_after))
+            else:
+                # not filtering high uncertainty pixels
+                # store # of segmentation errors that we made per class and slice
+                self.b_seg_errors[self.slice_counter, cls] = np.count_nonzero(errors_es)
+                self.b_seg_errors[self.slice_counter, cls + self.num_of_classes] = np.count_nonzero(errors_ed)
 
             self.b_pred_labels[cls, :, :, self.slice_counter] = pred_labels_cls_es
             self.b_pred_labels[cls + self.num_of_classes, :, :, self.slice_counter] = pred_labels_cls_ed
@@ -285,7 +301,7 @@ class ACDC2017TestHandler(object):
 
         self.b_bald_map[:, :, :, self.slice_counter] = slice_bald
 
-    def get_accuracy(self, compute_hd=False):
+    def get_accuracy(self, compute_hd=False, do_filter=True):
         """
 
             Compute dice coefficients for the complete 3D volume
@@ -298,6 +314,12 @@ class ACDC2017TestHandler(object):
         dices = np.zeros(2 * self.num_of_classes)
         hausdff = np.zeros(2 * self.num_of_classes)
         for cls in np.arange(self.num_of_classes):
+            if do_filter:
+                # use 6-connected components to filter out blobs that are not relevant for segmentation
+                self.b_pred_labels[cls] = filter_connected_components(self.b_pred_labels[cls], cls, verbose=False)
+                self.b_pred_labels[cls + self.num_of_classes] = \
+                    filter_connected_components(self.b_pred_labels[cls + self.num_of_classes], cls, verbose=False)
+
             dices[cls] = dice_coefficient(self.b_labels[cls, :, :, :], self.b_pred_labels[cls, :, :, :])
             dices[cls + self.num_of_classes] = dice_coefficient(self.b_labels[cls + self.num_of_classes, :, :, :],
                                                                 self.b_pred_labels[cls + self.num_of_classes, :, :, :])
@@ -307,12 +329,16 @@ class ACDC2017TestHandler(object):
                         0 != np.count_nonzero(self.b_labels[cls, :, :, :]):
                     hausdff[cls] = hd(self.b_pred_labels[cls, :, :, :], self.b_labels[cls, :, :, :],
                                       voxelspacing=self.b_new_spacing, connectivity=1)
+                else:
+                    hausdff[cls] = 0.
                 if 0 != np.count_nonzero(self.b_pred_labels[cls + self.num_of_classes, :, :, :]) and \
                         0 != np.count_nonzero(self.b_labels[cls + self.num_of_classes, :, :, :]):
                     hausdff[cls + self.num_of_classes] = \
                         hd(self.b_pred_labels[cls + self.num_of_classes, :, :, :],
                            self.b_labels[cls + self.num_of_classes, :, :, :],
                            voxelspacing=self.b_new_spacing, connectivity=1)
+                else:
+                    hausdff[cls + self.num_of_classes] = 0.
 
         return dices, hausdff
 
@@ -326,11 +352,13 @@ class ACDC2017TestHandler(object):
 
             compute_hd: Boolean indicating whether or not to compute Hausdorff distance
         """
+        # Remember self.num_of_classes is 4 in the AC-DC case and not 8 (4-ES and 4-ED)
         dices = np.zeros(2 * self.num_of_classes)
         hausdff = np.zeros(2 * self.num_of_classes)
         for cls in np.arange(self.num_of_classes):
 
-            dices[cls] = dice_coefficient(self.b_labels[cls, :, :, slice_idx], self.b_pred_labels[cls, :, :, slice_idx])
+            dices[cls] = dice_coefficient(self.b_labels[cls, :, :, slice_idx],
+                                          self.b_pred_labels[cls, :, :, slice_idx])
             dices[cls + self.num_of_classes] = \
                 dice_coefficient(self.b_labels[cls + self.num_of_classes, :, :, slice_idx],
                                  self.b_pred_labels[cls + self.num_of_classes, :, :, slice_idx])
@@ -340,12 +368,16 @@ class ACDC2017TestHandler(object):
                         0 != np.count_nonzero(self.b_labels[cls, :, :, slice_idx]):
                     hausdff[cls] = hd(self.b_pred_labels[cls, :, :, slice_idx], self.b_labels[cls, :, :, slice_idx],
                                       voxelspacing=ACDC2017TestHandler.new_voxel_spacing, connectivity=1)
+                else:
+                    hausdff[cls] = 0
                 if 0 != np.count_nonzero(self.b_pred_labels[cls + self.num_of_classes, :, :, slice_idx]) and \
                         0 != np.count_nonzero(self.b_labels[cls + self.num_of_classes, :, :, slice_idx]):
                     hausdff[cls + self.num_of_classes] = \
                         hd(self.b_pred_labels[cls + self.num_of_classes, :, :, slice_idx],
                            self.b_labels[cls + self.num_of_classes, :, :, slice_idx],
                            voxelspacing=ACDC2017TestHandler.new_voxel_spacing, connectivity=1)
+                else:
+                    hausdff[cls  + self.num_of_classes] = 0
 
         return dices, hausdff
 
