@@ -239,8 +239,11 @@ class TestResults(object):
         self.uncertainty_maps = []
         self.seg_errors = []
         self.bald_maps = []
+        self.uncertainty_stats = []
         self.test_accuracy = []
         self.test_hd = []
+        self.test_accuracy_slices = []
+        self.test_hd_slices = []
         self.dice_results = None
         self.hd_results = None
         self.num_of_samples = []
@@ -257,7 +260,8 @@ class TestResults(object):
                                             os.path.join(exper.output_dir, exper.config.stats_path))
 
     def add_results(self, batch_image, batch_labels, image_id, pred_labels, b_predictions, uncertainty_map,
-                    test_accuracy, test_hd, seg_errors, store_all=False, bald_maps=None):
+                    test_accuracy, test_hd, seg_errors, store_all=False, bald_maps=None, uncertainty_stats=None,
+                    test_hd_slices=None, test_accuracy_slices=None):
         """
 
         :param batch_image: [2, width, height, slices]
@@ -281,7 +285,12 @@ class TestResults(object):
         self.image_ids.append(image_id)
         self.test_accuracy.append(test_accuracy)
         self.test_hd.append(test_hd)
+        if test_hd_slices is not None:
+            self.test_hd_slices.append(test_hd_slices)
+        if test_accuracy_slices is not None:
+            self.test_accuracy_slices.append(test_accuracy_slices)
         self.seg_errors.append(seg_errors)
+        self.uncertainty_stats.append(uncertainty_stats)
         self.num_of_samples.append(b_predictions.shape[0])
 
     def compute_mean_stats(self):
@@ -775,6 +784,22 @@ class TestResults(object):
     def visualize_uncertainty_histograms(self, image_num=0, width=16, height=10, info_type="uncertainty",
                                          std_threshold=0., do_show=False, model_name="", use_bald=True,
                                          do_save=False, fig_name=None, slice_range=None, errors_only=False):
+        """
+
+        :param image_num:
+        :param width:
+        :param height:
+        :param info_type:
+        :param std_threshold:
+        :param do_show:
+        :param model_name:
+        :param use_bald: use BALD as an uncertainty measure and show heat maps & histgrams for this measure per slice
+        :param do_save:
+        :param fig_name:
+        :param slice_range:
+        :param errors_only:
+        :return:
+        """
 
         if errors_only and use_bald:
             # need to set BALD to False as well
@@ -824,8 +849,8 @@ class TestResults(object):
         fig = plt.figure(figsize=(width, height))
         if std_threshold > 0.:
             main_title = r"Model {} - Test image: {} - ($\sigma_{{Tr}}={:.2f}$)".format(model_name,
-                                                                                      image_name,
-                                                                                      std_threshold)
+                                                                                        image_name,
+                                                                                        std_threshold)
         else:
             main_title = "Model {} - Test image: {}".format(model_name, image_name)
         fig.suptitle(main_title, **config.title_font_large)

@@ -51,17 +51,6 @@ def create_exper_label(exper):
 
     return exper_label
 
-
-def uncertainity_estimate(X, model, iters, l2):
-    outputs = np.hstack([model(X[:, np.newaxis]).data.numpy() for i in trange(iters)])
-    y_mean = outputs.mean(axis=1)
-    y_variance = outputs.var(axis=1)
-    tau = l2 * (1. - model.dropout_p) / (2. * N * model.decay)
-    y_variance += (1. / tau)
-    y_std = np.sqrt(y_variance)
-    return y_mean, y_std
-
-
 def logsumexp(a):
     a_max = a.max(axis=0)
     return np.log(np.sum(np.exp(a - a_max), axis=0)) + a_max

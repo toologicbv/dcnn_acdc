@@ -14,35 +14,6 @@ from utils.batch_handlers import TwoDimBatchHandler
 import models.dilated_cnn
 from utils.test_results import TestResults
 from common.acquisition_functions import bald_function
-from scipy.ndimage.measurements import label, mean, median
-from scipy.ndimage.morphology import generate_binary_structure
-
-
-def compute_img_uncertainty_measure(lbl_uncertainty, u_threshold=0., connectivity=2, eps=0.01):
-
-    # pred_lbl_bool = np.atleast_1d(pred_labels.astype(np.bool))
-    pred_uncertainty_bool = np.zeros(lbl_uncertainty.shape).astype(np.bool)
-    # index maps for uncertain pixels
-    idx_uncertain = lbl_uncertainty > eps
-    idx_uncertain_above_tre = lbl_uncertainty > u_threshold
-    pred_uncertainty_bool[idx_uncertain_above_tre] = True
-
-    # binary structure
-    footprint1 = generate_binary_structure(pred_uncertainty_bool.ndim, connectivity)
-    # footprint2 = generate_binary_structure(pred_uncertainty_bool.ndim, 2)
-    # label distinct binary objects
-    labelmap1, n_obj_result1 = label(pred_uncertainty_bool, footprint1)
-    # labelmap2, n_obj_result2 = label(pred_uncertainty_bool, footprint2)
-    # print("\t Number of connected regions l1/l2 {} / {}".format(n_obj_result1, n_obj_result2))
-    total_uncertainty = np.sum(lbl_uncertainty)
-
-    t_num_pixel_uncertain = np.count_nonzero(lbl_uncertainty[idx_uncertain])
-    t_num_pixel_uncertain_above_tre = np.count_nonzero(lbl_uncertainty[idx_uncertain_above_tre])
-
-    lblmap_idx = np.unique(labelmap1)
-    region_mean_uncertainty = mean(lbl_uncertainty, labels=labelmap1, index=lblmap_idx)
-
-    return total_uncertainty, t_num_pixel_uncertain, t_num_pixel_uncertain_above_tre, region_mean_uncertainty
 
 
 class ExperimentHandler(object):
@@ -170,7 +141,7 @@ class ExperimentHandler(object):
         del val_batch
 
     def test(self, model, test_set, image_num=0, mc_samples=1, sample_weights=False, compute_hd=False,
-             use_uncertainty=False, std_threshold=None, use_seed=False, verbose=False, store_details=False,
+             use_uncertainty=False, u_threshold=None, use_seed=False, verbose=False, store_details=False,
              do_filter=True):
         """
 
@@ -181,7 +152,7 @@ class ExperimentHandler(object):
         :param sample_weights:
         :param compute_hd:
         :param use_uncertainty:
-        :param std_threshold:
+        :param u_threshold:
         :param use_seed:
         :param verbose:
         :param do_filter: use post processing 6-connected components on predicted labels (per class)
@@ -201,9 +172,9 @@ class ExperimentHandler(object):
         else:
             ddof = 0
         # b_predictions has shape [mc_samples, classes, width, height, slices]
+        num_of_classes = int(test_set.labels[image_num].shape[0] / 2)
         b_predictions = np.zeros(tuple([mc_samples] + list(test_set.labels[image_num].shape)))
         num_of_slices = test_set.images[image_num].shape[3]
-        uncertainty_stats = np.zeros((2, num_of_slices, 4))  # [2(es/ed), #slices, 4-measures]
         slice_idx = 0
         for batch_image, batch_labels in test_set.batch_generator(image_num):
 
@@ -232,25 +203,24 @@ class ExperimentHandler(object):
 
             means_test_loss = np.mean(b_test_losses)
             if use_uncertainty:
-                test_set.set_pred_labels(mean_test_pred, pred_stddev=std_test_pred, std_threshold=std_threshold,
+                test_set.set_pred_labels(mean_test_pred, pred_stddev=std_test_pred, u_threshold=u_threshold,
                                          verbose=verbose, do_filter=do_filter)
             else:
-                test_set.set_pred_labels(mean_test_pred, verbose=verbose, do_filter=False)
+                # NOTE: we set do_filter (connected components post-processing) to FALSE here because we will do
+                # this at the end for the complete 3D label object, but not for the individual slices
+                test_set.set_pred_labels(mean_test_pred, u_threshold=u_threshold, verbose=verbose, do_filter=False)
 
-            test_set.set_uncertainty_map(std_test_pred)
+            test_set.set_stddev_map(std_test_pred)
             test_set.set_bald_map(bald_values)
+            slice_acc, slice_hd = test_set.compute_slice_accuracy(compute_hd=compute_hd)
             if sample_weights:
-                es_total_uncert, es_num_of_pixel_uncert, es_num_pixel_uncert_above_tre, es_region_mean_uncert = \
-                    compute_img_uncertainty_measure(bald_values[0], u_threshold=std_threshold,
-                                                    connectivity=2, eps=0.01)
-                ed_total_uncert, ed_num_of_pixel_uncert, ed_num_pixel_uncert_above_tre, ed_region_mean_uncert = \
-                    compute_img_uncertainty_measure(bald_values[1], u_threshold=std_threshold,
-                                                    connectivity=2, eps=0.01)
-                slice_acc, slice_hd = test_set.get_slice_accuracy(slice_idx=slice_idx, compute_hd=compute_hd)
+                # NOTE: currently only displaying the BALD uncertainty stats but we also capture the stddev stats
+                es_total_uncert, es_num_of_pixel_uncert, es_num_pixel_uncert_above_tre, num_of_conn_commponents = \
+                    test_set.b_uncertainty_stats["bald"][0, :, slice_idx]  # ES
+                ed_total_uncert, ed_num_of_pixel_uncert, ed_num_pixel_uncert_above_tre, num_of_conn_commponents = \
+                    test_set.b_uncertainty_stats["bald"][1, :, slice_idx]  # ED
                 es_seg_errors = np.sum(test_set.b_seg_errors[slice_idx, :4])
                 ed_seg_errors = np.sum(test_set.b_seg_errors[slice_idx, 4:])
-                uncertainty_stats[0, slice_idx] =
-                uncertainty_stats[1, slice_idx] =
                 if verbose:
                     print("Test img/slice {}/{}".format(image_num, slice_idx))
                     print("ES: Total BALD/seg-errors/#pixel/#pixel(tre) \tDice (RV/Myo/LV)\tHD (RV/Myo/LV)")
@@ -272,9 +242,12 @@ class ExperimentHandler(object):
 
         test_accuracy, test_hd = test_set.get_accuracy(compute_hd=compute_hd, do_filter=do_filter)
         self.test_results.add_results(test_set.b_image, test_set.b_labels, test_set.b_image_id,
-                                      test_set.b_pred_labels, b_predictions, test_set.b_uncertainty_map,
+                                      test_set.b_pred_labels, b_predictions, test_set.b_stddev_map,
                                       test_accuracy, test_hd, test_set.b_seg_errors, store_all=store_details,
-                                      bald_maps=test_set.b_bald_map)
+                                      bald_maps=test_set.b_bald_map,
+                                      uncertainty_stats=test_set.b_uncertainty_stats,
+                                      test_accuracy_slices=test_set.b_acc_slices,
+                                      test_hd_slices=test_set.b_hd_slices)
         print("Image {} - Test accuracy: test loss {:.3f}\t "
               "dice(RV/Myo/LV): ES {:.2f}/{:.2f}/{:.2f} --- "
               "ED {:.2f}/{:.2f}/{:.2f}".format(image_num+1, means_test_loss,

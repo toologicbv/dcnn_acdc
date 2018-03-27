@@ -15,6 +15,8 @@ if "/home/jogi/.local/lib/python2.7/site-packages" in sys.path:
     sys.path.remove("/home/jogi/.local/lib/python2.7/site-packages")
 import matplotlib.pyplot as plt
 from matplotlib import cm
+from scipy.ndimage.measurements import label
+from scipy.ndimage.morphology import generate_binary_structure
 
 
 class ACDC2017TestHandler(object):
@@ -46,7 +48,7 @@ class ACDC2017TestHandler(object):
         self.spacings = []
         self.b_pred_labels = None
         self.b_pred_probs = None
-        self.b_uncertainty_map = None
+        self.b_stddev_map = None
         self.b_bald_map = None  # [2, width, height, #slices] one map for each heart phase ES/ED
         self.b_image = None
         self.b_image_id = None  # store the filename from "above" used as identification during testing
@@ -54,6 +56,10 @@ class ACDC2017TestHandler(object):
         self.b_new_spacing = None
         self.b_orig_spacing = None
         self.b_seg_errors = None
+        self.b_uncertainty_stats = None
+        # accuracy and hausdorff measure for slices (per image)
+        self.b_hd_slices = None
+        self.b_acc_slices = None
         self.debug = debug
         self._set_pathes()
 
@@ -178,24 +184,30 @@ class ACDC2017TestHandler(object):
         b_label = None
         self.slice_counter = -1
         self.b_image = self.images[image_num]
+        num_of_slices = self.b_image.shape[3]
         self.b_image_id = self.img_file_names[image_num]
         self.b_orig_spacing = self.spacings[image_num]
         self.b_new_spacing = tuple((ACDC2017TestHandler.new_voxel_spacing, ACDC2017TestHandler.new_voxel_spacing,
                                     self.b_orig_spacing[2]))
         # store the segmentation errors. shape [#slices, #classes]
         self.b_seg_errors = np.zeros((self.b_image.shape[3], self.num_of_classes * 2)).astype(np.int)
-
+        # currently measuring four values per slice - cardiac phase (2): total uncertainty, number of pixels with
+        # uncertainty (>eps), number of pixels with uncertainty above u_threshold, number of connected components in
+        # 2D slice (5)
+        self.b_uncertainty_stats = {'stddev': np.zeros((2, 4, num_of_slices)),
+                                    'bald': np.zeros((2, 4, num_of_slices)), "u_threshold": 0.}
+        self.b_acc_slices = np.zeros((2, self.num_of_classes, num_of_slices))
+        self.b_hd_slices = np.zeros((2, self.num_of_classes, num_of_slices))
         if use_labels:
             self.b_labels = self.labels[image_num]
             self.b_pred_probs = np.zeros_like(self.b_labels)
             self.b_pred_labels = np.zeros_like(self.b_labels)
         # TO DO: actually it could happen now that b_uncertainty has undefined shape (because b_labels is not used
-        self.b_uncertainty_map = np.zeros_like(self.b_labels)
+        self.b_stddev_map = np.zeros_like(self.b_labels)
         # b_bald_map shape: [2, width, height, #slices]
         self.b_bald_map = np.zeros((2, self.b_labels.shape[1], self.b_labels.shape[2], self.b_labels.shape[3]))
-        batch_dim = self.b_image.shape[3]
 
-        for slice in np.arange(batch_dim):
+        for slice in np.arange(num_of_slices):
             b_image = Variable(torch.FloatTensor(torch.from_numpy(self.b_image[:, :, :, slice]).float()),
                                volatile=use_volatile)
             b_image = b_image.unsqueeze(0)
@@ -210,18 +222,26 @@ class ACDC2017TestHandler(object):
             self.slice_counter += 1
             yield b_image, b_label
 
-    def set_pred_labels(self, pred_probs, pred_stddev=None, std_threshold=0., verbose=False, do_filter=True):
+    def set_pred_labels(self, pred_probs, pred_stddev=None, u_threshold=0., verbose=False, do_filter=True):
         """
 
         :param pred_probs: [1, num_of_classes(8), width, height]
         :param pred_stddev: [num_of_classes(8), width, heigth]
-        :param threshold: only used if pred_stddev object is non None. Used to filter prediction errors based
+        :param u_threshold: only used if pred_stddev object is non None. Used to filter prediction errors based
         on standard deviation (uncertainty)
         Also note that object self.b_labels has dims [num_classes(8), width, height, slices]
+
+        :param do_filter: filter predicted labels on connected components. This is an important post processing step
+                          especially when doing this at the end for the 3D label object
+        :param verbose:
+
         :return:
         """
         if isinstance(pred_probs.data, torch.cuda.FloatTensor) or isinstance(pred_probs.data, torch.FloatTensor):
             pred_probs = pred_probs.data.cpu().numpy()
+
+        # we also set the u_threshold here for the computation of the uncertainty stats later
+        self.b_uncertainty_stats["u_threshold"] = u_threshold
 
         # remember dim0 of pred_probs is 1, so we squeeze it by taking index "0". Hence the argmax is over
         # axis 0, because we lost the original dim0
@@ -242,13 +262,13 @@ class ACDC2017TestHandler(object):
             dice_ed_before = dice_coefficient(true_labels_cls_ed, pred_labels_cls_ed)
             errors_es = pred_labels_cls_es != true_labels_cls_es
             errors_ed = pred_labels_cls_ed != true_labels_cls_ed
-            if pred_stddev is not None and std_threshold > 0.:
+            if pred_stddev is not None and u_threshold > 0.:
                 pixel_std_es = np.copy(pred_stddev[cls])
                 pixel_std_ed = np.copy(pred_stddev[cls + self.num_of_classes])
                 # IMPORTANT!!! - THE THRESHOLD MUST BE EQUAL TO 0, ONLY IF WE WANT TO USE THE THRESHOLD TO CORRECT
                 # LABELS WITH HIGH UNCERTAINTY, THE THRESOLD SHOULD BE ABOVE 0.
-                error_es_idx = pixel_std_es > std_threshold
-                error_ed_idx = pixel_std_ed > std_threshold
+                error_es_idx = pixel_std_es > u_threshold
+                error_ed_idx = pixel_std_ed > u_threshold
 
                 # little subtlety, if bg class, the most common class label is 1, for all other classes it's 0
                 if cls == 0:
@@ -283,13 +303,66 @@ class ACDC2017TestHandler(object):
 
         self.b_pred_probs[:, :, :, self.slice_counter] = pred_probs
 
-    def set_uncertainty_map(self, slice_std):
+    def compute_img_slice_uncertainty_stats(self, u_type="bald", connectivity=2, eps=0.01):
+        """
+        In order to get a first idea of how uncertain the model is w.r.t. certain image slices we compute
+        same simple overall statistics per slide for stddev and BALD uncertainty measures.
+        Note:
+            self.b_bald_map     [2, width, height, #slices]
+            self.b_stddev_map   [#classes, width, height, #slices]
+        :param u_type:
+        :param u_threshold:
+        :param connectivity:
+        :param eps:
+        :return:
+        """
+        if u_type == "bald":
+            uncertainty_map = self.b_bald_map[:, :, :, self.slice_counter]
+        elif u_type == "stddev":
+            # remember that we store the stddev for each class per pixel, so b_stddev_map has
+            # shape [#classes, width, height, #slices]. Hence, we average over dim0 (classes) for ES and ED
+            uncertainty_map = self.b_stddev_map[:, :, :, self.slice_counter]
+            uncertainty_map = np.concatenate((np.mean(uncertainty_map[:self.num_of_classes], axis=0, keepdims=True),
+                                              np.mean(uncertainty_map[self.num_of_classes:], axis=0, keepdims=True)))
+        # shape uncertainty_map: [2, width, height]
+
+        else:
+            raise ValueError("{} is not a supported uncertainty type.".format(u_type))
+        # we compute stats for ES and ED phase
+        for phase in np.arange(uncertainty_map.shape[0]):
+            pred_uncertainty_bool = np.zeros(uncertainty_map[phase].shape).astype(np.bool)
+            # index maps for uncertain pixels
+            mask_uncertain = uncertainty_map[phase] > eps
+            # the u_threshold was already set in the method set_pred_labels above
+            mask_uncertain_above_tre = uncertainty_map[phase] > self.b_uncertainty_stats["u_threshold"]
+            # create binary mask to determine morphology
+            pred_uncertainty_bool[mask_uncertain_above_tre] = True
+
+            # binary structure
+            footprint1 = generate_binary_structure(pred_uncertainty_bool.ndim, connectivity)
+            # label distinct binary objects
+            labelmap1, num_of_objects = label(pred_uncertainty_bool, footprint1)
+            total_uncertainty = np.sum(uncertainty_map[phase][mask_uncertain])
+
+            t_num_pixel_uncertain = np.count_nonzero(uncertainty_map[phase][mask_uncertain])
+            t_num_pixel_uncertain_above_tre = np.count_nonzero(uncertainty_map[phase][mask_uncertain_above_tre])
+
+            if u_type == "bald":
+                self.b_uncertainty_stats["bald"][phase, :, self.slice_counter] = \
+                    np.array([total_uncertainty, t_num_pixel_uncertain, t_num_pixel_uncertain_above_tre,
+                              num_of_objects])
+            else:
+                self.b_uncertainty_stats["stddev"][phase, :, self.slice_counter] = \
+                    np.array([total_uncertainty, t_num_pixel_uncertain, t_num_pixel_uncertain_above_tre,
+                              num_of_objects])
+
+    def set_stddev_map(self, slice_std):
         """
             Important: we assume slice_std is a numpy array with shape [num_classes, width, height]
 
         """
-        # print(self.b_uncertainty_map.shape)
-        self.b_uncertainty_map[:, :, :, self.slice_counter] = slice_std
+        self.b_stddev_map[:, :, :, self.slice_counter] = slice_std
+        self.compute_img_slice_uncertainty_stats(u_type="stddev")
 
     def set_bald_map(self, slice_bald):
         """
@@ -300,6 +373,7 @@ class ACDC2017TestHandler(object):
         """
 
         self.b_bald_map[:, :, :, self.slice_counter] = slice_bald
+        self.compute_img_slice_uncertainty_stats(u_type="bald")
 
     def get_accuracy(self, compute_hd=False, do_filter=True):
         """
@@ -342,7 +416,7 @@ class ACDC2017TestHandler(object):
 
         return dices, hausdff
 
-    def get_slice_accuracy(self, slice_idx, compute_hd=False):
+    def compute_slice_accuracy(self, slice_idx=None, compute_hd=False):
         """
 
             Compute dice coefficients for the complete 3D volume
@@ -352,6 +426,8 @@ class ACDC2017TestHandler(object):
 
             compute_hd: Boolean indicating whether or not to compute Hausdorff distance
         """
+        if slice_idx is None:
+            slice_idx = self.slice_counter
         # Remember self.num_of_classes is 4 in the AC-DC case and not 8 (4-ES and 4-ED)
         dices = np.zeros(2 * self.num_of_classes)
         hausdff = np.zeros(2 * self.num_of_classes)
@@ -377,7 +453,11 @@ class ACDC2017TestHandler(object):
                            self.b_labels[cls + self.num_of_classes, :, :, slice_idx],
                            voxelspacing=ACDC2017TestHandler.new_voxel_spacing, connectivity=1)
                 else:
-                    hausdff[cls  + self.num_of_classes] = 0
+                    hausdff[cls + self.num_of_classes] = 0
+        self.b_hd_slices[0, :, slice_idx] = hausdff[:self.num_of_classes]  # ES
+        self.b_hd_slices[1, :, slice_idx] = hausdff[self.num_of_classes:]  # ED
+        self.b_acc_slices[0, :, slice_idx] = dices[:self.num_of_classes]  # ES
+        self.b_acc_slices[1, :, slice_idx] = dices[self.num_of_classes:]  # ED
 
         return dices, hausdff
 
@@ -488,7 +568,7 @@ class ACDC2017TestHandler(object):
             true_labels = self.b_labels[:, :, :, idx]
             pred_labels = self.b_pred_labels[:, :, :, idx]
             pred_probs = self.b_pred_probs[:, :, :, idx]
-            uncertainty = self.b_uncertainty_map[:, :, :, idx]
+            uncertainty = self.b_stddev_map[:, :, :, idx]
             for phase in np.arange(2):
                 
                 img = image[phase]  # INDEX 0 = end-systole image
