@@ -88,13 +88,16 @@ class BaseConfig(object):
 
         # validation settings
         if socket.gethostname() == "qiaubuntu" or socket.gethostname() == "ubuntu-toologic2":
+            self.val_set_size = 128
             self.val_batch_size = 16
         else:
+            self.val_set_size = 512
             self.val_batch_size = 128
 
         # plotting
         self.title_font_large = {'fontname': 'Monospace', 'size': '36', 'color': 'black', 'weight': 'normal'}
-        self.title_font_medium = {'fontname': 'Monospace', 'size': '16', 'color': 'black', 'weight': 'normal'}
+        self.title_font_medium = {'fontname': 'Monospace', 'size': '24', 'color': 'black', 'weight': 'normal'}
+        self.title_font_small = {'fontname': 'Monospace', 'size': '16', 'color': 'black', 'weight': 'normal'}
 
         self.axis_font = {'fontname': 'Monospace', 'size': '16', 'color': 'black', 'weight': 'normal'}
 

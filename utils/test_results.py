@@ -12,6 +12,7 @@ if "/home/jogi/.local/lib/python2.7/site-packages" in sys.path:
     sys.path.remove("/home/jogi/.local/lib/python2.7/site-packages")
 import matplotlib.pyplot as plt
 from matplotlib import cm
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 from common.common import datestr
 import copy
 from scipy.stats import wilcoxon, ttest_ind, mannwhitneyu
@@ -233,6 +234,7 @@ class TestResults(object):
         """
         self.images = []
         self.image_ids = []
+        self.image_names = []
         self.labels = []
         self.pred_labels = []
         self.mc_pred_probs = []
@@ -261,7 +263,7 @@ class TestResults(object):
 
     def add_results(self, batch_image, batch_labels, image_id, pred_labels, b_predictions, uncertainty_map,
                     test_accuracy, test_hd, seg_errors, store_all=False, bald_maps=None, uncertainty_stats=None,
-                    test_hd_slices=None, test_accuracy_slices=None):
+                    test_hd_slices=None, test_accuracy_slices=None, image_name=None):
         """
 
         :param batch_image: [2, width, height, slices]
@@ -283,6 +285,7 @@ class TestResults(object):
             self.uncertainty_maps.append(uncertainty_map)
             self.bald_maps.append(bald_maps)
         self.image_ids.append(image_id)
+        self.image_names.append(image_name)
         self.test_accuracy.append(test_accuracy)
         self.test_hd.append(test_hd)
         if test_hd_slices is not None:
@@ -443,8 +446,15 @@ class TestResults(object):
 
     def visualize_uncertainty_stats(self, image_num=0, width=16, height=10, info_type="uncertainty",
                                     use_class_stats=False, do_save=False, fig_name=None,
-                                    model_name=""):
+                                    model_name="", do_show=False):
 
+        if info_type not in ["probs", "uncertainty"]:
+            raise ValueError("Parameter info_type must be probs or uncertainty and not {}".format(info_type))
+        try:
+            image_num = self.image_ids.index(image_num)
+        except ValueError:
+            print("WARNING - Can't find image with index {} in "
+                  "test_results.image_ids. Discarding!".format(image_num))
         image_probs = self.image_probs_categorized[image_num]
         label = self.labels[image_num]
         num_of_classes = label.shape[0]
@@ -460,7 +470,7 @@ class TestResults(object):
             columns = 2
 
         fig = plt.figure(figsize=(width, height))
-        fig.suptitle("Uncertainty densities - model {}".format(model_name) , **config.title_font_medium)
+        fig.suptitle("Densities of Uncertainties - model {}".format(model_name) , **config.title_font_medium)
 
         for phase in np.arange(2):
             if phase == 0:
@@ -545,15 +555,16 @@ class TestResults(object):
             counter += 1
         # fig.tight_layout()
         if do_save:
+            fig_out_dir = self._create_figure_dir(image_num)
             if fig_name is None:
-                fig_name = self.image_ids[image_num] + info_type + "_densities_s" + str(mc_samples) \
+                fig_name = info_type + "_densities_mc" + str(mc_samples) \
                            + "_" + str(use_class_stats)
-            fig_name = os.path.join(self.fig_output_dir, fig_name + ".png")
+            fig_name = os.path.join(fig_out_dir, fig_name + ".png")
 
             plt.savefig(fig_name, bbox_inches='tight')
             print("INFO - Successfully saved fig %s" % fig_name)
-
-        plt.show()
+        if do_show:
+            plt.show()
         plt.close()
 
     def visualize_test_slices(self, image_num=0, width=8, height=6, slice_range=None, do_save=False,
@@ -809,6 +820,12 @@ class TestResults(object):
         plt.rcParams['font.serif'] = 'Ubuntu'
         plt.rcParams['font.monospace'] = 'Ubuntu Mono'
         column_lbls = ["bg", "RV", "MYO", "LV"]
+        # image_num = self._translate_image_range(image_num)
+        try:
+            image_num = self.image_ids.index(image_num)
+        except ValueError:
+            print("WARNING - Can't find image with index {} in "
+                  "test_results.image_ids. Discarding!".format(image_num))
         image = self.images[image_num]
         image_probs = self.image_probs_categorized[image_num]
         pred_labels = self.pred_labels[image_num]
@@ -825,7 +842,7 @@ class TestResults(object):
         mc_samples = self.mc_pred_probs[image_num].shape[0]
         max_stdddev = 0.5  # the maximum stddev we're dealing with (used in colorbar) because probs are between [0,1]
 
-        image_name = self.image_ids[image_num][:self.image_ids[image_num].find("_")]
+        image_name = self.image_names[image_num]
         if slice_range is None:
             slice_range = np.arange(0, image.shape[3])
         num_of_slices = len(slice_range)
@@ -833,29 +850,28 @@ class TestResults(object):
         str_slice_range = "_".join(str_slice_range)
         columns = half_classes
         if errors_only:
-            rows = num_of_slices * 4  # multiply with 4 because two rows ES, two rows ED for each slice
+            rows = 4  # multiply with 4 because two rows ES, two rows ED for each slice
         elif not use_bald:
-            rows = num_of_slices * 8  # multiply with 8 because four rows ES, four rows ED for each slice
+            rows = 8  # multiply with 8 because four rows ES, four rows ED for each slice
         else:
-            rows = num_of_slices * 14  # multiply with 2 because five rows ES, five rows ED for each slice
+            rows = 14  # multiply with 2 because five rows ES, five rows ED for each slice
         print("Rows/columns {}/{}".format(rows, columns))
-        row = 0
+
         _ = rows * num_of_slices * columns
         if errors_only:
-            height = 15 * num_of_slices
-        else:
-            height = height * num_of_slices
-
-        fig = plt.figure(figsize=(width, height))
-        if std_threshold > 0.:
-            main_title = r"Model {} - Test image: {} - ($\sigma_{{Tr}}={:.2f}$)".format(model_name,
-                                                                                        image_name,
-                                                                                        std_threshold)
-        else:
-            main_title = "Model {} - Test image: {}".format(model_name, image_name)
-        fig.suptitle(main_title, **config.title_font_large)
+            height = 20
 
         for img_slice in slice_range:
+
+            if std_threshold > 0.:
+                main_title = r"Model {} - Test image: {} - slice: {}" \
+                             r" - ($\sigma_{{Tr}}={:.2f}$) \n".format(model_name, image_name, img_slice+1, std_threshold)
+            else:
+                main_title = "Model {} - Test image: {} - slice: {} \n".format(model_name, image_name, img_slice+1)
+            fig = plt.figure(figsize=(width, height))
+            ax = fig.gca()
+            fig.suptitle(main_title, **config.title_font_large)
+            row = 0
             # get the slice and then split ED and ES slices
             image_slice = image[:, :, :, img_slice]
             img_slice_probs = image_probs[img_slice]
@@ -871,13 +887,14 @@ class TestResults(object):
                 # print("INFO-1 - row/counter {} / {}".format(row, counter))
                 ax1 = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
                 if phase == 0:
-                    ax1.set_title("Slice {}: End-systole".format(img_slice+1), **config.title_font_medium)
+                    ax1.set_title("Slice {}: End-systole".format(img_slice+1), **config.title_font_large)
                     str_phase = "ES"
                 else:
-                    ax1.set_title("Slice {}: End-diastole".format(img_slice+1), **config.title_font_medium)
+                    ax1.set_title("Slice {}: End-diastole".format(img_slice+1), **config.title_font_large)
                     str_phase = "ED"
                 # the original image we are segmenting
                 ax1.imshow(img, cmap=cm.gray)
+                ax1.set_aspect('auto')
                 plt.axis('off')
                 # -------------------------- Plot segmentation ERRORS per class on original image -----------
                 # we also construct an image with the segmentation errors, placing it next to the original img
@@ -887,6 +904,7 @@ class TestResults(object):
                                                                           cls_offset,
                                                                           slice_stddev, std_threshold=std_threshold)
                 ax1b.imshow(rgb_img, interpolation='nearest')
+                ax1b.set_aspect('auto')
                 ax1b.text(20, 20, 'red: RV ({}), yellow: Myo ({}), green: LV ({})'.format(cls_errors[1],
                                                                                           cls_errors[2],
                                                                                           cls_errors[3]),
@@ -901,7 +919,13 @@ class TestResults(object):
                     # print("Phase {} row {} - BALD heatmap".format(phase, row))
                     ax4 = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
                     ax4plot = ax4.imshow(slice_bald, cmap=plt.get_cmap('jet'), vmin=bald_min, vmax=bald_max)
+                    # divider = make_axes_locatable(ax)
+                    # cax = divider.append_axes("right", size="5%", pad=0.05)
+                    # fig.colorbar(ax4plot, cax=cax)
+                    ax4.set_aspect('auto')
                     fig.colorbar(ax4plot, ax=ax4, fraction=0.046, pad=0.04)
+                    # cb = Colorbar(ax=ax4, mappable=ax4plot, orientation='vertical', ticklocation='right')
+                    # cb.set_label(r'Colorbar !', labelpad=10)
                     ax4.set_title("Slice {} {}: BALD-values".format(img_slice+1, str_phase),
                                   **config.title_font_medium)
                     plt.axis('off')
@@ -917,6 +941,7 @@ class TestResults(object):
                     ax4a = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
                     ax4aplot = ax4a.imshow(mean_slice_stddev, cmap=plt.get_cmap('jet'),
                                            vmin=0., vmax=max_stdddev)
+                    ax4a.set_aspect('auto')
                     fig.colorbar(ax4aplot, ax=ax4a, fraction=0.046, pad=0.04)
                     ax4a.set_title("Slice {} {}: MEAN stddev-values".format(img_slice + 1, str_phase),
                                    **config.title_font_medium)
@@ -948,21 +973,21 @@ class TestResults(object):
 
                         ax5.hist(bald_err[bald_err >= std_threshold], bins=xs,
                                  label=r"$bald_{{pred(fp+fn)}}({})$".format(bald_err.shape[0])
-                                 , color='C1' , alpha=0.3, histtype='stepfilled')
-                        ax5.legend(loc="best", prop={'size': 14})
+                                 , color='b', alpha=0.2, histtype='stepfilled')
+                        ax5.legend(loc="best", prop={'size': 12})
                         ax5.grid(False)
                     if bald_corr is not None:
                         ax5b = ax5.twinx()
                         ax5b.hist(bald_corr[bald_corr >= std_threshold], bins=xs,
                                  label=r"$bald_{{pred(tp)}}({})$".format(bald_corr.shape[0]),
-                                 color='C2', alpha=0.3, histtype='stepfilled')
-                        ax5b.legend(loc=2, prop={'size': 14})
+                                 color='g', alpha=0.4, histtype='stepfilled')
+                        ax5b.legend(loc=2, prop={'size': 12})
                         ax5b.grid(False)
                     ax5.set_xlabel("BALD value", **config.axis_font)
                     if str_p_value is not None:
-                        title_suffix = "(correct/incorrect " + str_p_value + ")"
+                        title_suffix = "(" + str_p_value + ")"
                     else:
-                        title_suffix = "(correct/incorrect)"
+                        title_suffix = ""
                     ax5.set_title("Slice {} {}: Distribution of BALD values ".format(img_slice + 1, str_phase)
                                   + title_suffix, ** config.title_font_medium)
 
@@ -992,6 +1017,7 @@ class TestResults(object):
                         std_rgba_img = cmap(std_map_cls)
                         std_rgb_img = np.delete(std_rgba_img, 3, 2)
                         ax3plot = ax3.imshow(std_rgb_img, vmin=0., vmax=max_stdddev)
+                        ax3.set_aspect('auto')
                         if cls == half_classes - 1:
                             fig.colorbar(ax3plot, ax=ax3, fraction=0.046, pad=0.04)
                         ax3.set_title("{} stddev: {} ".format(str_phase, column_lbls[cls]),
@@ -1009,13 +1035,13 @@ class TestResults(object):
                             ax2b = ax2.twinx()
                             ax2b.hist(p_err_std[p_err_std >= std_threshold], bins=xs,
                                      label=r"$\sigma_{{pred(fp+fn)}}({})$".format(cls_errors[cls])
-                                     ,color="C1", alpha=0.3)
-                            ax2b.legend(loc=2, prop={'size': 14})
+                                     ,color="b", alpha=0.2)
+                            ax2b.legend(loc=2, prop={'size': 9})
 
                         if p_corr_std is not None:
                             ax2.hist(p_corr_std[p_corr_std >= std_threshold], bins=xs,
                                      label=r"$\sigma_{{pred(tp)}}({})$".format(p_corr_std.shape[0]),
-                                     color="C2", alpha=0.3)
+                                     color="g", alpha=0.4)
 
                         if info_type == "uncertainty":
                             ax2.set_xlabel("model uncertainty", **config.axis_font)
@@ -1023,7 +1049,7 @@ class TestResults(object):
                             ax2.set_xlabel(r"softmax $p(c|x)$", **config.axis_font)
                         ax2.set_title("{} slice-{}: {}".format(str_phase, img_slice+1, column_lbls[cls]),
                                       **config.title_font_medium)
-                        ax2.legend(loc="best", prop={'size': 14})
+                        ax2.legend(loc="best", prop={'size': 9})
                         # ax2.set_ylabel("density", **config.axis_font)
                         if cls == 1:
                             row_offset += 1
@@ -1033,23 +1059,26 @@ class TestResults(object):
                     row += 2
                 else:
                     row += 3
-        # fig.tight_layout()
-        fig.tight_layout(rect=[0, 0.03, 1, 0.97])
-        if do_save:
-            if fig_name is None:
-                fig_name = self.image_ids[image_num] + "_seg_errors_" + str_slice_range + "_s" + str(mc_samples)
+            # fig.tight_layout()
+            if not errors_only:
+                fig.tight_layout(rect=[0, 0.03, 1, 0.97])
+            if do_save:
+
+                fig_img_dir = self._create_figure_dir(image_num)
+                fig_name = "analysis_seg_err_slice{}".format(img_slice+1) \
+                            + "_mc" + str(mc_samples)
                 if std_threshold > 0.:
                     tr_string = "_tr" + str(std_threshold).replace(".", "_")
                     fig_name += tr_string
                 if errors_only:
-                    fig_name = fig_name + "_" + str(errors_only)
-            fig_name = os.path.join(self.fig_output_dir, fig_name + ".pdf")
+                    fig_name = fig_name + "_w_uncrty"
+                fig_name = os.path.join(fig_img_dir, fig_name + ".pdf")
 
-            plt.savefig(fig_name, bbox_inches='tight')
-            print("INFO - Successfully saved fig %s" % fig_name)
-        if do_show:
-            plt.show()
-        plt.close()
+                plt.savefig(fig_name, bbox_inches='tight')
+                print("INFO - Successfully saved fig %s" % fig_name)
+            if do_show:
+                plt.show()
+            plt.close()
 
     @property
     def N(self):
@@ -1133,3 +1162,21 @@ class TestResults(object):
                                                                               stddev[2], mean_hd[3], stddev[3],
                                                                               mean_hd[5], stddev[5], mean_hd[6],
                                                                               stddev[6], mean_hd[7], stddev[7]))
+
+    def _create_figure_dir(self, image_num):
+        image_name = self.image_names[image_num]
+        fig_path = os.path.join(self.fig_output_dir, image_name)
+        if not os.path.isdir(fig_path):
+            os.makedirs(fig_path)
+
+        return fig_path
+
+    def _translate_image_range(self, image_num):
+
+        try:
+            idx = self.image_ids.index(image_num)
+        except ValueError:
+            print("WARNING - Can't find image with index {} in "
+                  "test_results.image_ids. Discarding!".format(image_num))
+        return idx
+

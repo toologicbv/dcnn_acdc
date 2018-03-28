@@ -31,8 +31,10 @@ class ACDC2017TestHandler(object):
     new_voxel_spacing = 1.4
 
     def __init__(self, exper_config, search_mask=None, nclass=4, load_func=load_mhd_to_numpy,
-                 fold_ids=[1], debug=False, use_cuda=True, batch_size=1):
+                 fold_ids=[1], debug=False, use_cuda=True, batch_size=1, val_only=True):
 
+        # IMPORTANT flag indicating whether we're loading only the validation set from the specified fold(s)
+        self.val_only = val_only
         self.config = exper_config
         self.data_dir = os.path.join(self.config.root_dir, exper_config.data_dir)
         self.search_mask = search_mask
@@ -51,7 +53,8 @@ class ACDC2017TestHandler(object):
         self.b_stddev_map = None
         self.b_bald_map = None  # [2, width, height, #slices] one map for each heart phase ES/ED
         self.b_image = None
-        self.b_image_id = None  # store the filename from "above" used as identification during testing
+        self.b_image_id = None
+        self.b_image_name = None  # store the filename from "above" used as identification during testing
         self.b_labels = None
         self.b_new_spacing = None
         self.b_orig_spacing = None
@@ -92,19 +95,21 @@ class ACDC2017TestHandler(object):
                                          os.path.join(ACDC2017TestHandler.val_path, ACDC2017TestHandler.image_path))
 
             # get images and labels
-            search_mask_img = os.path.join(self.train_path, self.search_mask)
-            print("INFO - Testhandler - >>> Search for {} <<<".format(search_mask_img))
-            for train_file in glob.glob(search_mask_img):
-                ref_file = train_file.replace(ACDC2017TestHandler.image_path, ACDC2017TestHandler.label_path)
-                file_list.append(tuple((train_file, ref_file)))
+            if not self.val_only:
+                # we're NOT only loading validation images
+                search_mask_img = os.path.join(self.train_path, self.search_mask)
+                print("INFO - Testhandler - >>> Search for {} <<<".format(search_mask_img))
+                for train_file in glob.glob(search_mask_img):
+                    ref_file = train_file.replace(ACDC2017TestHandler.image_path, ACDC2017TestHandler.label_path)
+                    file_list.append(tuple((train_file, ref_file)))
 
             # get validation images and labels
             search_mask_img = os.path.join(self.val_path, self.search_mask)
             for val_file in glob.glob(search_mask_img):
                 ref_file = val_file.replace(ACDC2017TestHandler.image_path, ACDC2017TestHandler.label_path)
                 file_list.append(tuple((val_file, ref_file)))
-
-        print("INFO - File list contains {} files".format(len(file_list)))
+        num_of_files = len(file_list)
+        print("INFO - File list contains {} files, hence {} patients".format(num_of_files, num_of_files / 2))
 
         return file_list
 
@@ -120,6 +125,9 @@ class ACDC2017TestHandler(object):
             mri_scan_es, origin, spacing = self.load_func(img_file, data_type=ACDC2017TestHandler.pixel_dta_type,
                                                           swap_axis=True)
             es_file_name = os.path.splitext(os.path.basename(img_file))[0]
+            # get rid off _frameXX and take only the patient name
+            es_file_name = es_file_name[:es_file_name.find("_")]
+            self.img_file_names.append(es_file_name)
             print("{} - {}".format(idx, img_file))
             self.spacings.append(spacing)
             mri_scan_es = self._preprocess(mri_scan_es, spacing, poly_order=3, do_pad=True)
@@ -131,7 +139,6 @@ class ACDC2017TestHandler(object):
             # do the same for the End-diastole pair of images
             img_file, ref_file = file_list[idx+1]
             ed_frame_num = (os.path.splitext(os.path.basename(img_file))[0]).split("_")[1]
-            self.img_file_names.append(es_file_name + "_" + ed_frame_num)
             print("{} - {}".format(idx+1, img_file))
             mri_scan_ed, _, _ = self.load_func(img_file, data_type=ACDC2017TestHandler.pixel_dta_type,
                                                swap_axis=True)
@@ -181,11 +188,12 @@ class ACDC2017TestHandler(object):
             Object self.labels is also a list but with shape [8, height, width, depth]
 
         """
+        self.b_image_id = image_num
         b_label = None
         self.slice_counter = -1
         self.b_image = self.images[image_num]
         num_of_slices = self.b_image.shape[3]
-        self.b_image_id = self.img_file_names[image_num]
+        self.b_image_name = self.img_file_names[image_num]
         self.b_orig_spacing = self.spacings[image_num]
         self.b_new_spacing = tuple((ACDC2017TestHandler.new_voxel_spacing, ACDC2017TestHandler.new_voxel_spacing,
                                     self.b_orig_spacing[2]))

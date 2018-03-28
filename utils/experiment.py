@@ -1,4 +1,5 @@
 import sys
+import time
 import torch
 from torch.autograd import Variable
 import numpy as np
@@ -25,6 +26,7 @@ class ExperimentHandler(object):
         self.exper = exper
         self.test_results = None
         self.logger = None
+        self.num_val_runs = 0
         if logger is None:
             self.logger = create_logger(self.exper, file_handler=use_logfile)
         else:
@@ -39,6 +41,7 @@ class ExperimentHandler(object):
 
     def next_val_run(self):
         self.exper.val_run_id += 1
+        self.num_val_runs += 1
         self.exper.val_stats["epoch_ids"][self.exper.val_run_id] = self.exper.epoch_id
 
     def save_experiment(self, file_name=None, final_run=False):
@@ -100,7 +103,7 @@ class ExperimentHandler(object):
                           cycle_length=self.exper.run_args.cycle_length,
                           verbose=verbose)
         abs_checkpoint_dir = os.path.join(root_dir,
-                                          os.path.join( self.exper.chkpnt_dir, checkpoint_file))
+                                          os.path.join(self.exper.chkpnt_dir, checkpoint_file))
         if os.path.exists(abs_checkpoint_dir):
             checkpoint = torch.load(abs_checkpoint_dir)
             model.load_state_dict(checkpoint["state_dict"])
@@ -119,25 +122,46 @@ class ExperimentHandler(object):
     def set_config_object(self, new_config):
         self.exper.config = new_config
 
-    def eval(self, images, labels, model, batch_size=None, val_run_id=None):
-
+    def eval(self, dataset, model, val_set_size=None):
+        start_time = time.time()
         # validate model
-        val_batch = TwoDimBatchHandler(self.exper, batch_size=batch_size)
-        val_batch.generate_batch_2d(images, labels)
-        model.eval()
-        b_predictions = model(val_batch.b_images)
-        val_loss = model.get_loss(b_predictions, val_batch.b_labels)
-        val_loss = val_loss.data.cpu().squeeze().numpy()[0]
-        # compute dice score for both classes (myocardium and bloodpool)
-        dice = None  # HVSMR2016CardiacMRI.compute_accuracy(b_predictions, val_batch.b_labels)
-        # store epochID and validation loss
-        if val_run_id is not None:
-            self.exper.val_stats["mean_loss"][val_run_id - 1] = np.array([self.exper.epoch_id, val_loss])
-            self.exper.val_stats["dice_coeff"][val_run_id - 1] = np.array([self.exper.epoch_id, dice[0], dice[1]])
-        self.logger.info("Model validation in epoch {}: current loss {:.3f}\t "
-                         "dice-coeff(myo/blood) {:.3f}/{:.3f}".format(self.exper.epoch_id, val_loss,
-                                                                      dice[0], dice[1]))
-        model.train()
+        if val_set_size is None:
+            val_set_size = self.exper.config.val_set_size
+        self.next_val_run()
+
+        if val_set_size <= self.exper.config.val_batch_size:
+            # we don't need to chunk, the number of patches for validation is smaller than the batch_size
+            num_of_chunks = 1
+        else:
+            num_of_chunks = val_set_size // self.exper.config.val_batch_size
+
+        arr_val_loss = np.zeros(num_of_chunks)
+        arr_val_acc = np.zeros(6)  # array of 6 values for accuracy of ES/ED RV/MYO/LV
+        arr_val_dice = np.zeros(2)  # array of 2 values, loss for ES and ED
+        for chunk in np.arange(num_of_chunks):
+            val_batch = TwoDimBatchHandler(self.exper, batch_size=self.exper.config.val_batch_size,
+                                           test_run=True)
+            val_batch.generate_batch_2d(dataset.images(train=False), dataset.labels(train=False))
+            val_loss, _ = model.do_test(val_batch.get_images(), val_batch.get_labels())
+            arr_val_loss[chunk] = val_loss.data.cpu().numpy()[0]
+            # returns array of 6 values
+            arr_val_acc += model.get_accuracy()
+            arr_val_dice += model.get_dice_losses(average=True)
+
+        val_loss = np.mean(arr_val_loss)
+        arr_val_acc *= 1./float(num_of_chunks)
+        arr_val_dice *= 1./float(num_of_chunks)
+        self.exper.val_stats["mean_loss"][self.num_val_runs - 1] = val_loss
+        self.exper.val_stats["dice_coeff"][self.num_val_runs - 1] = arr_val_acc
+        self.set_accuracy(arr_val_acc, val_run_id=self.num_val_runs)
+        self.set_dice_losses(arr_val_dice, val_run_id=self.num_val_runs)
+        duration = time.time() - start_time
+        self.logger.info("---> VALIDATION epoch {} (#patches={}): current loss {:.3f}\t "
+                         "dice-coeff:: ES {:.3f}/{:.3f}/{:.3f} --- "
+                         "ED {:.3f}/{:.3f}/{:.3f}  (time={:.2f} sec)".format(self.exper.epoch_id, val_set_size, val_loss,
+                                                                             arr_val_acc[0], arr_val_acc[1],
+                                                                             arr_val_acc[2], arr_val_acc[3],
+                                                                             arr_val_acc[4], arr_val_acc[5], duration))
         del val_batch
 
     def test(self, model, test_set, image_num=0, mc_samples=1, sample_weights=False, compute_hd=False,
@@ -156,6 +180,7 @@ class ExperimentHandler(object):
         :param use_seed:
         :param verbose:
         :param do_filter: use post processing 6-connected components on predicted labels (per class)
+        :param use_percentiles: optionally use percentiles to filter outliers and then compute pred labels
         :param store_details: if TRUE TestResult object will hold all images/labels/predicted labels, mc-stats etc.
         which basically results in a very large object. Should not be used for evaluation of many test images,
         most certainly only for 1-3 images in order to generate some figures.
@@ -194,10 +219,10 @@ class ExperimentHandler(object):
                 b_test_losses[s] = test_loss.data.cpu().numpy()
                 # dice_loss_es, dice_loss_ed = model.get_dice_losses(average=True)
             # mean/std for each pixel for each class
-            mean_test_pred, std_test_pred = np.mean(b_predictions[:, :, :, :, test_set.slice_counter],
-                                                    axis=0, keepdims=True), \
-                                            np.std(b_predictions[:, :, :, :, test_set.slice_counter], axis=0,
-                                                   ddof=ddof)
+            mc_probs = b_predictions[:, :, :, :, test_set.slice_counter]
+            mean_test_pred, std_test_pred = np.mean(mc_probs, axis=0, keepdims=True), \
+                                                np.std(mc_probs, axis=0, ddof=ddof)
+
             bald_values[0] = bald_function(b_predictions[:, 0:4, :, :, test_set.slice_counter])
             bald_values[1] = bald_function(b_predictions[:, 4:, :, :, test_set.slice_counter])
 
@@ -247,7 +272,8 @@ class ExperimentHandler(object):
                                       bald_maps=test_set.b_bald_map,
                                       uncertainty_stats=test_set.b_uncertainty_stats,
                                       test_accuracy_slices=test_set.b_acc_slices,
-                                      test_hd_slices=test_set.b_hd_slices)
+                                      test_hd_slices=test_set.b_hd_slices,
+                                      image_name=test_set.b_image_name)
         print("Image {} - Test accuracy: test loss {:.3f}\t "
               "dice(RV/Myo/LV): ES {:.2f}/{:.2f}/{:.2f} --- "
               "ED {:.2f}/{:.2f}/{:.2f}".format(image_num+1, means_test_loss,
@@ -298,6 +324,9 @@ class ExperimentHandler(object):
     def reset_results(self):
         self.test_results = None
 
+    def set_model_name(self, model_name):
+        self.exper.model_name = model_name
+
     @staticmethod
     def load_experiment(path_to_exp, full_path=False, epoch=None):
 
@@ -347,6 +376,7 @@ class Experiment(object):
             self.run_args = run_args
 
         self.config = config
+        self.model_name = ""
         self.epoch_stats = None
         self.val_stats = None
         self.stats_path = None

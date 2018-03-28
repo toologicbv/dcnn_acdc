@@ -4,9 +4,15 @@ import numpy as np
 import os
 
 
-def plot_cross(p_axis, x_lims, y_lims):
-    p_axis.plot([0.5] * 10, np.linspace(y_lims[0], y_lims[1], 10), 'r', alpha=0.3)
-    p_axis.plot(np.linspace(x_lims[0], x_lims[1], 10), [0.5] * 10, 'r', alpha=0.3)
+def create_figure_dir(fig_path):
+    if not os.path.isdir(fig_path):
+        os.makedirs(fig_path)
+
+
+def plot_cross(p_axis, m_x, m_y, x_lims, y_lims):
+    # m_x: mean value x-axis, m_y: mean value y-axis
+    p_axis.plot([m_x] * 10, np.linspace(y_lims[0], y_lims[1], 10), 'r', alpha=0.3)
+    p_axis.plot(np.linspace(x_lims[0], x_lims[1], 10), [m_y] * 10, 'r', alpha=0.3)
 
 
 def plot_slices_nums(p_axis, x_vals, y_vals, font_size=12):
@@ -17,14 +23,15 @@ def plot_slices_nums(p_axis, x_vals, y_vals, font_size=12):
 
 
 def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=False, image_range=None,
-                   u_type="bald", fig_name=None):
+                   u_type="bald", translate_img_range=True):
 
-    # model_name = exper_handler.exper.model_name
-    fig_output_dir = os.path.join(exper_handler.exper.config.root_dir, exper_handler.exper.output_dir)
-    fig_output_dir = os.path.join(fig_output_dir, exper_handler.exper.config.figure_path)
-    image_ids = exper_handler.test_results.image_ids
+    model_name = exper_handler.exper.model_name
+    fig_root_dir = os.path.join(exper_handler.exper.config.root_dir, exper_handler.exper.output_dir)
+    fig_root_dir = os.path.join(fig_root_dir, exper_handler.exper.config.figure_path)
+    image_names = exper_handler.test_results.image_names
     if image_range is None:
-        image_range = np.arange(len(exper_handler.test_results.images))
+        image_range = exper_handler.test_results.image_ids
+        print(image_range)
 
     """
         NOTE: test_results.uncertainty_stats is a list, containing dictionaries 1) "bald" and 2) "stddev"
@@ -40,6 +47,18 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
     x_lims = [0, 1.]
     y_lims = [-0.1, 1.1]
 
+    # translate image_range to indices in test_result object
+    if translate_img_range:
+        new_image_range = []
+        for idx in image_range:
+            try:
+                i = exper_handler.test_results.image_ids.index(idx)
+                new_image_range.append(i)
+            except ValueError:
+                print("WARNING - Can't find image with index {} in "
+                      "test_results.image_ids. Discarding!".format(idx))
+        image_range = new_image_range
+
     for img_idx in image_range:
         es_u_stats = []
         ed_u_stats = []
@@ -47,14 +66,15 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         ed_hd = []
         es_dice = []
         ed_dice = []
-        img_name = image_ids[img_idx][:image_ids[img_idx].find("_")]
+        img_name = image_names[img_idx]
+        img_id = exper_handler.test_results.image_ids[img_idx]
         img_acc = exper_handler.test_results.test_accuracy[img_idx]
         img_hd = exper_handler.test_results.test_hd[img_idx]
-        es_performance = "Dice \ HD (RV/Myo/LV):\t ES {:.2f}/{:.2f}/{:.2f} " \
-                         "\\ {:.2f}/{:.2f}/{:.2f}".format(img_acc[1], img_acc[2], img_acc[3],
+        es_performance = "(RV/Myo/LV):\t ES {:.2f}/{:.2f}/{:.2f} " \
+                         " HD: {:.2f}/{:.2f}/{:.2f}".format(img_acc[1], img_acc[2], img_acc[3],
                                                           img_hd[1], img_hd[2], img_hd[3])
         ed_performance = "\t\tED: {:.2f}/{:.2f}/{:.2f} " \
-                         "\\ {:.2f}/{:.2f}/{:.2f}".format(img_acc[5], img_acc[6], img_acc[7],
+                         " HD: {:.2f}/{:.2f}/{:.2f}".format(img_acc[5], img_acc[6], img_acc[7],
                                                           img_hd[5], img_hd[6], img_hd[7])
         es_performance = es_performance.expandtabs()
         ed_performance = ed_performance.expandtabs()
@@ -84,7 +104,9 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         total_uncert_ed = (ed_u_stats[0] - np.min(ed_u_stats[0])) / (np.max(ed_u_stats[0]) - np.min(ed_u_stats[0]))
 
         fig = plt.figure(figsize=(width, height))
-        fig.suptitle("Image: " + img_name + "\n\n" + es_performance + ed_performance, **config.title_font_medium)
+        fig.suptitle("Model " + model_name + "\n" + "Image: " + img_name + "(id={})".format(img_id) +
+                     "\n\n" + es_performance + ed_performance,
+                     **config.title_font_medium)
         # ---------------------------- PLOT (0,0) ----------------------------------------------------
         ax1 = plt.subplot2grid((2, 2), (0, 0), rowspan=1, colspan=1)
         ax1.scatter(es_dice.squeeze(), total_uncert_es, s=es_hd * 10, alpha=0.3, c='g')
@@ -94,7 +116,7 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         ax1.set_title("ES slice uncertainties (area=mean-hd) (#slices={})".format(num_of_slices))
         ax1.set_xlim(x_lims)
         ax1.set_ylim(y_lims)
-        plot_cross(ax1, x_lims, y_lims)
+        plot_cross(ax1, np.mean(es_dice.squeeze()), np.mean(total_uncert_es), x_lims, y_lims)
         # ---------------------------- PLOT (0,1) ----------------------------------------------------
         ax2 = plt.subplot2grid((2, 2), (0, 1), rowspan=1, colspan=1)
         ax2.scatter(ed_dice.squeeze(), total_uncert_ed, s=ed_hd * 10, alpha=0.3, c='b')
@@ -104,7 +126,7 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         ax2.set_title("ED slice uncertainties (area=mean-hd) (#slices={})".format(num_of_slices))
         ax2.set_xlim(x_lims)
         ax2.set_ylim(y_lims)
-        plot_cross(ax2, x_lims, y_lims)
+        plot_cross(ax2, np.mean(ed_dice.squeeze()), np.mean(total_uncert_ed), x_lims, y_lims)
         # ---------------------------------------------------------------------------------------------------------
         # Use number of seg errors as area of the marker
         # ---------------------------------------------------------------------------------------------------------
@@ -118,7 +140,7 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         ax3.set_title("ES slice uncertainties (area=seg-errors) (#slices={})".format(num_of_slices))
         ax3.set_xlim(x_lims)
         ax3.set_ylim(y_lims)
-        plot_cross(ax3, x_lims, y_lims)
+        plot_cross(ax3, np.mean(es_dice.squeeze()), np.mean(total_uncert_es), x_lims, y_lims)
         # ---------------------------- PLOT (1,1) ----------------------------------------------------
         ax4 = plt.subplot2grid((2, 2), (1, 1), rowspan=1, colspan=1)
         ax4.scatter(ed_dice.squeeze(), total_uncert_ed, s=ed_u_stats[1] * 0.1, alpha=0.3, c='b')
@@ -128,14 +150,14 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         ax4.set_title("ED slice uncertainties (area=seg-errors) (#slices={})".format(num_of_slices))
         ax4.set_xlim(x_lims)
         ax4.set_ylim(y_lims)
-        plot_cross(ax4, x_lims, y_lims)
+        plot_cross(ax4, np.mean(ed_dice.squeeze()), np.mean(total_uncert_ed), x_lims, y_lims)
 
         #   fig.tight_layout(rect=[0, 0.03, 1, 0.97])
         if do_save:
-            if fig_name is None:
-                fig_name = "slice_analysis_{}images".format(len(image_range))
-
-            fig_name = os.path.join(fig_output_dir, fig_name + ".pdf")
+            fig_dir = os.path.join(fig_root_dir, img_name)
+            create_figure_dir(fig_dir)
+            fig_name = "slice_analysis_img_{}".format(img_id)
+            fig_name = os.path.join(fig_dir, fig_name + ".pdf")
 
             plt.savefig(fig_name, bbox_inches='tight')
             print("INFO - Successfully saved fig %s" % fig_name)

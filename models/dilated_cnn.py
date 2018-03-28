@@ -196,14 +196,17 @@ class BaseDilated2DCNN(nn.Module):
         return test_loss, b_predictions
 
     def get_dice_losses(self, average=False):
+
         if not average:
             return self.np_dice_losses
         else:
             # REMEMBER: first 3 values are ES results, and last 3 values ED results
+            # NOTE: returns two scalar values, one for ES one for ED
             split = int(self.np_dice_losses.shape[0] * 0.5)
             return np.mean(self.np_dice_losses[0:split]), np.mean(self.np_dice_losses[split:])
 
     def get_accuracy(self):
+        # returns numpy array of shape [6], 3 for ES and 3 for ED
         return np.concatenate((self.np_dice_coeffs[1:4], self.np_dice_coeffs[5:8]))
 
     def get_brier_score(self):

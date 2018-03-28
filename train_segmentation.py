@@ -65,26 +65,7 @@ def training(exper_hdl):
                                                        or
                                                        exper_hdl.exper.epoch_id == exper_hdl.exper.run_args.epochs):
             # validate model
-            exper_hdl.next_val_run()
-            num_val_runs += 1
-            val_batch = TwoDimBatchHandler(exper_hdl.exper, batch_size=exper_hdl.exper.config.val_batch_size,
-                                           test_run=True)
-            val_batch.generate_batch_2d(dataset.images(train=False), dataset.labels(train=False))
-            val_loss, _ = dcnn_model.do_test(val_batch.get_images(), val_batch.get_labels())
-            val_accuracy = dcnn_model.get_accuracy()
-            val_dice_losses = dcnn_model.get_dice_losses(average=True)
-            # store epochID and validation loss
-            val_loss = val_loss.data.cpu().numpy()[0]
-            exper_hdl.exper.val_stats["mean_loss"][num_val_runs-1] = val_loss
-            exper_hdl.exper.val_stats["dice_coeff"][num_val_runs - 1] = val_accuracy
-            exper_hdl.set_accuracy(val_accuracy, val_run_id=num_val_runs)
-            exper_hdl.set_dice_losses(val_dice_losses, val_run_id=num_val_runs)
-            exper_hdl.logger.info("---> VALIDATION of model in epoch {}: current loss {:.3f}\t "
-                                  "dice-coeff:: ES {:.3f}/{:.3f}/{:.3f} --- "
-                                  "ED {:.3f}/{:.3f}/{:.3f}".format(exper_hdl.exper.epoch_id, val_loss,
-                                                                   val_accuracy[0], val_accuracy[1],
-                                                                   val_accuracy[2], val_accuracy[3],
-                                                                   val_accuracy[4], val_accuracy[5]))
+            exper_hdl.eval(dataset, dcnn_model, val_set_size=exper_hdl.exper.config.val_set_size)
 
         if exper_hdl.exper.run_args.chkpnt and (exper_hdl.exper.epoch_id % exper_hdl.exper.run_args.chkpnt_freq == 0 or
                                                 exper_hdl.exper.epoch_id == exper_hdl.exper.run_args.epochs):
