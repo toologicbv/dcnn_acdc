@@ -9,9 +9,11 @@ from tqdm import trange
 from pytz import timezone
 
 
-def datestr():
+def datestr(withyear=True):
     jetzt = datetime.now(timezone('Europe/Berlin')).strftime('%Y_%m_%d_%H_%M_%S.%f')[:-10]
     jetzt = jetzt.replace(" ", "_")
+    if not withyear:
+        jetzt = jetzt[5:]
     return jetzt
 
 

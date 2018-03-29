@@ -225,13 +225,16 @@ def get_img_stats_per_slice(img_slice_probs, img_slice, phase, p_err_std, p_corr
 
 class TestResults(object):
 
-    def __init__(self, exper):
+    def __init__(self, exper, use_dropout=False, mc_samples=1):
         """
             numpy arrays in self.pred_probs have shape [slices, classes, width, height]
                             self.pred_labels [classes, width, height, slices]
                             self.images [classes, width, height, slices]
                             self.pred_probs: [mc_samples, classes, width, height, slices]
         """
+        self.use_dropout = use_dropout
+        self.mc_samples = mc_samples
+
         self.images = []
         self.image_ids = []
         self.image_names = []
@@ -299,6 +302,7 @@ class TestResults(object):
     def compute_mean_stats(self):
 
         N = len(self.test_accuracy)
+        # print("#Images {}".format(N))
         if len(self.test_accuracy) == 0 or len(self.test_hd) == 0:
             raise ValueError("ERROR - there's no data that could be used to compute statistics!")
 
@@ -308,10 +312,13 @@ class TestResults(object):
         mean_hd = np.empty((0, columns_hd))
 
         for img_idx in np.arange(N):
+            # test_accuracy and test_hd are a vectors of 8 values, 0-3: ES, 4:7: ED
             dice = self.test_accuracy[img_idx]
             hausd = self.test_hd[img_idx]
             mean_dice = np.vstack([mean_dice, dice]) if mean_dice.size else dice
             mean_hd = np.vstack([mean_hd, hausd]) if mean_hd.size else hausd
+
+        # so we stack the image results and should end up with a matrix [#images, 8] for dice and hd
 
         if N > 1:
             self.dice_results = np.array([np.mean(mean_dice, axis=0), np.std(mean_dice, axis=0)])
@@ -1099,10 +1106,14 @@ class TestResults(object):
         self.image_probs_categorized = []
 
         if outfile is None:
-            rnd = np.random.randint(0, 1000)
-            print("Random number {}".format(rnd))
-            jetzt = datestr()
-            outfile = "test_results_{}".format(jetzt)
+            num_of_images = len(self.image_names)
+            if self.use_dropout:
+                outfile = "test_results_{}imgs_mc{}_".format(num_of_images, self.mc_samples)
+            else:
+                outfile = "test_results_{}imgs_".format(num_of_images)
+
+            jetzt = datestr(withyear=False)
+            outfile = outfile + jetzt
 
         outfile = os.path.join(self.save_output_dir, outfile + ".dll")
 

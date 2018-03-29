@@ -190,7 +190,8 @@ class ExperimentHandler(object):
         if use_seed:
             setSeed(1234, self.exper.run_args.cuda)
         if self.test_results is None:
-            self.test_results = TestResults(self.exper)
+            self.test_results = TestResults(self.exper, use_dropout=sample_weights, mc_samples=mc_samples)
+        print("test_result.use_dropout {}".format(self.test_results.use_dropout))
         # correct the divisor for calculation of stdev when low number of samples (biased), used in np.std
         if mc_samples <= 25 and mc_samples != 1:
             ddof = 1
@@ -321,8 +322,8 @@ class ExperimentHandler(object):
     def get_epoch_dice_coeffients(self):
         return self.exper.epoch_stats["dice_coeff"][self.exper.epoch_id - 1]
 
-    def reset_results(self):
-        self.test_results = None
+    def reset_results(self, use_dropout=False, mc_samples=1):
+        self.test_results = TestResults(self.exper, use_dropout=use_dropout, mc_samples=mc_samples)
 
     def set_model_name(self, model_name):
         self.exper.model_name = model_name

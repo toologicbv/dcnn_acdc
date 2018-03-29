@@ -9,10 +9,14 @@ def create_figure_dir(fig_path):
         os.makedirs(fig_path)
 
 
-def plot_cross(p_axis, m_x, m_y, x_lims, y_lims):
+def plot_cross(p_axis, x_values, y_values, x_lims, y_lims, plot_stddev=True):
     # m_x: mean value x-axis, m_y: mean value y-axis
+    m_x, x_std = np.mean(x_values), np.std(x_values)
+    m_y, y_std = np.mean(y_values), np.std(y_values)
     p_axis.plot([m_x] * 10, np.linspace(y_lims[0], y_lims[1], 10), 'r', alpha=0.3)
+    p_axis.fill_between(m_x + x_std, m_x - x_std, 'r', alpha=0.15)
     p_axis.plot(np.linspace(x_lims[0], x_lims[1], 10), [m_y] * 10, 'r', alpha=0.3)
+    p_axis.fill_between(m_y + y_std, m_y - y_std, 'r', alpha=0.15)
 
 
 def plot_slices_nums(p_axis, x_vals, y_vals, font_size=12):
@@ -106,7 +110,7 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         fig = plt.figure(figsize=(width, height))
         fig.suptitle("Model " + model_name + "\n" + "Image: " + img_name + "(id={})".format(img_id) +
                      "\n\n" + es_performance + ed_performance,
-                     **config.title_font_medium)
+                     **config.title_font_small)
         # ---------------------------- PLOT (0,0) ----------------------------------------------------
         ax1 = plt.subplot2grid((2, 2), (0, 0), rowspan=1, colspan=1)
         ax1.scatter(es_dice.squeeze(), total_uncert_es, s=es_hd * 10, alpha=0.3, c='g')
@@ -116,7 +120,7 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         ax1.set_title("ES slice uncertainties (area=mean-hd) (#slices={})".format(num_of_slices))
         ax1.set_xlim(x_lims)
         ax1.set_ylim(y_lims)
-        plot_cross(ax1, np.mean(es_dice.squeeze()), np.mean(total_uncert_es), x_lims, y_lims)
+        plot_cross(ax1, es_dice.squeeze(), total_uncert_es, x_lims, y_lims)
         # ---------------------------- PLOT (0,1) ----------------------------------------------------
         ax2 = plt.subplot2grid((2, 2), (0, 1), rowspan=1, colspan=1)
         ax2.scatter(ed_dice.squeeze(), total_uncert_ed, s=ed_hd * 10, alpha=0.3, c='b')
@@ -126,7 +130,7 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         ax2.set_title("ED slice uncertainties (area=mean-hd) (#slices={})".format(num_of_slices))
         ax2.set_xlim(x_lims)
         ax2.set_ylim(y_lims)
-        plot_cross(ax2, np.mean(ed_dice.squeeze()), np.mean(total_uncert_ed), x_lims, y_lims)
+        plot_cross(ax2, ed_dice.squeeze(), total_uncert_ed, x_lims, y_lims)
         # ---------------------------------------------------------------------------------------------------------
         # Use number of seg errors as area of the marker
         # ---------------------------------------------------------------------------------------------------------
@@ -140,7 +144,7 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         ax3.set_title("ES slice uncertainties (area=seg-errors) (#slices={})".format(num_of_slices))
         ax3.set_xlim(x_lims)
         ax3.set_ylim(y_lims)
-        plot_cross(ax3, np.mean(es_dice.squeeze()), np.mean(total_uncert_es), x_lims, y_lims)
+        plot_cross(ax3, es_dice.squeeze(), total_uncert_es, x_lims, y_lims)
         # ---------------------------- PLOT (1,1) ----------------------------------------------------
         ax4 = plt.subplot2grid((2, 2), (1, 1), rowspan=1, colspan=1)
         ax4.scatter(ed_dice.squeeze(), total_uncert_ed, s=ed_u_stats[1] * 0.1, alpha=0.3, c='b')
@@ -150,7 +154,7 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         ax4.set_title("ED slice uncertainties (area=seg-errors) (#slices={})".format(num_of_slices))
         ax4.set_xlim(x_lims)
         ax4.set_ylim(y_lims)
-        plot_cross(ax4, np.mean(ed_dice.squeeze()), np.mean(total_uncert_ed), x_lims, y_lims)
+        plot_cross(ax4, ed_dice.squeeze(), total_uncert_ed, x_lims, y_lims)
 
         #   fig.tight_layout(rect=[0, 0.03, 1, 0.97])
         if do_save:
