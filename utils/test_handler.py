@@ -31,8 +31,12 @@ class ACDC2017TestHandler(object):
     new_voxel_spacing = 1.4
 
     def __init__(self, exper_config, search_mask=None, nclass=4, load_func=load_mhd_to_numpy,
-                 fold_ids=[1], debug=False, use_cuda=True, batch_size=1, val_only=True):
+                 fold_ids=[1], debug=False, use_cuda=True, batch_size=None, val_only=True,
+                 use_iso_path=False):
 
+        # IMPORTANT: boolean flag indicating whether to load images from image_iso/reference_iso path or
+        # from original directory (not resized). If True we don't resize the image during loading
+        self.use_iso_path = use_iso_path
         # IMPORTANT flag indicating whether we're loading only the validation set from the specified fold(s)
         self.val_only = val_only
         self.config = exper_config
@@ -44,7 +48,7 @@ class ACDC2017TestHandler(object):
         self.abs_path_fold = os.path.join(self.data_dir, "fold")
         self.images = []
         # storing a concatenated filename used as an identification during testing and used for the output
-        # filename of the figures printed during test evaluation e.g. patien007_frame001_frame007
+        # filename of the figures printed during test evaluation e.g. patien007
         self.img_file_names = []
         self.labels = []
         self.spacings = []
@@ -69,7 +73,10 @@ class ACDC2017TestHandler(object):
         self.slice_counter = 0
         self.num_of_models = 1
         self.use_cuda = use_cuda
-        self.batch_size = batch_size * 2  # multiply by 2 because each "image" contains an ED and ES part
+        if batch_size is not None:
+            self.batch_size = batch_size * 2  # multiply by 2 because each "image" contains an ED and ES part
+        else:
+            self.batch_size = None
         # self.out_img = np.zeros((self.num_classes, self.image.shape[0], self.image.shape[1], self.image.shape[2]))
         # self.overlay_images = {'ED_RV': np.zeros((self.image.shape[0], self.image.shape[1], self.image.shape[2])),
         #                        'ED_LV': np.zeros((self.image.shape[0], self.image.shape[1], self.image.shape[2]))}
@@ -78,6 +85,11 @@ class ACDC2017TestHandler(object):
         self._load_file_list(file_list)
 
     def _set_pathes(self):
+
+        if self.use_iso_path:
+            # load images from a directory that only contains a couple of images
+            ACDC2017TestHandler.image_path = ACDC2017TestHandler.image_path + "_iso"
+            ACDC2017TestHandler.label_path = ACDC2017TestHandler.label_path + "_iso"
 
         if self.debug:
             # load images from a directory that only contains a couple of images
@@ -116,7 +128,10 @@ class ACDC2017TestHandler(object):
     def _load_file_list(self, file_list):
 
         file_list.sort()
-        batch_file_list = file_list[:self.batch_size]
+        if self.batch_size is not None:
+            batch_file_list = file_list[:self.batch_size]
+        else:
+            batch_file_list = file_list
 
         for idx in tqdm(np.arange(0, len(batch_file_list), 2)):
             # tuple contains [0]=train file name and [1] reference file name
@@ -124,6 +139,7 @@ class ACDC2017TestHandler(object):
             # first frame is always the end-systolic MRI scan, filename ends with "1"
             mri_scan_es, origin, spacing = self.load_func(img_file, data_type=ACDC2017TestHandler.pixel_dta_type,
                                                           swap_axis=True)
+            # es_abs_file_name = os.path.dirname(img_file)  # without actual filename, just directory
             es_file_name = os.path.splitext(os.path.basename(img_file))[0]
             # get rid off _frameXX and take only the patient name
             es_file_name = es_file_name[:es_file_name.find("_")]
@@ -156,13 +172,13 @@ class ACDC2017TestHandler(object):
             self.labels.append(labels)
         print("INFO - Successfully loaded {} ED/ES patient pairs".format(len(self.images)))
 
-    def _preprocess(self, image, spacing, poly_order=3, do_pad=True):
+    def _preprocess(self, image, spacing, poly_order=3, do_zoom=True, do_pad=True):
 
-        # print("Spacings ", spacing)
-        zoom_factors = tuple((spacing[0] / ACDC2017TestHandler.new_voxel_spacing,
-                             spacing[1] / ACDC2017TestHandler.new_voxel_spacing, 1))
+        if do_zoom:
+            zoom_factors = tuple((spacing[0] / ACDC2017TestHandler.new_voxel_spacing,
+                                 spacing[1] / ACDC2017TestHandler.new_voxel_spacing, 1))
 
-        image = resample_image_scipy(image, new_spacing=zoom_factors, order=poly_order)
+            image = resample_image_scipy(image, new_spacing=zoom_factors, order=poly_order)
         # we only pad images not the references aka labels...hopefully
         if do_pad:
             image = np.pad(image, ((ACDC2017TestHandler.pad_size, ACDC2017TestHandler.pad_size),
@@ -199,10 +215,11 @@ class ACDC2017TestHandler(object):
                                     self.b_orig_spacing[2]))
         # store the segmentation errors. shape [#slices, #classes]
         self.b_seg_errors = np.zeros((self.b_image.shape[3], self.num_of_classes * 2)).astype(np.int)
-        # currently measuring four values per slice - cardiac phase (2): total uncertainty, number of pixels with
+        # currently measuring 4 values per slice - cardiac phase (2): total uncertainty, number of pixels with
         # uncertainty (>eps), number of pixels with uncertainty above u_threshold, number of connected components in
         # 2D slice (5)
-        self.b_uncertainty_stats = {'stddev': np.zeros((2, 4, num_of_slices)),
+        # Important, for stddev we keep the 8 classes but splitted per phase, hence 2 x self.num_of_classes
+        self.b_uncertainty_stats = {'stddev': np.zeros((2, self.num_of_classes, 4, num_of_slices)),
                                     'bald': np.zeros((2, 4, num_of_slices)), "u_threshold": 0.}
         self.b_acc_slices = np.zeros((2, self.num_of_classes, num_of_slices))
         self.b_hd_slices = np.zeros((2, self.num_of_classes, num_of_slices))
@@ -317,52 +334,55 @@ class ACDC2017TestHandler(object):
         same simple overall statistics per slide for stddev and BALD uncertainty measures.
         Note:
             self.b_bald_map     [2, width, height, #slices]
-            self.b_stddev_map   [#classes, width, height, #slices]
+            self.b_stddev_map   [#classes (8), width, height, #slices]
         :param u_type:
         :param u_threshold:
         :param connectivity:
-        :param eps:
+        :param eps: tiny threshold to filter out the smallest uncertainties
         :return:
         """
         if u_type == "bald":
-            uncertainty_map = self.b_bald_map[:, :, :, self.slice_counter]
+            uncertainty_map = self.b_bald_map[:, np.newaxis, :, :, self.slice_counter]
         elif u_type == "stddev":
             # remember that we store the stddev for each class per pixel, so b_stddev_map has
-            # shape [#classes, width, height, #slices]. Hence, we average over dim0 (classes) for ES and ED
+            # shape [#classes (8), width, height, #slices]. Hence, we average over dim0 (classes) for ES and ED
             uncertainty_map = self.b_stddev_map[:, :, :, self.slice_counter]
-            uncertainty_map = np.concatenate((np.mean(uncertainty_map[:self.num_of_classes], axis=0, keepdims=True),
-                                              np.mean(uncertainty_map[self.num_of_classes:], axis=0, keepdims=True)))
-        # shape uncertainty_map: [2, width, height]
-
+            # uncertainty_map = np.concatenate((np.mean(uncertainty_map[:self.num_of_classes], axis=0, keepdims=True),
+            #                                  np.mean(uncertainty_map[self.num_of_classes:], axis=0, keepdims=True)))
+            # we keep the 8 dimensions for stddev but splitted over 2 x 4 (per phase)
+            uncertainty_map = np.concatenate((uncertainty_map[np.newaxis, :self.num_of_classes],
+                                              uncertainty_map[np.newaxis, self.num_of_classes:]))
         else:
             raise ValueError("{} is not a supported uncertainty type.".format(u_type))
         # we compute stats for ES and ED phase
         for phase in np.arange(uncertainty_map.shape[0]):
-            pred_uncertainty_bool = np.zeros(uncertainty_map[phase].shape).astype(np.bool)
-            # index maps for uncertain pixels
-            mask_uncertain = uncertainty_map[phase] > eps
-            # the u_threshold was already set in the method set_pred_labels above
-            mask_uncertain_above_tre = uncertainty_map[phase] > self.b_uncertainty_stats["u_threshold"]
-            # create binary mask to determine morphology
-            pred_uncertainty_bool[mask_uncertain_above_tre] = True
-
-            # binary structure
-            footprint1 = generate_binary_structure(pred_uncertainty_bool.ndim, connectivity)
-            # label distinct binary objects
-            labelmap1, num_of_objects = label(pred_uncertainty_bool, footprint1)
-            total_uncertainty = np.sum(uncertainty_map[phase][mask_uncertain])
-
-            t_num_pixel_uncertain = np.count_nonzero(uncertainty_map[phase][mask_uncertain])
-            t_num_pixel_uncertain_above_tre = np.count_nonzero(uncertainty_map[phase][mask_uncertain_above_tre])
-
-            if u_type == "bald":
-                self.b_uncertainty_stats["bald"][phase, :, self.slice_counter] = \
-                    np.array([total_uncertainty, t_num_pixel_uncertain, t_num_pixel_uncertain_above_tre,
-                              num_of_objects])
-            else:
-                self.b_uncertainty_stats["stddev"][phase, :, self.slice_counter] = \
-                    np.array([total_uncertainty, t_num_pixel_uncertain, t_num_pixel_uncertain_above_tre,
-                              num_of_objects])
+            for dim1 in np.arange(uncertainty_map.shape[1]):  # we loop over dim1 because stddev still has classes
+                                                              # for bald this is a fake loop
+                pred_uncertainty_bool = np.zeros(uncertainty_map[phase, dim1].shape).astype(np.bool)
+                # index maps for uncertain pixels
+                mask_uncertain = uncertainty_map[phase, dim1] > eps
+                # the u_threshold was already set in the method set_pred_labels above
+                mask_uncertain_above_tre = uncertainty_map[phase, dim1] > self.b_uncertainty_stats["u_threshold"]
+                # create binary mask to determine morphology
+                pred_uncertainty_bool[mask_uncertain_above_tre] = True
+                total_uncertainty = np.sum(uncertainty_map[phase, dim1][mask_uncertain])
+                t_num_pixel_uncertain = np.count_nonzero(uncertainty_map[phase, dim1][mask_uncertain])
+                t_num_pixel_uncertain_above_tre = np.count_nonzero(uncertainty_map[phase, dim1][mask_uncertain_above_tre])
+                # The following two statements are preliminary. We determine the number of connected components.
+                # The idea is that more connected components could indicate more spatial diversity in the uncertainty
+                # and hence we could use this to compute a ratio between total uncertainty / num_of_objects (ccomponents)
+                # binary structure
+                footprint1 = generate_binary_structure(pred_uncertainty_bool.ndim, connectivity)
+                # label distinct binary objects
+                _, num_of_objects = label(pred_uncertainty_bool, footprint1)
+                if u_type == "bald":
+                    self.b_uncertainty_stats["bald"][phase, :, self.slice_counter] = \
+                        np.array([total_uncertainty, t_num_pixel_uncertain, t_num_pixel_uncertain_above_tre,
+                                  num_of_objects])
+                else:
+                    self.b_uncertainty_stats["stddev"][phase, dim1, :, self.slice_counter] = \
+                        np.array([total_uncertainty, t_num_pixel_uncertain, t_num_pixel_uncertain_above_tre,
+                                  num_of_objects])
 
     def set_stddev_map(self, slice_std):
         """

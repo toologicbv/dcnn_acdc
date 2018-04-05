@@ -166,7 +166,7 @@ class ExperimentHandler(object):
 
     def test(self, model, test_set, image_num=0, mc_samples=1, sample_weights=False, compute_hd=False,
              use_uncertainty=False, u_threshold=None, use_seed=False, verbose=False, store_details=False,
-             do_filter=True):
+             do_filter=True, repeated_run=False):
         """
 
         :param model:
@@ -184,6 +184,8 @@ class ExperimentHandler(object):
         :param store_details: if TRUE TestResult object will hold all images/labels/predicted labels, mc-stats etc.
         which basically results in a very large object. Should not be used for evaluation of many test images,
         most certainly only for 1-3 images in order to generate some figures.
+        :param repeated_run: used during ensemble testing. so we use the same model, different checkpoint, to
+               evaluate the performance on the test set. Variable is used in order to indicate this situation
         :return:
         """
 
@@ -191,17 +193,16 @@ class ExperimentHandler(object):
             setSeed(1234, self.exper.run_args.cuda)
         if self.test_results is None:
             self.test_results = TestResults(self.exper, use_dropout=sample_weights, mc_samples=mc_samples)
-        print("test_result.use_dropout {}".format(self.test_results.use_dropout))
+
         # correct the divisor for calculation of stdev when low number of samples (biased), used in np.std
         if mc_samples <= 25 and mc_samples != 1:
             ddof = 1
         else:
             ddof = 0
         # b_predictions has shape [mc_samples, classes, width, height, slices]
-        num_of_classes = int(test_set.labels[image_num].shape[0] / 2)
         b_predictions = np.zeros(tuple([mc_samples] + list(test_set.labels[image_num].shape)))
-        num_of_slices = test_set.images[image_num].shape[3]
         slice_idx = 0
+        # batch_generator iterates over the slices of a particular image
         for batch_image, batch_labels in test_set.batch_generator(image_num):
 
             # NOTE: batch image shape (autograd.Variable): [1, 2, width, height] 1=batch size, 2=ES/ED image
@@ -269,12 +270,13 @@ class ExperimentHandler(object):
         test_accuracy, test_hd = test_set.get_accuracy(compute_hd=compute_hd, do_filter=do_filter)
         self.test_results.add_results(test_set.b_image, test_set.b_labels, test_set.b_image_id,
                                       test_set.b_pred_labels, b_predictions, test_set.b_stddev_map,
-                                      test_accuracy, test_hd, test_set.b_seg_errors, store_all=store_details,
+                                      test_accuracy, test_hd, seg_errors=test_set.b_seg_errors,
+                                      store_all=store_details,
                                       bald_maps=test_set.b_bald_map,
                                       uncertainty_stats=test_set.b_uncertainty_stats,
                                       test_accuracy_slices=test_set.b_acc_slices,
                                       test_hd_slices=test_set.b_hd_slices,
-                                      image_name=test_set.b_image_name)
+                                      image_name=test_set.b_image_name, repeated_run=repeated_run)
         print("Image {} - Test accuracy: test loss {:.3f}\t "
               "dice(RV/Myo/LV): ES {:.2f}/{:.2f}/{:.2f} --- "
               "ED {:.2f}/{:.2f}/{:.2f}".format(image_num+1, means_test_loss,
@@ -341,7 +343,7 @@ class ExperimentHandler(object):
         if not full_path:
             path_to_exp = os.path.join(config.root_dir, os.path.join(config.log_root_path, path_to_exp))
 
-        print("Load from {}".format(path_to_exp))
+        print("Load experiment from {}".format(path_to_exp))
         try:
             with open(path_to_exp, 'rb') as f:
                 experiment = dill.load(f)

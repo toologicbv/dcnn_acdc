@@ -52,6 +52,7 @@ class BaseConfig(object):
         self.log_root_path = "logs"
         self.figure_path = "figures"
         self.stats_path = "stats"
+        self.u_map_dir = "u_maps"
         self.checkpoint_path = "checkpoints"
         self.logger_filename = "run_out.log"
         # standard image name

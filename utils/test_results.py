@@ -241,7 +241,7 @@ class TestResults(object):
         self.labels = []
         self.pred_labels = []
         self.mc_pred_probs = []
-        self.uncertainty_maps = []
+        self.stddev_maps = []
         self.seg_errors = []
         self.bald_maps = []
         self.uncertainty_stats = []
@@ -264,40 +264,58 @@ class TestResults(object):
         self.save_output_dir = os.path.join(exper.config.root_dir,
                                             os.path.join(exper.output_dir, exper.config.stats_path))
 
-    def add_results(self, batch_image, batch_labels, image_id, pred_labels, b_predictions, uncertainty_map,
+    def add_results(self, batch_image, batch_labels, image_id, pred_labels, b_predictions, stddev_map,
                     test_accuracy, test_hd, seg_errors, store_all=False, bald_maps=None, uncertainty_stats=None,
-                    test_hd_slices=None, test_accuracy_slices=None, image_name=None):
+                    test_hd_slices=None, test_accuracy_slices=None, image_name=None,
+                    repeated_run=False):
         """
 
         :param batch_image: [2, width, height, slices]
         :param batch_labels:
         :param pred_labels:
         :param b_predictions:
-        :param uncertainty_map:
+        :param stddev_map: [#classes (8), width, height, slices]
+        :param bald_maps: [2, width, height, slices]
+        :param uncertainty_stats: dictionary with keys "bald", "stddev" and "u_threshold"
+                                  the first 2 contain numpy arrays of shape [2, half classes (4), #slices]
         :param test_accuracy:
         :param test_hd:
+        :param repeated_run: when we use multiple checkpoints aka models during testing, we don't want to
+               save the image details everytime we run the same model ensemble on the test set although we want
+               to average the final result over the ensemble runs (hence we save the performance measures but not
+               the image details.
+
         :return:
         """
         # get rid off padding around image
         batch_image = batch_image[:, config.pad_size:-config.pad_size, config.pad_size:-config.pad_size, :]
+        # during ensemble testing we only want to store the images and ground truth labels once
         if store_all:
-            self.images.append(batch_image)
-            self.labels.append(batch_labels)
+            if not repeated_run:
+                self.images.append(batch_image)
+                self.labels.append(batch_labels)
+        if store_all:
             self.pred_labels.append(pred_labels)
             self.mc_pred_probs.append(b_predictions)
-            self.uncertainty_maps.append(uncertainty_map)
+            self.stddev_maps.append(stddev_map)
             self.bald_maps.append(bald_maps)
-        self.image_ids.append(image_id)
-        self.image_names.append(image_name)
+        # when using multiple models for evaluation during testing, we only want to store the image IDs and
+        # names once.
+        if not repeated_run:
+            self.image_ids.append(image_id)
+            self.image_names.append(image_name)
+            self.num_of_samples.append(b_predictions.shape[0])
+
         self.test_accuracy.append(test_accuracy)
         self.test_hd.append(test_hd)
         if test_hd_slices is not None:
             self.test_hd_slices.append(test_hd_slices)
         if test_accuracy_slices is not None:
             self.test_accuracy_slices.append(test_accuracy_slices)
+        # segmentation errors is a numpy error with size [#slices, #classes (8)]
         self.seg_errors.append(seg_errors)
-        self.uncertainty_stats.append(uncertainty_stats)
-        self.num_of_samples.append(b_predictions.shape[0])
+        if self.num_of_samples[-1] > 1:
+            self.uncertainty_stats.append(uncertainty_stats)
 
     def compute_mean_stats(self):
 
@@ -360,7 +378,7 @@ class TestResults(object):
         # this tensors contains all probs for the samples, but we will work with the means
         mc_pred_probs = self.mc_pred_probs[image_num]
         mean_pred_probs = np.mean(mc_pred_probs, axis=0)
-        std_pred_probs = self.uncertainty_maps[image_num]
+        std_pred_probs = self.stddev_maps[image_num]
         bald_maps = self.bald_maps[image_num]
         num_slices = labels.shape[3]
         num_classes = labels.shape[0]
@@ -684,7 +702,7 @@ class TestResults(object):
         image = self.images[image_num]
         labels = self.labels[image_num]
         img_pred_labels = self.pred_labels[image_num]
-        uncertainty_map = self.uncertainty_maps[image_num]
+        uncertainty_map = self.stddev_maps[image_num]
         num_of_classes = labels.shape[0]
         half_classes = num_of_classes / 2
         num_of_slices = labels.shape[3]
@@ -837,7 +855,7 @@ class TestResults(object):
         image_probs = self.image_probs_categorized[image_num]
         pred_labels = self.pred_labels[image_num]
         label = self.labels[image_num]
-        uncertainty_map = self.uncertainty_maps[image_num]
+        uncertainty_map = self.stddev_maps[image_num]
         if use_bald:
             bald_map = self.bald_maps[image_num]  # shape [2, width, height, #slices] 0=ES balds, 1=ED balds so per phase
             bald_min, bald_max = np.min(bald_map), np.max(bald_map)
@@ -1091,7 +1109,7 @@ class TestResults(object):
     def N(self):
         return len(self.pred_labels)
 
-    def save_results(self, outfile=None):
+    def save_results(self, fold_ids=None, outfile=None):
 
         # Saving the list with dictionaries for the slice statistics (probs, stddev) is amazingly slow.
         # So we don't save this object(s), but we can generate these stats when loading the object (see below).
@@ -1107,10 +1125,14 @@ class TestResults(object):
 
         if outfile is None:
             num_of_images = len(self.image_names)
+
             if self.use_dropout:
                 outfile = "test_results_{}imgs_mc{}_".format(num_of_images, self.mc_samples)
             else:
                 outfile = "test_results_{}imgs_".format(num_of_images)
+            if fold_ids is not None:
+                str_fold_ids = "folds" + "_".join([str(i) for i in fold_ids])
+                outfile += str_fold_ids + "_"
 
             jetzt = datestr(withyear=False)
             outfile = outfile + jetzt
