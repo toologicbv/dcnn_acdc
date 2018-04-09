@@ -11,7 +11,7 @@ from common.parsing import create_def_argparser, run_dict
 
 from common.common import create_logger, create_exper_label, setSeed
 from config.config import config, DEFAULT_DCNN_MC_2D, DEFAULT_DCNN_2D
-from utils.batch_handlers import TwoDimBatchHandler
+from utils.batch_handlers import TwoDimBatchHandler, BatchStatistics
 import models.dilated_cnn
 from utils.test_results import TestResults
 from common.acquisition_functions import bald_function
@@ -43,6 +43,10 @@ class ExperimentHandler(object):
         self.exper.val_run_id += 1
         self.num_val_runs += 1
         self.exper.val_stats["epoch_ids"][self.exper.val_run_id] = self.exper.epoch_id
+
+    def init_batch_statistics(self, image_names):
+        # create a batch statistics object
+        self.exper.batch_stats = BatchStatistics(image_names)
 
     def save_experiment(self, file_name=None, final_run=False):
 
@@ -165,8 +169,8 @@ class ExperimentHandler(object):
         del val_batch
 
     def test(self, model, test_set, image_num=0, mc_samples=1, sample_weights=False, compute_hd=False,
-             use_uncertainty=False, u_threshold=None, use_seed=False, verbose=False, store_details=False,
-             do_filter=True, repeated_run=False):
+             use_uncertainty=False, referral_threshold=None, use_seed=False, verbose=False, store_details=False,
+             do_filter=True, repeated_run=False, u_threshold=0.01):
         """
 
         :param model:
@@ -175,12 +179,17 @@ class ExperimentHandler(object):
         :param mc_samples:
         :param sample_weights:
         :param compute_hd:
-        :param use_uncertainty:
-        :param u_threshold:
+        :param use_uncertainty: Boolean indicating whether we use uncertainties (bald/stddev) to set pixel labels
+        to most common value (binary) if uncertainty of pixel is above a certain threshold (parameter
+        referral_threshold)
+        :param referral_threshold: see explanation "use_uncertainty". This is the threshold parameter.
+        :param u_threshold: Another threshold! used to compute the uncertainty statistics. We're currently using
+        a default value of 0.01 to filter out very tiny values but could be used to investigate the effect of
+        filtering out lower uncertainty values because may be this helps distinguishing levels of uncertainties in
+        image slices.
         :param use_seed:
         :param verbose:
         :param do_filter: use post processing 6-connected components on predicted labels (per class)
-        :param use_percentiles: optionally use percentiles to filter outliers and then compute pred labels
         :param store_details: if TRUE TestResult object will hold all images/labels/predicted labels, mc-stats etc.
         which basically results in a very large object. Should not be used for evaluation of many test images,
         most certainly only for 1-3 images in order to generate some figures.
@@ -230,15 +239,18 @@ class ExperimentHandler(object):
 
             means_test_loss = np.mean(b_test_losses)
             if use_uncertainty:
-                test_set.set_pred_labels(mean_test_pred, pred_stddev=std_test_pred, u_threshold=u_threshold,
+                test_set.set_pred_labels(mean_test_pred, pred_stddev=std_test_pred,
+                                         referral_threshold=referral_threshold,
                                          verbose=verbose, do_filter=do_filter)
             else:
                 # NOTE: we set do_filter (connected components post-processing) to FALSE here because we will do
                 # this at the end for the complete 3D label object, but not for the individual slices
-                test_set.set_pred_labels(mean_test_pred, u_threshold=u_threshold, verbose=verbose, do_filter=False)
+                # NOTE: we set referral_threshold to 0. because we don't want to use uncertainties!
+                test_set.set_pred_labels(mean_test_pred, referral_threshold=0.,
+                                         verbose=verbose, do_filter=False)
 
-            test_set.set_stddev_map(std_test_pred)
-            test_set.set_bald_map(bald_values)
+            test_set.set_stddev_map(std_test_pred, u_threshold=u_threshold)
+            test_set.set_bald_map(bald_values, u_threshold=u_threshold)
             slice_acc, slice_hd = test_set.compute_slice_accuracy(compute_hd=compute_hd)
             if sample_weights:
                 # NOTE: currently only displaying the BALD uncertainty stats but we also capture the stddev stats
@@ -387,6 +399,7 @@ class Experiment(object):
         self.num_val_runs = 0
         self.val_run_id = -1
         self.init_statistics()
+        self.batch_statistics = None
 
     def init_statistics(self):
         if self.run_args.val_freq != 0:
@@ -418,10 +431,6 @@ class Experiment(object):
     @property
     def validation_epoch_ids(self):
         return self.val_stats['epoch_ids']
-
-    def start(self, exper_logger=None):
-
-        pass
 
     def _set_path(self):
         if self.run_args.log_dir is None:

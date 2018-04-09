@@ -13,6 +13,38 @@ from in_out.read_save_images import write_numpy_to_image
 # from in_out.load_data import ACDC2017DataSet
 
 
+class BatchStatistics(object):
+
+    # TO DO: should be traced in the Dataset object, so that we can use it here
+    max_img_slices = 15
+
+    def __init__(self, image_names):
+        """
+        WE ARE CURRENTLY ONLY TRACKING THE USED IMAGE AND SLICE ID IN THE BATCHES.
+        LATER WE WANT TO TRACK THE OFFSETs WHEN WE HOPEFULLY GUIDE TRAINING TO AREAS IN THE IMAGE
+        WHERE THE UNCERTAINTY IS HIGH.
+        :param dataset:
+        """
+        self.num_of_images = len(image_names)
+        self.image_names = image_names
+        self.img_slice_stats = np.zeros((self.num_of_images, BatchStatistics.max_img_slices))
+
+    def update_stats(self, batch_stats):
+        """
+
+        :param batch_stats: shape [batch_size, 2], where index of dim1: 0=imageID and 1=sliceID
+        :return:
+
+            NOTE: we're assuming that imageIDs and sliceIDs start from 0, so this is immediately
+            compatible with the indices of the img_slice_stats matrix
+
+        """
+        for idx in np.arange(batch_stats.shape[0]):
+            i = int(batch_stats[idx, 0])
+            j = int(batch_stats[idx, 1])
+            self.img_slice_stats[i, j] += 1
+
+
 class BatchHandler(object):
     __metaclass__ = abc.ABCMeta
 
@@ -21,14 +53,6 @@ class BatchHandler(object):
 
     @abc.abstractmethod
     def cuda(self):
-        pass
-
-    @abc.abstractmethod
-    def __call__(self, *args, **kwargs):
-        pass
-
-    @abc.abstractmethod
-    def backward(self, *args):
         pass
 
 
@@ -41,9 +65,9 @@ class TwoDimBatchHandler(BatchHandler):
 
     def __init__(self, exper, test_run=False, batch_size=None, num_classes=8):
         if batch_size is None:
-            self.batch_size = exper.run_args.batch_size
+            self.batch_size = int(exper.run_args.batch_size)
         else:
-            self.batch_size = batch_size
+            self.batch_size = int(batch_size)
 
         self.test_run = test_run
         # the number of classes to 8 but sometimes we'll need to work with half of the classes (4 for ES and ED)
@@ -61,16 +85,12 @@ class TwoDimBatchHandler(BatchHandler):
         # this objects holds for each image-slice the separate class labels, so one set for each class
         self.b_labels_per_class = None
         self.config = exper.config
+        # we keep track of the images/slices we are using in each batch, 2nd dim for tuple (imageID, sliceID)
+        self.batch_stats = np.zeros((self.batch_size, 2))
 
     def cuda(self):
         self.b_images = self.b_images.cuda()
         self.b_labels_per_class = self.b_labels_per_class.cuda()
-
-    def __call__(self, exper, network):
-        print("Batch size {}".format(exper.run_args.batch_size))
-
-    def backward(self, *args):
-        pass
 
     def set_pred_labels(self, pred_per_class):
         # in order to save memory we cast the object as NUMPY array
@@ -82,16 +102,16 @@ class TwoDimBatchHandler(BatchHandler):
     def get_labels(self):
         return self.b_labels_per_class
 
-    def generate_batch_2d(self, images, labels, save_batch=False, logger=None):
+    def generate_batch_2d(self, images, labels, img_slice_ids=None, save_batch=False, logger=None):
         """
         Variable images and labels are LISTS containing image slices, hence len(images) = number of total slices
         Each image slice (and label slice) has the following tensor dimensions:
 
-         images:    [2 (ED and ES channels), x-axis, y-axis]
-         labels:    [2 (ED and ES channels),  x-axis, y-axis]
+         images:    [2 (ES and ED channels), x-axis, y-axis]
+         labels:    [2 (ES and ED channels),  x-axis, y-axis]
 
-         IMPORTANT NOTE: first dim has size 2 and index "0" = ED image
-                                                  index "1" = ES image
+         IMPORTANT NOTE: first dim has size 2 and index "0" = ES image
+                                                  index "1" = ED image
 
         This applies to image and label
 
@@ -110,6 +130,12 @@ class TwoDimBatchHandler(BatchHandler):
             # img_nums.append(str(ind))
             img = images[ind]
             label = labels[ind]
+            if img_slice_ids is not None:
+                img_sliceID = img_slice_ids[ind]
+            else:
+                img_sliceID = np.zeros(2)
+            # track imageID/sliceID
+            self.batch_stats[idx, :] = img_sliceID
             # note img tensor has 3-dim and the first is equal to 2, because we concatenated ED and ES images
             offx = np.random.randint(0, img.shape[1] - self.ps_wp)
             offy = np.random.randint(0, img.shape[2] - self.ps_wp)

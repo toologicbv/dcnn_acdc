@@ -19,6 +19,54 @@ from scipy.ndimage.measurements import label
 from scipy.ndimage.morphology import generate_binary_structure
 
 
+def test_ensemble(test_set, exper_hdl, mc_samples=10, sample_weights=True, use_uncertainty=False,
+                  referral_threshold=None, image_range=None, verbose=False, reset_results=False,
+                  store_details=False, generate_stats=False, save_results=False, use_seed=False,
+                  do_filter=False, checkpoints=None):
+    # It should not happen that we're testing on a different fold than we trained on for this model!!!
+    if test_set.fold_ids[0] != int(exper_hdl.exper.run_args.fold_ids[0]):
+        raise ValueError("Model {} was trained on different fold {} "
+                         "than test fold {}".format(exper_hdl.exper.model_name,
+                                                    test_set.fold_ids[0],
+                                                    exper_hdl.exper.run_args.fold_ids[0]))
+
+    if checkpoints is None:
+        checkpoints = [100000, 110000, 120000, 130000, 140000, 150000]
+    if reset_results:
+        exper_hdl.reset_results(mc_samples=mc_samples, use_dropout=sample_weights)
+    if use_uncertainty:
+        print("INFO - Using {:.2f} as uncertainty threshold".format(referral_threshold))
+    repeated_run = True
+    for run_id, checkpoint in enumerate(checkpoints):
+        if run_id == 0:
+            # only store the image details in test_results objects when running the test for the first
+            # checkpoint of the same model
+            repeated_run = False
+        dcnn_model = exper_hdl.load_checkpoint(verbose=False, drop_prob=exper_hdl.exper.run_args.drop_prob,
+                                               checkpoint=checkpoint)
+        if image_range is None:
+            image_range = np.arange(len(test_set.images))
+        num_of_images = len(image_range)
+        print("Evaluating model {} - runID {}".format(exper_hdl.exper.model_name, run_id + 1))
+        print("INFO - Running test on {} images with model from checkpoint {}".format(num_of_images, checkpoint))
+        for image_num in image_range:
+            exper_hdl.test(dcnn_model, test_set, image_num=image_num, sample_weights=sample_weights,
+                           mc_samples=mc_samples, compute_hd=True, use_uncertainty=use_uncertainty,
+                           referral_threshold=referral_threshold, verbose=verbose, store_details=store_details,
+                           use_seed=use_seed, do_filter=do_filter, repeated_run=repeated_run)
+        del dcnn_model
+        # if we test multiple checkpoints we don't want to store the image details multiple times
+        repeated_run = True
+    exper_hdl.test_results.compute_mean_stats()
+    exper_hdl.test_results.show_results()
+
+    if generate_stats:
+        print("INFO - generating statistics for {} run(s). May take a while".format(exper_hdl.test_results.N))
+        exper_hdl.test_results.generate_all_statistics()
+    if save_results:
+        exper_hdl.test_results.save_results(fold_ids=test_set.fold_ids)
+
+
 class ACDC2017TestHandler(object):
 
     train_path = "train"
@@ -247,13 +295,14 @@ class ACDC2017TestHandler(object):
             self.slice_counter += 1
             yield b_image, b_label
 
-    def set_pred_labels(self, pred_probs, pred_stddev=None, u_threshold=0., verbose=False, do_filter=True):
+    def set_pred_labels(self, pred_probs, pred_stddev=None, referral_threshold=0., verbose=False, do_filter=True):
         """
 
         :param pred_probs: [1, num_of_classes(8), width, height]
         :param pred_stddev: [num_of_classes(8), width, heigth]
-        :param u_threshold: only used if pred_stddev object is non None. Used to filter prediction errors based
-        on standard deviation (uncertainty)
+        :param referral_threshold: only used if pred_stddev object is non None. Used to filter prediction errors based
+        on standard deviation (uncertainty) or BALD values. This is different than the u_threshold used in the
+        uncertainty statistics in method compute_img_slice_uncertainty_stats
         Also note that object self.b_labels has dims [num_classes(8), width, height, slices]
 
         :param do_filter: filter predicted labels on connected components. This is an important post processing step
@@ -264,10 +313,6 @@ class ACDC2017TestHandler(object):
         """
         if isinstance(pred_probs.data, torch.cuda.FloatTensor) or isinstance(pred_probs.data, torch.FloatTensor):
             pred_probs = pred_probs.data.cpu().numpy()
-
-        # we also set the u_threshold here for the computation of the uncertainty stats later
-        self.b_uncertainty_stats["u_threshold"] = u_threshold
-
         # remember dim0 of pred_probs is 1, so we squeeze it by taking index "0". Hence the argmax is over
         # axis 0, because we lost the original dim0
         pred_labels_es = np.argmax(pred_probs[0, 0:self.num_of_classes, :, :], axis=0)
@@ -287,13 +332,15 @@ class ACDC2017TestHandler(object):
             dice_ed_before = dice_coefficient(true_labels_cls_ed, pred_labels_cls_ed)
             errors_es = pred_labels_cls_es != true_labels_cls_es
             errors_ed = pred_labels_cls_ed != true_labels_cls_ed
-            if pred_stddev is not None and u_threshold > 0.:
+            # IMPORTANT. IF threshold above 0 -> we filter EVERYTHING! and SET PIXELS WITH HIGH UNCERTAINTY
+            #            ABOVE THRESHOLD, TO THE MOST COMMON (BINARY) LABEL VALUE!
+            if pred_stddev is not None and referral_threshold > 0.:
                 pixel_std_es = np.copy(pred_stddev[cls])
                 pixel_std_ed = np.copy(pred_stddev[cls + self.num_of_classes])
                 # IMPORTANT!!! - THE THRESHOLD MUST BE EQUAL TO 0, ONLY IF WE WANT TO USE THE THRESHOLD TO CORRECT
                 # LABELS WITH HIGH UNCERTAINTY, THE THRESOLD SHOULD BE ABOVE 0.
-                error_es_idx = pixel_std_es > u_threshold
-                error_ed_idx = pixel_std_ed > u_threshold
+                error_es_idx = pixel_std_es > referral_threshold
+                error_ed_idx = pixel_std_ed > referral_threshold
 
                 # little subtlety, if bg class, the most common class label is 1, for all other classes it's 0
                 if cls == 0:
@@ -328,7 +375,7 @@ class ACDC2017TestHandler(object):
 
         self.b_pred_probs[:, :, :, self.slice_counter] = pred_probs
 
-    def compute_img_slice_uncertainty_stats(self, u_type="bald", connectivity=2, eps=0.01):
+    def compute_img_slice_uncertainty_stats(self, u_type="bald", connectivity=2, u_threshold=0.01):
         """
         In order to get a first idea of how uncertain the model is w.r.t. certain image slices we compute
         same simple overall statistics per slide for stddev and BALD uncertainty measures.
@@ -336,11 +383,23 @@ class ACDC2017TestHandler(object):
             self.b_bald_map     [2, width, height, #slices]
             self.b_stddev_map   [#classes (8), width, height, #slices]
         :param u_type:
-        :param u_threshold:
+        :param u_threshold: Can be used to filter out uncertainties below a certain threshold value. Maybe this
+        is helpful during analysis. Currently we set eps and u_threshold to 0.01 and hence the counts
         :param connectivity:
         :param eps: tiny threshold to filter out the smallest uncertainties
         :return:
+                total_uncertainty, #num_pixel_uncertain, #num_pixel_uncertain_above_tre (w.r.t u_threshold),
+                num_of_objects
+
+                If u_threshold = eps than #pixel measure should be the same
+
         """
+        # we set the u_threshold here for the computation of the uncertainty stats
+        eps = 0.01  # NOTE: we always filter on really tiny uncertainties. And u_threshold should be >= eps
+        if u_threshold < eps:
+            self.b_uncertainty_stats["u_threshold"] = eps
+        else:
+            self.b_uncertainty_stats["u_threshold"] = u_threshold
         if u_type == "bald":
             uncertainty_map = self.b_bald_map[:, np.newaxis, :, :, self.slice_counter]
         elif u_type == "stddev":
@@ -384,15 +443,15 @@ class ACDC2017TestHandler(object):
                         np.array([total_uncertainty, t_num_pixel_uncertain, t_num_pixel_uncertain_above_tre,
                                   num_of_objects])
 
-    def set_stddev_map(self, slice_std):
+    def set_stddev_map(self, slice_std, u_threshold=0.01):
         """
             Important: we assume slice_std is a numpy array with shape [num_classes, width, height]
 
         """
         self.b_stddev_map[:, :, :, self.slice_counter] = slice_std
-        self.compute_img_slice_uncertainty_stats(u_type="stddev")
+        self.compute_img_slice_uncertainty_stats(u_type="stddev", u_threshold=u_threshold)
 
-    def set_bald_map(self, slice_bald):
+    def set_bald_map(self, slice_bald, u_threshold=0.01):
         """
         Important: we assume slice_bald is a numpy array with shape [2, width, height].
         First dim has shape two because we need maps for ES and ED phase
@@ -401,7 +460,7 @@ class ACDC2017TestHandler(object):
         """
 
         self.b_bald_map[:, :, :, self.slice_counter] = slice_bald
-        self.compute_img_slice_uncertainty_stats(u_type="bald")
+        self.compute_img_slice_uncertainty_stats(u_type="bald", u_threshold=u_threshold)
 
     def get_accuracy(self, compute_hd=False, do_filter=True):
         """

@@ -88,7 +88,7 @@ class BaseConfig(object):
         self.noise_threshold = 0.01
 
         # validation settings
-        if socket.gethostname() == "qiaubuntu" or socket.gethostname() == "ubuntu-toologic2":
+        if socket.gethostname() == "qiaubuntu" or socket.gethostname() == "toologic-ubuntu2":
             self.val_set_size = 128
             self.val_batch_size = 16
         else:
@@ -167,7 +167,7 @@ class BaseConfig(object):
                             'loss_function': nn.NLLLoss,
                             'description': 'DCNN_2D_MC_DROPOUT_{}'.format(kwargs["drop_prob"])
                             }
-        elif model == "dcnn_mc_mix":
+        elif model == "dcnn_mcm":
             num_of_layers = 10
             architecture = {'num_of_layers': num_of_layers,
                             'input_channels': 2,
@@ -181,11 +181,11 @@ class BaseConfig(object):
                                               nn.ELU,
                                               nn.Softmax],
                             # 'dropout': [kwargs["drop_prob"]] * num_of_layers,
-                            'dropout': [kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"],
+                            'dropout': [0., 0., 0.,
                                         kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"],
-                                        kwargs["drop_prob"], 0.2, 0.2, 0.],
+                                        kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"], 0.],
                             'loss_function': nn.NLLLoss,
-                            'description': 'DCNN_2D_MC_DROPOUT_MIX2_{}'.format(kwargs["drop_prob"])
+                            'description': 'DCNN_2D_MC_DROPOUT_MID_LAYERS_{}'.format(kwargs["drop_prob"])
                             }
         elif model == "dcnn_mc_crelu":
             num_of_layers = 10

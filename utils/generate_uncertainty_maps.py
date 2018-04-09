@@ -1,6 +1,8 @@
 import os
 import argparse
 import time
+import glob
+from collections import OrderedDict
 from tqdm import tqdm
 
 import torch
@@ -60,10 +62,13 @@ def get_exper_handler(args):
 
 class UncertaintyMapsGenerator(object):
 
+    file_suffix = "_umaps.npz"
+
     def __init__(self, exper_handler, test_set=None, mc_samples=10, model=None, checkpoint=None, verbose=False,
-                 use_logger=False):
+                 use_logger=False, u_threshold=None):
 
         self.verbose = verbose
+        self.u_threshold = u_threshold
         self.mc_samples = mc_samples
         self.checkpoint = checkpoint
         self.exper_handler = exper_handler
@@ -128,15 +133,14 @@ class UncertaintyMapsGenerator(object):
 
             bald_values[0] = bald_function(b_predictions[:, 0:4, :, :, self.test_set.slice_counter])
             bald_values[1] = bald_function(b_predictions[:, 4:, :, :, self.test_set.slice_counter])
-
-            means_test_loss = np.mean(b_test_losses)
             # NOTE: we set do_filter (connected components post-processing) to FALSE here because we will do
-            # this at the end for the complete 3D label object, but not for the individual slices
-            self.test_set.set_pred_labels(mean_test_pred, u_threshold=None, verbose=self.verbose,
+            # this at the end for the complete 3D label object, but not for the individual slices.
+            # in the set_pred_labels method we also compute the uncertainties
+            self.test_set.set_pred_labels(mean_test_pred, referral_threshold=0., verbose=self.verbose,
                                           do_filter=False)
 
-            self.test_set.set_stddev_map(std_test_pred)
-            self.test_set.set_bald_map(bald_values)
+            self.test_set.set_stddev_map(std_test_pred, u_threshold=self.u_threshold)
+            self.test_set.set_bald_map(bald_values, u_threshold=self.u_threshold)
             slice_acc, slice_hd = self.test_set.compute_slice_accuracy(compute_hd=False)
 
             # NOTE: currently only displaying the BALD uncertainty stats but we also capture the stddev stats
@@ -173,21 +177,39 @@ class UncertaintyMapsGenerator(object):
                                      self.test_set.b_stddev_map[np.newaxis, 4:, :, :, :]))
         # b_bald_map shape: [2, width, height, #slices]
         try:
-            filename = self.test_set.b_image_name + "_umaps.npz"
+            filename = self.test_set.b_image_name + UncertaintyMapsGenerator.file_suffix
             filename = os.path.join(self.umap_output_dir, filename)
             np.savez(filename, stddev_map=stddev_map, bald_map=self.test_set.b_bald_map,
                      stddev_stats=self.test_set.b_uncertainty_stats["stddev"],
-                     bald_map_stats=self.test_set.b_uncertainty_stats["bald"])
-            self.info("INFO - Succesfully saved maps to {}".format(filename))
+                     bald_map_stats=self.test_set.b_uncertainty_stats["bald"],
+                     u_threshold=np.array(self.test_set.b_uncertainty_stats["u_threshold"]))
+            self.info("INFO - Successfully saved maps to {}".format(filename))
         except IOError:
-            print("Unable to save uncertainty maps for image {}")
+            print("Unable to save uncertainty maps to {}".format(filename))
 
     @staticmethod
-    def load_uncertainty_maps(image_name):
-
-        data = np.load('mat.npz')
-        print data['name1']
-        print data['name2']
+    def load_uncertainty_maps(exper_handler, image_name=None):
+        """
+        the numpy "stats" objects contain the following 4 values:
+        (1) total_uncertainty (2) #num_pixel_uncertain (3) #num_pixel_uncertain_above_tre (4) num_of_objects
+        :param exper_handler:
+        :param image_name:
+        :return:
+        """
+        image_umap_stats = OrderedDict()
+        # set path in order to save results and figures
+        umap_output_dir = os.path.join(exper_handler.exper.config.root_dir,
+                                       os.path.join(exper_handler.exper.output_dir, config.u_map_dir))
+        search_path = os.path.join(umap_output_dir, UncertaintyMapsGenerator.file_suffix)
+        for fname in glob.glob(search_path):
+            try:
+                data = np.load(fname)
+            except IOError:
+                print("Unable to load uncertainty maps from {}".format(fname))
+            stddev_stats = data['stddev_stats']
+            bald_map_stats = data['bald_map_stats']
+            u_threshold = data["u_threshold"]
+            del data
 
     def _get_test_set(self):
         # Important note:

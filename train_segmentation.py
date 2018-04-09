@@ -24,6 +24,7 @@ def training(exper_hdl):
                               fold_ids=exper_hdl.exper.run_args.fold_ids, preprocess=False,
                               debug=exper_hdl.exper.run_args.quick_run)
 
+    exper_hdl.init_batch_statistics(dataset.image_names)
     dcnn_model = load_model(exper_hdl)
     # IMPORTANT: I AM CURRENTLY NOT USING THE FUNCTIONALITY TO RUN MULTIPLE BATCHES PER EPOCH!!!
     exper_hdl.exper.batches_per_epoch = 1
@@ -34,7 +35,6 @@ def training(exper_hdl):
                             exper_hdl.exper.run_args.batch_size,
                             exper_hdl.exper.batches_per_epoch))
 
-    num_val_runs = 0
     for epoch_id in range(exper_hdl.exper.run_args.epochs):
         exper_hdl.next_epoch()
         dices = np.zeros((exper_hdl.exper.batches_per_epoch, 2))
@@ -43,16 +43,18 @@ def training(exper_hdl):
         # in order to store the 2 mean dice losses (ES/ED)
         losses = np.zeros(exper_hdl.exper.batches_per_epoch)
         start_time = time.time()
-        # exper_hdl.logger.info("Start epoch {}".format(exper_hdl.exper.epoch_id))
+
         for batch_id in range(exper_hdl.exper.batches_per_epoch):
             new_batch = TwoDimBatchHandler(exper_hdl.exper)
-            new_batch.generate_batch_2d(dataset.train_images, dataset.train_labels)
+            new_batch.generate_batch_2d(dataset.train_images, dataset.train_labels,
+                                        img_slice_ids=dataset.train_img_slice_ids)
             b_loss = dcnn_model.do_train(new_batch)
             exper_hdl.set_lr(dcnn_model.get_lr())
             # get the soft dice loss for ES and ED classes (average over each four classes)
             dices[batch_id] = dcnn_model.get_dice_losses(average=True)
             accuracy[batch_id] = dcnn_model.get_accuracy()
             losses[batch_id] = b_loss
+            exper_hdl.exper.batch_stats.update_stats(new_batch.batch_stats)
 
         losses = np.mean(losses)
         accuracy = np.mean(accuracy, axis=0)
@@ -83,7 +85,6 @@ def training(exper_hdl):
                                   " / duration {:.2f} seconds "
                                   "lr={:.5f}".format(exper_hdl.exper.epoch_id, exper_hdl.get_epoch_loss(),
                                                                       np.array_str(dices, precision=3),
-                                                                      # exper_hdl.get_epoch_accuracy(),
                                                                       total_time,
                                                                       lr))
             exper_hdl.logger.info("Current dice accuracies ES {:.3f}/{:.3f}/{:.3f} \t"
@@ -107,10 +108,15 @@ def main():
 
     exper = Experiment(config, run_args=args)
     exper_hdl = ExperimentHandler(exper)
-    exper.start()
     exper_hdl.print_flags()
     training(exper_hdl)
 
 
 if __name__ == '__main__':
     main()
+
+"""
+python train_segmentation.py --lr=0.0002 --batch_size=4 --val_freq=10 --epochs=15 --use_cuda --fold_ids=0 
+--print_freq=5 --weight_decay=0.0001 --model="dcnn_mc" --drop_prob=0.05 --cycle_length=10000 --loss_function=brier 
+--quick_run
+"""
