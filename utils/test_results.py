@@ -274,6 +274,7 @@ class TestResults(object):
         :param batch_labels:
         :param pred_labels:
         :param b_predictions:
+        :param seg_errors: [#slices, #classes(8)]
         :param stddev_map: [#classes (8), width, height, slices]
         :param bald_maps: [2, width, height, slices]
         :param uncertainty_stats: dictionary with keys "bald", "stddev" and "u_threshold"

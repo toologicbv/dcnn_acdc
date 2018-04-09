@@ -188,7 +188,10 @@ class ACDC2017DataSet(BaseImageDataSet):
     def _load_file_list(self, file_list, is_train=True):
         files_loaded = 0
         file_list.sort()
-
+        # we use image_num to track the imageID (batch statistics). can't use idx because ES/ED count for
+        # one image (we concatenate) and file_list contains 2 x images because of separate ES/ED files on disk
+        image_num = 0
+        # Note: file_list contains 200 entries if we load 100 images.
         for idx in tqdm(np.arange(0, len(file_list), 2)):
             # tuple contains [0]=train file name and [1] reference file name
             img_file, ref_file = file_list[idx]
@@ -213,11 +216,11 @@ class ACDC2017DataSet(BaseImageDataSet):
             # AUGMENT data and add to train, validation or test if applicable
             if self.do_augment:
                 self._augment_data(mri_scan_ed, reference_ed, mri_scan_es, reference_es,
-                                   is_train=is_train, img_id=idx)
+                                   is_train=is_train, img_id=image_num)
             else:
                 # add "raw" images
                 raise NotImplementedError("Trying to load images without augmentation is currently not implemented")
-
+            image_num += 1
             files_loaded += 2
         return files_loaded
 

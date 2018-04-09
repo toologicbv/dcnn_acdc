@@ -16,7 +16,7 @@ from in_out.read_save_images import write_numpy_to_image
 class BatchStatistics(object):
 
     # TO DO: should be traced in the Dataset object, so that we can use it here
-    max_img_slices = 15
+    max_img_slices = 20
 
     def __init__(self, image_names):
         """

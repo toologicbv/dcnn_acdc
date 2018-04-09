@@ -22,7 +22,28 @@ from scipy.ndimage.morphology import generate_binary_structure
 def test_ensemble(test_set, exper_hdl, mc_samples=10, sample_weights=True, use_uncertainty=False,
                   referral_threshold=None, image_range=None, verbose=False, reset_results=False,
                   store_details=False, generate_stats=False, save_results=False, use_seed=False,
-                  do_filter=False, checkpoints=None):
+                  do_filter=False, checkpoints=None, u_threshold=0.01):
+    """
+
+    :param test_set:
+    :param exper_hdl:
+    :param mc_samples:
+    :param sample_weights:
+    :param use_uncertainty:
+    :param referral_threshold:
+    :param image_range:
+    :param verbose:
+    :param reset_results:
+    :param store_details:
+    :param generate_stats:
+    :param save_results:
+    :param use_seed:
+    :param do_filter:
+    :param checkpoints:
+    :param u_threshold: used to filter the pixel uncertainties that we consider when computing slices statistics
+    which we later exploit for training guidance
+    :return:
+    """
     # It should not happen that we're testing on a different fold than we trained on for this model!!!
     if test_set.fold_ids[0] != int(exper_hdl.exper.run_args.fold_ids[0]):
         raise ValueError("Model {} was trained on different fold {} "
@@ -53,7 +74,8 @@ def test_ensemble(test_set, exper_hdl, mc_samples=10, sample_weights=True, use_u
             exper_hdl.test(dcnn_model, test_set, image_num=image_num, sample_weights=sample_weights,
                            mc_samples=mc_samples, compute_hd=True, use_uncertainty=use_uncertainty,
                            referral_threshold=referral_threshold, verbose=verbose, store_details=store_details,
-                           use_seed=use_seed, do_filter=do_filter, repeated_run=repeated_run)
+                           use_seed=use_seed, do_filter=do_filter, repeated_run=repeated_run,
+                           u_threshold=u_threshold)
         del dcnn_model
         # if we test multiple checkpoints we don't want to store the image details multiple times
         repeated_run = True
@@ -415,8 +437,8 @@ class ACDC2017TestHandler(object):
             raise ValueError("{} is not a supported uncertainty type.".format(u_type))
         # we compute stats for ES and ED phase
         for phase in np.arange(uncertainty_map.shape[0]):
-            for dim1 in np.arange(uncertainty_map.shape[1]):  # we loop over dim1 because stddev still has classes
-                                                              # for bald this is a fake loop
+            # this is a loop over classes although for BALD statistics we currently don't split stats per class
+            for dim1 in np.arange(uncertainty_map.shape[1]):
                 pred_uncertainty_bool = np.zeros(uncertainty_map[phase, dim1].shape).astype(np.bool)
                 # index maps for uncertain pixels
                 mask_uncertain = uncertainty_map[phase, dim1] > eps
@@ -424,12 +446,15 @@ class ACDC2017TestHandler(object):
                 mask_uncertain_above_tre = uncertainty_map[phase, dim1] > self.b_uncertainty_stats["u_threshold"]
                 # create binary mask to determine morphology
                 pred_uncertainty_bool[mask_uncertain_above_tre] = True
-                total_uncertainty = np.sum(uncertainty_map[phase, dim1][mask_uncertain])
+                # IMPORTANT: we use the MASK_UNCERTAIN_ABOVE_TRE !!! to compute the total uncertainty of a slice
+                total_uncertainty = np.sum(uncertainty_map[phase, dim1][mask_uncertain_above_tre])
+                total_uncertainty_base = np.sum(uncertainty_map[phase, dim1][mask_uncertain])
                 t_num_pixel_uncertain = np.count_nonzero(uncertainty_map[phase, dim1][mask_uncertain])
-                t_num_pixel_uncertain_above_tre = np.count_nonzero(uncertainty_map[phase, dim1][mask_uncertain_above_tre])
+                t_num_pixel_uncertain_above_tre = np.count_nonzero(uncertainty_map[phase, dim1]
+                                                                   [mask_uncertain_above_tre])
                 # The following two statements are preliminary. We determine the number of connected components.
                 # The idea is that more connected components could indicate more spatial diversity in the uncertainty
-                # and hence we could use this to compute a ratio between total uncertainty / num_of_objects (ccomponents)
+                # and hence we could use this to compute a ratio between total uncertainty/num_of_objects (components)
                 # binary structure
                 footprint1 = generate_binary_structure(pred_uncertainty_bool.ndim, connectivity)
                 # label distinct binary objects

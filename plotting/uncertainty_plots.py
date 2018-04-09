@@ -11,8 +11,8 @@ def create_figure_dir(fig_path):
 
 def plot_cross(p_axis, x_values, y_values, x_lims, y_lims, plot_stddev=True):
     # m_x: mean value x-axis, m_y: mean value y-axis
-    m_x, x_std = np.median(x_values), np.std(x_values)
-    m_y, y_std = np.median(y_values), np.std(y_values)
+    m_x, x_std = np.mean(x_values), np.std(x_values)
+    m_y, y_std = np.mean(y_values), np.std(y_values)
     # print("u-values {}".format(np.array_str(y_values, precision=5)))
     # print("stdev of stdev: {:.3f}".format(y_std))
     p_axis.plot([m_x] * 10, np.linspace(y_lims[0], y_lims[1], 10), 'r', alpha=0.3)
@@ -28,6 +28,35 @@ def plot_slices_nums(p_axis, x_vals, y_vals, font_size=12):
     for x, y in zip(x_vals, y_vals):
         p_axis.text(x, y, str(idx), color="red", fontsize=font_size)
         idx += 1
+
+
+def compute_mean_std_per_class(test_results, u_type, image_range):
+    u_es_per_class = {1: [], 2: [], 3: []}
+    u_ed_per_class = {1: [], 2: [], 3: []}
+
+    for img_idx in image_range:
+        u_stats = test_results.uncertainty_stats[img_idx][u_type]
+        # 1st measure is total uncertainty for all slices!
+        for cls in np.arange(1, u_stats.shape[1]):
+            es_u_stats_cls = u_stats[0][cls][0]
+            ed_u_stats_cls = u_stats[1][cls][0]
+            u_es_per_class[cls].extend(es_u_stats_cls)
+            u_ed_per_class[cls].extend(ed_u_stats_cls)
+
+    # shape [2 phases (es/ed), 3 classes, 4 stat-values]
+    stats = np.zeros((2, 3, 4))
+    for cls in np.arange(1, 4):
+        u_es_per_class[cls] = np.array(u_es_per_class[cls])
+        # overall stats for ES classes
+        stats[0, cls - 1] = np.array([np.mean(u_es_per_class[cls]), np.std(u_es_per_class[cls]), np.min(u_es_per_class[cls]), \
+        np.max(u_es_per_class[cls])])
+        # overall stats for ED classes
+        u_ed_per_class[cls] = np.array(u_ed_per_class[cls])
+        stats[1, cls - 1] = np.array(
+            [np.mean(u_ed_per_class[cls]), np.std(u_ed_per_class[cls]), np.min(u_ed_per_class[cls]), \
+             np.max(u_ed_per_class[cls])])
+
+    return stats
 
 
 def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=False, image_range=None,
@@ -48,9 +77,7 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         The 4 measures are: 1) total number of uncertainty 2) number of seg-errors 3) number of pixels with 
         uncertainty above "eps"=0.01 and 4) number of pixels with uncertainty above u_threshold (which is actually 
         also in the dictionary "u_threshold")
-
         Also note that dice score and hd are averaged over classes
-
     """
     x_lims = [-0.1, 1.]
     y_lims = [-0.1, 1.1]
@@ -70,12 +97,16 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
     if u_type == "stddev":
         height *= 3
 
+    overall_stats = compute_mean_std(exper_handler.test_results, u_type, image_range)
+
     for img_idx in image_range:
 
         img_name = image_names[img_idx]
         img_id = exper_handler.test_results.image_ids[img_idx]
         img_acc = exper_handler.test_results.test_accuracy[img_idx]
         img_hd = exper_handler.test_results.test_hd[img_idx]
+        img_seg_errors = exper_handler.test_results.seg_errors[img_idx]
+        u_threshold = exper_handler.test_results.uncertainty_stats[img_idx]["u_threshold"]
         es_performance = "(RV/Myo/LV):\t ES {:.2f}/{:.2f}/{:.2f} " \
                          " HD: {:.2f}/{:.2f}/{:.2f}".format(img_acc[1], img_acc[2], img_acc[3],
                                                           img_hd[1], img_hd[2], img_hd[3])
@@ -115,6 +146,10 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         ed_hd = np.mean(img_hd[1], axis=0, keepdims=True)
         es_u_stats = u_stats[0]
         ed_u_stats = u_stats[1]
+        es_seg_errors = img_seg_errors[:, :4]
+        ed_seg_errors = img_seg_errors[:, 4:]
+        es_mean_seg_errors = np.mean(es_seg_errors, axis=1)
+        ed_mean_seg_errors = np.mean(ed_seg_errors, axis=1)
 
         # print("---------------------------- Image performance --------------------------------------")
         # print(es_performance)
@@ -155,11 +190,17 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
             for cls in np.arange(1, u_stats_cls.shape[1]):
                 es_u_stats_cls = u_stats_cls[0][cls]
                 ed_u_stats_cls = u_stats_cls[1][cls]
+                es_u_min_cls, es_u_max_cls = overall_stats[0, cls-1, 2], overall_stats[0, cls-1, 3]
+                ed_u_min_cls, ed_u_max_cls = overall_stats[1, cls-1, 2], overall_stats[1, cls-1, 3]
                 # RESCALE TOTAL UNCERTAINTY VALUE TO INTERVAL [0,1]
-                total_uncert_es_cls = (es_u_stats_cls[0] - np.min(es_u_stats_cls[0])) / (
-                            np.max(es_u_stats_cls[0]) - np.min(es_u_stats_cls[0]))
-                total_uncert_ed_cls = (ed_u_stats_cls[0] - np.min(ed_u_stats_cls[0])) / (
-                            np.max(ed_u_stats_cls[0]) - np.min(ed_u_stats_cls[0]))
+                # total_uncert_es_cls = (es_u_stats_cls[0] - np.min(es_u_stats_cls[0])) / (
+                #             np.max(es_u_stats_cls[0]) - np.min(es_u_stats_cls[0]))
+                # total_uncert_ed_cls = (ed_u_stats_cls[0] - np.min(ed_u_stats_cls[0])) / (
+                #            np.max(ed_u_stats_cls[0]) - np.min(ed_u_stats_cls[0]))
+                total_uncert_es_cls = (es_u_stats_cls[0] - es_u_min_cls) / (
+                        es_u_max_cls - es_u_min_cls)
+                total_uncert_ed_cls = (ed_u_stats_cls[0] - ed_u_min_cls) / (
+                        ed_u_max_cls - ed_u_min_cls)
                 # ---------------------------- PLOT (cls, 0) ----------------------------------------------------
                 ax1b = plt.subplot2grid((rows, columns), (cls, 0), rowspan=1, colspan=1)
                 ax1b.scatter(es_dice_cls[cls].squeeze(), total_uncert_es_cls, s=es_hd_cls[cls] * 10, alpha=0.3, c='g')
@@ -190,18 +231,18 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         # ---------------------------------------------------------------------------------------------------------
         # ---------------------------- PLOT (1,0) ----------------------------------------------------
         ax3 = plt.subplot2grid((rows, columns), (row_offset, 0), rowspan=1, colspan=1)
-        ax3.scatter(es_dice.squeeze(), total_uncert_es, s=es_u_stats[1] * 0.4, alpha=0.3, c='g')
+        ax3.scatter(es_dice.squeeze(), total_uncert_es, s=es_mean_seg_errors * 1.5, alpha=0.3, c='g')
         plot_slices_nums(ax3, es_dice.squeeze(), total_uncert_es)
 
         ax3.set_ylabel("total uncertainty")
         ax3.set_xlabel("mean dice")
-        ax3.set_title("ES mean-slice-uncertainties (area=seg-errors) (#slices={})".format(num_of_slices))
+        ax3.set_title("ES mean-slice-uncertainties (area=pixels) (#slices={})".format(num_of_slices))
         ax3.set_xlim(x_lims)
         ax3.set_ylim(y_lims)
         plot_cross(ax3, es_dice.squeeze(), total_uncert_es, x_lims, y_lims)
         # ---------------------------- PLOT (1,1) ----------------------------------------------------
         ax4 = plt.subplot2grid((rows, columns), (row_offset, 1), rowspan=1, colspan=1)
-        ax4.scatter(ed_dice.squeeze(), total_uncert_ed, s=ed_u_stats[1] * 0.4, alpha=0.3, c='b')
+        ax4.scatter(ed_dice.squeeze(), total_uncert_ed, s=ed_mean_seg_errors * 1.5, alpha=0.3, c='b')
         plot_slices_nums(ax4, ed_dice.squeeze(), total_uncert_ed)
         ax4.set_ylabel("total uncertainty")
         ax4.set_xlabel("mean dice")
@@ -214,7 +255,8 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         if do_save:
             fig_dir = os.path.join(fig_root_dir, img_name)
             create_figure_dir(fig_dir)
-            fig_name = "slice_analysis_img_{}".format(img_id)
+            u_threshold = str(u_threshold).replace(".", "_")
+            fig_name = "slice_analysis_img_{}_threshold{}".format(img_id, u_threshold)
             fig_name = os.path.join(fig_dir, fig_name + ".pdf")
 
             plt.savefig(fig_name, bbox_inches='tight')

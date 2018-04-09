@@ -60,6 +60,68 @@ def get_exper_handler(args):
     return exper_hdl
 
 
+class OutOfDistributionSlices(object):
+
+    def __init__(self, uncertainty_stats):
+        self.images_slices = OrderedDict()
+        self.uncertainty_stats = uncertainty_stats
+
+
+def detect_outlier_slices(uncertainty_stats, u_type="stddev_stats"):
+
+    def normalize(arr):
+        arr_normed = (arr - np.min(arr)) / (np.max(arr) - np.min(arr))
+        return arr_normed
+
+    def determine_phase_outliers(measure1):
+        threshold1 = np.mean(measure1) + np.std(measure1)
+        idx1 = np.argwhere(measure1 >= threshold1).squeeze()
+
+        if idx1.size != 0:
+            set1 = set(idx1) if idx1.size > 1 else set({int(idx1)})
+        else:
+            # create empty set
+            set1 = set()
+
+        return set1
+
+    def make_dict_tuples(mydict, set_outliers, measure1, measure2, imgID, cls, phase):
+        for sliceID in set_outliers:
+            key = tuple((imgID, sliceID))
+            # add the imgID/sliceID key to dictionary and append the values of class/uncertainty/#pixels to value-list
+            mydict.setdefault(key, []).append(tuple((phase, cls, measure1[sliceID], measure2[sliceID])))
+        return mydict
+
+    outliers = OrderedDict()
+    # "stddev_stats" [2, 4 classes, 4 measures, #slices]
+    for imgID in uncertainty_stats.keys():
+        u_stats = uncertainty_stats[imgID][u_type]
+        es_u_stats = u_stats[0]  # ES
+        ed_u_stats = u_stats[1]  # ED
+        # loop over classes...only valid for mean stddev, we're ignorning BACKGROUND class
+        for cls in np.arange(1, es_u_stats.shape[0]):
+            # get ES/ED total uncertainties (index 0) and #pixels above threshold (index 2)
+            # first normalize statistics for image
+            es_total_uncerty_cls = normalize(es_u_stats[cls][0]).squeeze()
+            ed_total_uncerty_cls = normalize(ed_u_stats[cls][0]).squeeze()
+            es_set = determine_phase_outliers(es_total_uncerty_cls)
+            ed_set = determine_phase_outliers(ed_total_uncerty_cls)
+            # union of both set = total set of outlier slices
+            cls_outliers = es_set | ed_set
+            if cls_outliers:
+                # make dict tuples
+                outliers = make_dict_tuples(outliers, cls_outliers, es_total_uncerty_cls, imgID, cls, phase=0)
+                outliers = make_dict_tuples(outliers, cls_outliers, ed_total_uncerty_cls, imgID, cls, phase=1)
+
+    return outliers
+
+
+class ImageUncertainties(object):
+
+    def __init__(self):
+        pass
+
+
 class UncertaintyMapsGenerator(object):
 
     file_suffix = "_umaps.npz"
@@ -150,6 +212,16 @@ class UncertaintyMapsGenerator(object):
                 self.test_set.b_uncertainty_stats["bald"][1, :, slice_idx]  # ED
             es_seg_errors = np.sum(self.test_set.b_seg_errors[slice_idx, :4])
             ed_seg_errors = np.sum(self.test_set.b_seg_errors[slice_idx, 4:])
+            # TO DO: add switch to enable that we also return the test-result object for this run
+            # self.test_results.add_results(test_set.b_image, test_set.b_labels, test_set.b_image_id,
+            #                               test_set.b_pred_labels, b_predictions, test_set.b_stddev_map,
+            #                               test_accuracy, test_hd, seg_errors=test_set.b_seg_errors,
+            #                               store_all=store_details,
+            #                               bald_maps=test_set.b_bald_map,
+            #                               uncertainty_stats=test_set.b_uncertainty_stats,
+            #                               test_accuracy_slices=test_set.b_acc_slices,
+            #                               test_hd_slices=test_set.b_hd_slices,
+            #                               image_name=test_set.b_image_name, repeated_run=False)
 
             if self.verbose:
                 print("Test img/slice {}/{}".format(image_num, slice_idx))
@@ -172,44 +244,96 @@ class UncertaintyMapsGenerator(object):
 
     def save_maps(self):
         # b_stddev_map: [8 classes, width, height, #slices]. we insert a new axis and split dim1 into 2 x 4
-        # new shape [2, 4, width, height, #slices]
+        # new shape [2, 4 (measures), width, height, #slices]
         stddev_map = np.concatenate((self.test_set.b_stddev_map[np.newaxis, :4, :, :, :],
                                      self.test_set.b_stddev_map[np.newaxis, 4:, :, :, :]))
         # b_bald_map shape: [2, width, height, #slices]
         try:
             filename = self.test_set.b_image_name + UncertaintyMapsGenerator.file_suffix
             filename = os.path.join(self.umap_output_dir, filename)
+
             np.savez(filename, stddev_map=stddev_map, bald_map=self.test_set.b_bald_map,
                      stddev_stats=self.test_set.b_uncertainty_stats["stddev"],
-                     bald_map_stats=self.test_set.b_uncertainty_stats["bald"],
+                     bald_stats=self.test_set.b_uncertainty_stats["bald"],
                      u_threshold=np.array(self.test_set.b_uncertainty_stats["u_threshold"]))
             self.info("INFO - Successfully saved maps to {}".format(filename))
         except IOError:
             print("Unable to save uncertainty maps to {}".format(filename))
 
     @staticmethod
-    def load_uncertainty_maps(exper_handler, image_name=None):
+    def load_uncertainty_maps(exper_handler=None, full_path=None, image_name=None):
         """
         the numpy "stats" objects contain the following 4 values:
         (1) total_uncertainty (2) #num_pixel_uncertain (3) #num_pixel_uncertain_above_tre (4) num_of_objects
+        IMPORTANT: we're currently not loading the complete MAPS but only the statistics
+
         :param exper_handler:
         :param image_name:
-        :return:
+        :return: An OrderedDictionary. The primary key is the patientID e.g. "patient002". Further the dictionary
+        contains the mean stddev stats [2, 4 classes, 4 (measures), #slices], NOTE per class!
+        and the BALD stats [2, 4 (measures), #slices], hence we don't store the measures for the different classes here
         """
         image_umap_stats = OrderedDict()
         # set path in order to save results and figures
-        umap_output_dir = os.path.join(exper_handler.exper.config.root_dir,
-                                       os.path.join(exper_handler.exper.output_dir, config.u_map_dir))
-        search_path = os.path.join(umap_output_dir, UncertaintyMapsGenerator.file_suffix)
+        if full_path is None:
+            umap_output_dir = os.path.join(exper_handler.exper.config.root_dir,
+                                           os.path.join(exper_handler.exper.output_dir, config.u_map_dir))
+        else:
+            umap_output_dir = full_path
+        search_path = os.path.join(umap_output_dir, "*" + UncertaintyMapsGenerator.file_suffix)
+        print(search_path)
         for fname in glob.glob(search_path):
+            # get base filename first and then extract patient/name/ID (filename is e.g. patient012_umap.npz)
+            file_basename = os.path.splitext(os.path.basename(fname))[0]
+            patientID = file_basename[:file_basename.find("_")]
             try:
                 data = np.load(fname)
             except IOError:
                 print("Unable to load uncertainty maps from {}".format(fname))
-            stddev_stats = data['stddev_stats']
-            bald_map_stats = data['bald_map_stats']
-            u_threshold = data["u_threshold"]
+            image_umap_stats[patientID] = {"stddev_stats": data['stddev_stats'],
+                                           "bald_stats": data['bald_stats'],
+                                           "u_thresold": data["u_threshold"]}
             del data
+        return image_umap_stats
+
+    @staticmethod
+    def _compute_mean_std_per_class(image_stats):
+        """
+        Compute mean/std/min/max for stddev_stats over all images per class (except BG)
+        for which we generated the uncertainty stats.
+        This is useful when we rescale the absolute uncertainty values per slice (just the sum) and scale them
+        to an interval between [0,1] in order to put uncertainties for the complete batch into perspective.
+        :param image_stats:
+        :return:
+        """
+        u_es_per_class = {1: [], 2: [], 3: []}
+        u_ed_per_class = {1: [], 2: [], 3: []}
+
+        for img_key in image_stats.keys():
+            u_stats = image_stats[img_key]["stddev_stats"]
+            # 1st measure is total uncertainty for all slices!
+            for cls in np.arange(1, u_stats.shape[1]):
+                # first index ES/ED, second index class, third index uncertainty measure 0-idx = total uncertainty
+                es_u_stats_cls = u_stats[0][cls][0]
+                ed_u_stats_cls = u_stats[1][cls][0]
+                u_es_per_class[cls].extend(es_u_stats_cls)
+                u_ed_per_class[cls].extend(ed_u_stats_cls)
+
+        # shape [2 phases (es/ed), 3 classes, 4 stat-values]
+        stats = np.zeros((2, 3, 4))
+        for cls in np.arange(1, 4):
+            u_es_per_class[cls] = np.array(u_es_per_class[cls])
+            # overall stats for ES classes
+            stats[0, cls - 1] = np.array(
+                [np.mean(u_es_per_class[cls]), np.std(u_es_per_class[cls]), np.min(u_es_per_class[cls]), \
+                 np.max(u_es_per_class[cls])])
+            # overall stats for ED classes
+            u_ed_per_class[cls] = np.array(u_ed_per_class[cls])
+            stats[1, cls - 1] = np.array(
+                [np.mean(u_ed_per_class[cls]), np.std(u_ed_per_class[cls]), np.min(u_ed_per_class[cls]), \
+                 np.max(u_ed_per_class[cls])])
+
+        return stats
 
     def _get_test_set(self):
         # Important note:
