@@ -67,7 +67,7 @@ class OutOfDistributionSlices(object):
         self.uncertainty_stats = uncertainty_stats
 
 
-def detect_outlier_slices(uncertainty_stats, u_type="stddev_stats"):
+def detect_outlier_slices(uncertainty_stats, u_type="stddev_slice"):
 
     def normalize(arr):
         arr_normed = (arr - np.min(arr)) / (np.max(arr) - np.min(arr))
@@ -93,7 +93,7 @@ def detect_outlier_slices(uncertainty_stats, u_type="stddev_stats"):
         return mydict
 
     outliers = OrderedDict()
-    # "stddev_stats" [2, 4 classes, 4 measures, #slices]
+    # u_stats [2 (ES/ED), 4 classes, 4 measures, #slices]
     for imgID in uncertainty_stats.keys():
         u_stats = uncertainty_stats[imgID][u_type]
         es_u_stats = u_stats[0]  # ES
@@ -118,8 +118,87 @@ def detect_outlier_slices(uncertainty_stats, u_type="stddev_stats"):
 
 class ImageUncertainties(object):
 
-    def __init__(self):
-        pass
+    def __init__(self, uncertainty_stats):
+        # dictionary of dictionaries (see load method UncertaintyMapsGenerator). key1=imageID/patientID
+        # key2 = "stddev_slice"/"bald_slice"/"u_threshold".
+        # we only use "stddev_slice" here and calculate normalized statistics for one measure=total slice uncertainty
+        self.raw_uncertainties = uncertainty_stats
+        self.stats_per_phase = None
+        self.norm_uncertainty_per_phase = None
+        self.norm_stats_per_phase = None
+        self.stats_per_cls = None
+        # dictionary, keys=imageID/patientID,
+        # each entry contains tensor [2 (ES / ED), 4 classes, #slices]. IMPORTANT, when we compute the normalized
+        # values, we skip all the other 3 measures, and only use index 0 = uncertainty
+        self.norm_uncertainty_per_cls = None
+        # dictionary, keys=imageID/patientID,
+        # each entry contains tensor [2 (ES / ED), 4 classes, 2 stat-measures(mean / stddev)]
+        self.norm_stats_per_cls = None
+        # get the image IDs/patientIDs. keys of our first dictionary
+        if isinstance(uncertainty_stats, dict):
+            # patient IDs
+            self.image_range = uncertainty_stats.keys()
+            self.u_type = "stddev_slice"
+        else:
+            # otherwise it must be a list. All this is necessary because we use this method for a result object
+            # that can be a dictionary or a list.
+            # imageID just numbers 0...N
+            self.image_range = np.arange(len(uncertainty_stats))
+            self.u_type = "stddev"
+
+    def set_stats(self, stats_per_phase, stats_per_cls):
+        self.stats_per_phase = stats_per_phase
+        self.stats_per_cls = stats_per_cls
+
+    @staticmethod
+    def create_from_testresult(uncertainty_stats):
+        u_stats_dict = dict([tuple((i, j)) for i, j in enumerate(uncertainty_stats)])
+        image_uncertainties = ImageUncertainties(u_stats_dict)
+        stats_per_phase, stats_per_cls = UncertaintyMapsGenerator. \
+            compute_mean_std_per_class(u_stats_dict, u_type="stddev", measure_idx=0)
+        image_uncertainties.set_stats(stats_per_phase, stats_per_cls)
+        return image_uncertainties
+
+    def gen_normalized_stats(self, measure_idx=0):
+
+        if self.stats_per_cls is None:
+            raise ValueError("Object self.stats_per_cls is None, can't compute normalized stats")
+
+        norm_stats_cls = {}
+        norm_uncertainty_cls = {}
+        for img_idx in self.image_range:
+            uncertainty_cls = self.raw_uncertainties[img_idx][self.u_type]
+            num_of_classes = uncertainty_cls.shape[1]
+            # shape u_norm_uncty_cls: [2 (ES/ED), 4classes, #slices], note we had 4 measures, but here we're only
+            # using the total uncertainty, index 0
+            u_norm_uncty_cls = np.zeros((uncertainty_cls.shape[0], uncertainty_cls.shape[1], uncertainty_cls.shape[3]))
+            # shape u_norm_stats_cls: [2 (ES/ED), 4classes, 2 stat-measures (mean/stddev)]
+            u_norm_stats_cls = np.zeros((2, num_of_classes, 2))
+            for cls in np.arange(num_of_classes):
+                es_u_stats_cls = uncertainty_cls[0][cls][measure_idx]  # one value for each img-slice ES and below ED
+                ed_u_stats_cls = uncertainty_cls[1][cls][measure_idx]
+                # 3rd index of stats_per_cls specifies stat-measure: 0=mean, 1=std, 2=min, 3=max
+                es_u_min_cls, es_u_max_cls = self.stats_per_cls[0, cls, 2], self.stats_per_cls[0, cls, 3]
+                ed_u_min_cls, ed_u_max_cls = self.stats_per_cls[1, cls, 2], self.stats_per_cls[1, cls, 3]
+                es_u_mean, es_u_stddev = self.stats_per_cls[0, cls, 0], self.stats_per_cls[0, cls, 1]
+                ed_u_mean, ed_u_stddev = self.stats_per_cls[1, cls, 0], self.stats_per_cls[1, cls, 1]
+                # RESCALE TOTAL UNCERTAINTY VALUE TO INTERVAL [0,1]
+                es_u_mean = (es_u_mean - es_u_min_cls) / (es_u_max_cls - es_u_min_cls)
+                ed_u_mean = (ed_u_mean - ed_u_min_cls) / (ed_u_max_cls - ed_u_min_cls)
+                es_u_stddev = (es_u_stddev - es_u_min_cls) / (es_u_max_cls - es_u_min_cls)
+                ed_u_stddev = (ed_u_stddev - ed_u_min_cls) / (ed_u_max_cls - ed_u_min_cls)
+                total_uncert_es_cls = (es_u_stats_cls[0] - es_u_min_cls) / (
+                        es_u_max_cls - es_u_min_cls)
+                total_uncert_ed_cls = (ed_u_stats_cls[0] - ed_u_min_cls) / (
+                        ed_u_max_cls - ed_u_min_cls)
+                u_norm_uncty_cls[0, cls] = total_uncert_es_cls
+                u_norm_uncty_cls[1, cls] = total_uncert_ed_cls
+                u_norm_stats_cls[0, cls] = np.array([es_u_mean, es_u_stddev])
+                u_norm_stats_cls[1, cls] = np.array([ed_u_mean, ed_u_stddev])
+            norm_uncertainty_cls[img_idx] = u_norm_uncty_cls
+            norm_stats_cls[img_idx] = u_norm_stats_cls
+        self.norm_uncertainty_per_cls = norm_uncertainty_cls
+        self.norm_stats_per_cls = norm_stats_cls
 
 
 class UncertaintyMapsGenerator(object):
@@ -253,8 +332,8 @@ class UncertaintyMapsGenerator(object):
             filename = os.path.join(self.umap_output_dir, filename)
 
             np.savez(filename, stddev_map=stddev_map, bald_map=self.test_set.b_bald_map,
-                     stddev_stats=self.test_set.b_uncertainty_stats["stddev"],
-                     bald_stats=self.test_set.b_uncertainty_stats["bald"],
+                     stddev_slice=self.test_set.b_uncertainty_stats["stddev"],
+                     bald_slice=self.test_set.b_uncertainty_stats["bald"],
                      u_threshold=np.array(self.test_set.b_uncertainty_stats["u_threshold"]))
             self.info("INFO - Successfully saved maps to {}".format(filename))
         except IOError:
@@ -290,50 +369,74 @@ class UncertaintyMapsGenerator(object):
                 data = np.load(fname)
             except IOError:
                 print("Unable to load uncertainty maps from {}".format(fname))
-            image_umap_stats[patientID] = {"stddev_stats": data['stddev_stats'],
-                                           "bald_stats": data['bald_stats'],
+            image_umap_stats[patientID] = {"stddev_slice": data['stddev_slice'],
+                                           "bald_slice": data['bald_slice'],
                                            "u_thresold": data["u_threshold"]}
             del data
-        return image_umap_stats
+
+        img_uncertainties = ImageUncertainties(image_umap_stats)
+        img_uncertainties.stats_per_phase, img_uncertainties.stats_per_cls = \
+            UncertaintyMapsGenerator.compute_mean_std_per_class(image_umap_stats)
+        img_uncertainties.gen_normalized_stats()
+        return img_uncertainties
 
     @staticmethod
-    def _compute_mean_std_per_class(image_stats):
+    def compute_mean_std_per_class(image_stats, u_type="stddev_slice", measure_idx=0):
         """
-        Compute mean/std/min/max for stddev_stats over all images per class (except BG)
+        Compute mean/std/min/max for stddev_slices over all images per class (except BG)
         for which we generated the uncertainty stats.
         This is useful when we rescale the absolute uncertainty values per slice (just the sum) and scale them
         to an interval between [0,1] in order to put uncertainties for the complete batch into perspective.
         :param image_stats:
-        :return:
+        :param u_type: key of dictionary
+        :param measure_idx: index specifying the measure we're using for the calculation (must be in range 0-3)
+        :return: tensor [2 (ES/ED), 3 (classes), 4 (mean/std/min/max)]
         """
-        u_es_per_class = {1: [], 2: [], 3: []}
-        u_ed_per_class = {1: [], 2: [], 3: []}
+        u_es_per_class = {0: [], 1: [], 2: [], 3: []}
+        u_ed_per_class = {0: [], 1: [], 2: [], 3: []}
+        num_of_classes = 4
+        if isinstance(image_stats, dict):
+            image_range = image_stats.keys()
+        else:
+            # otherwise it must be a list. All this is necessary because we use this method for a result object
+            # that can be a dictionary or a list.
+            image_range = np.arange(len(image_stats))
 
-        for img_key in image_stats.keys():
-            u_stats = image_stats[img_key]["stddev_stats"]
+        for img_key in image_range:
+            # img_key is patient iD
+            u_stats = image_stats[img_key][u_type]
             # 1st measure is total uncertainty for all slices!
-            for cls in np.arange(1, u_stats.shape[1]):
+            for cls in np.arange(0, num_of_classes):
                 # first index ES/ED, second index class, third index uncertainty measure 0-idx = total uncertainty
-                es_u_stats_cls = u_stats[0][cls][0]
-                ed_u_stats_cls = u_stats[1][cls][0]
+                es_u_stats_cls = u_stats[0][cls][measure_idx]
+                ed_u_stats_cls = u_stats[1][cls][measure_idx]
                 u_es_per_class[cls].extend(es_u_stats_cls)
                 u_ed_per_class[cls].extend(ed_u_stats_cls)
 
         # shape [2 phases (es/ed), 3 classes, 4 stat-values]
-        stats = np.zeros((2, 3, 4))
-        for cls in np.arange(1, 4):
+        cls_stats = np.zeros((2, num_of_classes, 4))
+        # stats per ES/ED phase [2, 4 (stat-measures)]
+        a_stats = np.zeros((2, 4))
+        es_all = []
+        ed_all = []
+        for cls in np.arange(num_of_classes):
+            es_all.extend(u_es_per_class[cls])
             u_es_per_class[cls] = np.array(u_es_per_class[cls])
             # overall stats for ES classes
-            stats[0, cls - 1] = np.array(
+            cls_stats[0, cls] = np.array(
                 [np.mean(u_es_per_class[cls]), np.std(u_es_per_class[cls]), np.min(u_es_per_class[cls]), \
                  np.max(u_es_per_class[cls])])
             # overall stats for ED classes
+            ed_all.extend(u_ed_per_class[cls])
             u_ed_per_class[cls] = np.array(u_ed_per_class[cls])
-            stats[1, cls - 1] = np.array(
+            cls_stats[1, cls] = np.array(
                 [np.mean(u_ed_per_class[cls]), np.std(u_ed_per_class[cls]), np.min(u_ed_per_class[cls]), \
                  np.max(u_ed_per_class[cls])])
-
-        return stats
+        es_all = np.array(es_all)
+        ed_all = np.array(ed_all)
+        a_stats[0, :] = [np.mean(es_all), np.std(es_all), np.min(es_all), np.max(es_all)]
+        a_stats[1, :] = [np.mean(ed_all), np.std(ed_all), np.min(ed_all), np.max(ed_all)]
+        return a_stats, cls_stats
 
     def _get_test_set(self):
         # Important note:
