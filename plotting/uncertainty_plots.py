@@ -101,11 +101,11 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
     if u_type == "stddev":
         height *= 3
 
-    stats_per_phase, stats_per_cls = UncertaintyMapsGenerator.\
-        compute_mean_std_per_class(exper_handler.test_results.uncertainty_stats, u_type=u_type, measure_idx=0)
-
     img_uncert_obj = ImageUncertainties.create_from_testresult(exper_handler.test_results.uncertainty_stats)
-
+    img_uncert_obj.gen_normalized_stats()
+    img_uncert_obj.detect_outliers()
+    print("OUTLIERS")
+    print(img_uncert_obj.outliers.keys())
     for img_idx in image_range:
 
         img_name = image_names[img_idx]
@@ -151,8 +151,6 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         ed_dice = np.mean(img_dice[1], axis=0, keepdims=True)
         es_hd = np.mean(img_hd[0], axis=0, keepdims=True)
         ed_hd = np.mean(img_hd[1], axis=0, keepdims=True)
-        es_u_stats = u_stats[0]
-        ed_u_stats = u_stats[1]
         es_seg_errors = img_seg_errors[:, :4]
         ed_seg_errors = img_seg_errors[:, 4:]
         es_mean_seg_errors = np.mean(es_seg_errors, axis=1)
@@ -163,10 +161,8 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         # print(ed_performance)
         # RESCALE TOTAL UNCERTAINTY VALUE TO INTERVAL [0,1]. stats_per_phase contains overall statistics for
         # each phase (ES/ED 1st index). 2nd index specifies stat-measure (0-3) mean/std/min/max
-        es_min, es_max = stats_per_phase[0, 2], stats_per_phase[0, 3]
-        ed_min, ed_max = stats_per_phase[1, 2], stats_per_phase[1, 3]
-        total_uncert_es = (es_u_stats[0] - es_min) / (es_max - es_min)
-        total_uncert_ed = (ed_u_stats[0] - ed_min) / (ed_max - ed_min)
+        total_uncert_es = img_uncert_obj.norm_uncertainty_per_phase[img_idx][0]
+        total_uncert_ed = img_uncert_obj.norm_uncertainty_per_phase[img_idx][1]
 
         fig = plt.figure(figsize=(width, height))
         fig.suptitle("Model " + model_name + "\n" + "Image: " + img_name + "(id={})".format(img_id) +
@@ -198,21 +194,11 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         if u_type == "stddev":
             # a couple of plots per class (RV/MYO/LV)
             for cls in np.arange(1, u_stats_cls.shape[1]):
-                es_u_stats_cls = u_stats_cls[0][cls]
-                ed_u_stats_cls = u_stats_cls[1][cls]
-                es_u_min_cls, es_u_max_cls = stats_per_cls[0, cls, 2], stats_per_cls[0, cls, 3]
-                ed_u_min_cls, ed_u_max_cls = stats_per_cls[1, cls, 2], stats_per_cls[1, cls, 3]
-                es_u_mean, es_u_stddev = stats_per_cls[0, cls, 0], stats_per_cls[0, cls, 1]
-                ed_u_mean, ed_u_stddev = stats_per_cls[1, cls, 0], stats_per_cls[1, cls, 1]
-                # RESCALE TOTAL UNCERTAINTY VALUE TO INTERVAL [0,1]
-                es_u_mean = (es_u_mean - es_u_min_cls) / (es_u_max_cls - es_u_min_cls)
-                ed_u_mean = (ed_u_mean - ed_u_min_cls) / (ed_u_max_cls - ed_u_min_cls)
-                es_u_stddev = (es_u_stddev - es_u_min_cls) / (es_u_max_cls - es_u_min_cls)
-                ed_u_stddev = (ed_u_stddev - ed_u_min_cls) / (ed_u_max_cls - ed_u_min_cls)
-                total_uncert_es_cls = (es_u_stats_cls[0] - es_u_min_cls) / (
-                        es_u_max_cls - es_u_min_cls)
-                total_uncert_ed_cls = (ed_u_stats_cls[0] - ed_u_min_cls) / (
-                        ed_u_max_cls - ed_u_min_cls)
+
+                total_uncert_es_cls = img_uncert_obj.norm_uncertainty_per_cls[img_idx][0, cls]
+                total_uncert_ed_cls = img_uncert_obj.norm_uncertainty_per_cls[img_idx][1, cls]
+                es_u_mean = img_uncert_obj.norm_stats_per_cls[0, cls, 0]
+                es_u_stddev = img_uncert_obj.norm_stats_per_cls[0, cls, 1]
                 # ---------------------------- PLOT (cls, 0) ----------------------------------------------------
                 ax1b = plt.subplot2grid((rows, columns), (cls, 0), rowspan=1, colspan=1)
                 ax1b.scatter(es_dice_cls[cls].squeeze(), total_uncert_es_cls, s=es_hd_cls[cls] * 10, alpha=0.3, c='g')
@@ -226,6 +212,8 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
                 plot_cross(ax1b, es_dice_cls[cls].squeeze(), total_uncert_es_cls, x_lims, y_lims, m_y=es_u_mean,
                            y_std=es_u_stddev)
                 # ---------------------------- PLOT (cls,1) ----------------------------------------------------
+                ed_u_mean = img_uncert_obj.norm_stats_per_cls[1, cls, 0]
+                ed_u_stddev = img_uncert_obj.norm_stats_per_cls[1, cls, 1]
                 ax2b = plt.subplot2grid((rows, columns), (cls, 1), rowspan=1, colspan=1)
                 ax2b.scatter(ed_dice_cls[cls].squeeze(), total_uncert_ed_cls, s=ed_hd_cls[cls] * 10, alpha=0.3, c='b')
                 plot_slices_nums(ax2b, ed_dice_cls[cls].squeeze(), total_uncert_ed_cls)
