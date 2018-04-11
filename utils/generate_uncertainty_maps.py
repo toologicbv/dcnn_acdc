@@ -12,6 +12,7 @@ from utils.experiment import ExperimentHandler
 from common.acquisition_functions import bald_function
 from common.common import create_logger
 from config.config import config
+from utils.test_results import TestResults
 
 
 ROOT_DIR = os.getenv("REPO_PATH", "/home/jorg/repo/dcnn_acdc/")
@@ -62,62 +63,50 @@ def get_exper_handler(args):
 
 class OutOfDistributionSlices(object):
 
-    def __init__(self, uncertainty_stats):
-        self.images_slices = OrderedDict()
-        self.uncertainty_stats = uncertainty_stats
+    def __init__(self, outliers):
+        """
 
+        :param outliers: is a dictionary with key=patiendID/sliceID. key values are tensors with shape
+        [2 (ES/ED), 4 classes] containing the normalized uncertainty values (so per phase/class)
+        """
+        self.outlier_slices = outliers
+        self.images = []
+        self.labels = []
+        self.spacings = []
+        self.img_slice_ids = []
+        self.trans_dict = {}
 
-def detect_outlier_slices(uncertainty_stats, u_stats_per_class):
-    """
-    we pass in a dict of tensors where each dict-entry contains the normalized uncertainty values for the slices
-    of an image
+    def save(self, outfilename=None):
+        pass
 
-    :param uncertainty_stats:
+    def create_dataset(self, dataset, train=True):
 
-    :return:
-    """
-
-    def determine_phase_outliers(measure1):
-        threshold1 = np.mean(measure1) + np.std(measure1)
-        idx1 = np.argwhere(measure1 >= threshold1).squeeze()
-
-        if idx1.size != 0:
-            set1 = set(idx1) if idx1.size > 1 else set({int(idx1)})
-        else:
-            # create empty set
-            set1 = set()
-
-        return set1
-
-    def make_dict_tuples(mydict, set_outliers, measure1, measure2, imgID, cls, phase):
-        for sliceID in set_outliers:
-            key = tuple((imgID, sliceID))
-            # add the imgID/sliceID key to dictionary and append the values of class/uncertainty/#pixels to value-list
-            mydict.setdefault(key, []).append(tuple((phase, cls, measure1[sliceID], measure2[sliceID])))
-        return mydict
-
-    outliers = OrderedDict()
-    # u_stats [2 (ES/ED), 4 classes, 4 measures, #slices]
-    for imgID in uncertainty_stats.keys():
-        u_stats = uncertainty_stats[imgID][u_type]
-        es_u_stats = u_stats[0]  # ES
-        ed_u_stats = u_stats[1]  # ED
-        # loop over classes...only valid for mean stddev, we're ignorning BACKGROUND class
-        for cls in np.arange(1, es_u_stats.shape[0]):
-            # get ES/ED total uncertainties (index 0) and #pixels above threshold (index 2)
-            # first normalize statistics for image
-            es_total_uncerty_cls = normalize(es_u_stats[cls][0]).squeeze()
-            ed_total_uncerty_cls = normalize(ed_u_stats[cls][0]).squeeze()
-            es_set = determine_phase_outliers(es_total_uncerty_cls)
-            ed_set = determine_phase_outliers(ed_total_uncerty_cls)
-            # union of both set = total set of outlier slices
-            cls_outliers = es_set | ed_set
-            if cls_outliers:
-                # make dict tuples
-                outliers = make_dict_tuples(outliers, cls_outliers, es_total_uncerty_cls, imgID, cls, phase=0)
-                outliers = make_dict_tuples(outliers, cls_outliers, ed_total_uncerty_cls, imgID, cls, phase=1)
-
-    return outliers
+        for img_slice_id in self.outlier_slices.keys():
+            # img_slice_id is a tuple (patientID, sliceID)
+            patientID = img_slice_id[0]
+            sliceID = img_slice_id[1]
+            imgID = dataset.trans_dict[patientID]
+            search_img_slice_id = tuple((imgID, sliceID))
+            # important: we assume that we're creating this for the training set
+            if train:
+                org_img_slice_ids = dataset.train_img_slice_ids
+                first_idx = dataset.train_img_slice_ids.index(search_img_slice_id)
+                images = dataset.train_images
+                labels = dataset.train_labels
+            else:
+                org_img_slice_ids = dataset.val_img_slice_ids
+                first_idx = dataset.val_img_slice_ids.index(search_img_slice_id)
+                images = dataset.val_images
+                labels = dataset.val_labels
+            # note: the index method only returns the first index of the occurrence of tuple in our list of
+            # images/slices. But remember that the train/val set contains 4 version of a particular img/slice
+            # because we augment the dataset with rotations (0, 90...270). So we get first_idx and the next three
+            for idx in np.arange(first_idx, first_idx + dataset.num_of_augmentations + 1):
+                self.images.append(images[idx])
+                self.labels.append(labels[idx])
+                self.img_slice_ids.append(search_img_slice_id)
+                # print("Search {} - corresponding match in dataset {}".format(search_img_slice_id,
+                #                                                             org_img_slice_ids[idx]))
 
 
 class ImageUncertainties(object):
@@ -262,7 +251,7 @@ class ImageUncertainties(object):
         """
 
         def determine_phase_outliers(measure1, mean1, std1):
-            threshold1 = mean1 + std1
+            threshold1 = mean1
             idx1 = np.argwhere(measure1 > threshold1).squeeze()
             if idx1.size != 0:
                 set1 = set(idx1) if idx1.size > 1 else set({int(idx1)})
@@ -301,8 +290,19 @@ class ImageUncertainties(object):
                     # make dict tuples
                     outliers = make_dict_tuples(outliers, cls_outliers, es_total_uncerty_cls, imgID, cls, phase=0)
                     outliers = make_dict_tuples(outliers, cls_outliers, ed_total_uncerty_cls, imgID, cls, phase=1)
+        # post-processing: transform the dict key values (a list) into a numpy array
+        outlier_stats = {}
+        for img_slice_id, u_tuples in outliers.iteritems():
+            # u_tuples is a list of tuples. a tuple consists of (phase, cls, u-value)
+            # create tensor for u-values [2 (es/ed), 4 classes]
+            u_stats = np.zeros((2, 4))
+            for slice_det in u_tuples:
+                u_stats[slice_det[0], slice_det[1]] += slice_det[2]
+            outlier_stats[img_slice_id] = u_stats
+        self.outliers = outlier_stats
 
-        self.outliers = outliers
+    def get_outlier_obj(self):
+        return OutOfDistributionSlices(self.outliers)
 
 
 class UncertaintyMapsGenerator(object):
@@ -310,8 +310,9 @@ class UncertaintyMapsGenerator(object):
     file_suffix = "_umaps.npz"
 
     def __init__(self, exper_handler, test_set=None, mc_samples=10, model=None, checkpoint=None, verbose=False,
-                 use_logger=False, u_threshold=None):
+                 use_logger=False, u_threshold=0., store_test_results=False):
 
+        self.store_test_results = store_test_results
         self.verbose = verbose
         self.u_threshold = u_threshold
         self.mc_samples = mc_samples
@@ -334,19 +335,30 @@ class UncertaintyMapsGenerator(object):
                                             os.path.join(self.exper_handler.exper.output_dir, config.u_map_dir))
         if not os.path.isdir(self.umap_output_dir):
             os.makedirs(self.umap_output_dir)
+        if self.store_test_results:
+            self.test_results = TestResults(exper_handler.exper, use_dropout=True, mc_samples=mc_samples)
+        else:
+            self.test_results = None
 
-    def __call__(self,):
+    def __call__(self, clean_up=True):
 
         start_time = time.time()
         message = "INFO - Starting to generate uncertainty maps " \
                   "for {} images using {} samples and u-threshold {:.2f}".format(self.num_of_images, self.mc_samples,
                                                                                  self.u_threshold)
         self.info(message)
+        # first delete all old files in the u_map directory
+        if clean_up:
+            self.info("NOTE: first cleaning up previous generated uncertainty maps!")
+            self.clean_up_files()
         for image_num in tqdm(np.arange(self.num_of_images)):
             self._generate(image_num=image_num)
             self.save_maps()
 
         duration = time.time() - start_time
+        if self.store_test_results:
+            self.test_results.save_results(fold_ids=self.exper_handler.exper.run_args.fold_ids,
+                                           epoch_id=self.exper_handler.exper.epoch_id)
         self.info("INFO - Total duration of generation process {:.2f} secs".format(duration))
 
     def _generate(self, image_num):
@@ -396,17 +408,6 @@ class UncertaintyMapsGenerator(object):
                 self.test_set.b_uncertainty_stats["bald"][1, :, slice_idx]  # ED
             es_seg_errors = np.sum(self.test_set.b_seg_errors[slice_idx, :4])
             ed_seg_errors = np.sum(self.test_set.b_seg_errors[slice_idx, 4:])
-            # TO DO: add switch to enable that we also return the test-result object for this run
-            # self.test_results.add_results(test_set.b_image, test_set.b_labels, test_set.b_image_id,
-            #                               test_set.b_pred_labels, b_predictions, test_set.b_stddev_map,
-            #                               test_accuracy, test_hd, seg_errors=test_set.b_seg_errors,
-            #                               store_all=store_details,
-            #                               bald_maps=test_set.b_bald_map,
-            #                               uncertainty_stats=test_set.b_uncertainty_stats,
-            #                               test_accuracy_slices=test_set.b_acc_slices,
-            #                               test_hd_slices=test_set.b_hd_slices,
-            #                               image_name=test_set.b_image_name, repeated_run=False)
-
             if self.verbose:
                 print("Test img/slice {}/{}".format(image_num, slice_idx))
                 print("ES: Total BALD/seg-errors/#pixel/#pixel(tre) \tDice (RV/Myo/LV)\tHD (RV/Myo/LV)")
@@ -425,24 +426,43 @@ class UncertaintyMapsGenerator(object):
                 # print(np.array_str(np.array(ed_region_mean_uncert), precision=3))
                 print("------------------------------------------------------------------------")
             slice_idx += 1
+        # complete image evaluated
+        test_accuracy, test_hd = self.test_set.get_accuracy(compute_hd=True, do_filter=False)
+        # store test results if necessary
+        if self.store_test_results:
+            self.test_results.add_results(self.test_set.b_image, self.test_set.b_labels, self.test_set.b_image_id,
+                                          self.test_set.b_pred_labels, b_predictions, self.test_set.b_stddev_map,
+                                          test_accuracy, test_hd, seg_errors=self.test_set.b_seg_errors,
+                                          store_all=False,
+                                          bald_maps=self.test_set.b_bald_map,
+                                          uncertainty_stats=self.test_set.b_uncertainty_stats,
+                                          test_accuracy_slices=self.test_set.b_acc_slices,
+                                          test_hd_slices=self.test_set.b_hd_slices,
+                                          image_name=self.test_set.b_image_name, repeated_run=False)
 
     def save_maps(self):
+        # NOTE: we're currently not saving the actual MAPS, only the uncertainty values per pixels and the stats
         # b_stddev_map: [8 classes, width, height, #slices]. we insert a new axis and split dim1 into 2 x 4
         # new shape [2, 4 (measures), width, height, #slices]
-        stddev_map = np.concatenate((self.test_set.b_stddev_map[np.newaxis, :4, :, :, :],
-                                     self.test_set.b_stddev_map[np.newaxis, 4:, :, :, :]))
+        # stddev_map = np.concatenate((self.test_set.b_stddev_map[np.newaxis, :4, :, :, :],
+        #                              self.test_set.b_stddev_map[np.newaxis, 4:, :, :, :]))
         # b_bald_map shape: [2, width, height, #slices]
         try:
             filename = self.test_set.b_image_name + UncertaintyMapsGenerator.file_suffix
             filename = os.path.join(self.umap_output_dir, filename)
 
-            np.savez(filename, stddev_map=stddev_map, bald_map=self.test_set.b_bald_map,
-                     stddev_slice=self.test_set.b_uncertainty_stats["stddev"],
+            # np.savez(filename, stddev_map=stddev_map, bald_map=self.test_set.b_bald_map,
+            np.savez(filename, stddev_slice=self.test_set.b_uncertainty_stats["stddev"],
                      bald_slice=self.test_set.b_uncertainty_stats["bald"],
                      u_threshold=np.array(self.test_set.b_uncertainty_stats["u_threshold"]))
             self.info("INFO - Successfully saved maps to {}".format(filename))
         except IOError:
             print("Unable to save uncertainty maps to {}".format(filename))
+
+    def clean_up_files(self):
+        file_list = glob.glob(os.path.join(self.umap_output_dir, "*" + UncertaintyMapsGenerator.file_suffix))
+        for f in file_list:
+            os.remove(f)
 
     @staticmethod
     def load_uncertainty_maps(exper_handler=None, full_path=None, image_name=None):

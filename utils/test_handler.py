@@ -101,14 +101,17 @@ class ACDC2017TestHandler(object):
     new_voxel_spacing = 1.4
 
     def __init__(self, exper_config, search_mask=None, nclass=4, load_func=load_mhd_to_numpy,
-                 fold_ids=[1], debug=False, use_cuda=True, batch_size=None, val_only=True,
-                 use_iso_path=False):
+                 fold_ids=[1], debug=False, use_cuda=True, batch_size=None, load_train=False,
+                 load_val=True, use_iso_path=False):
 
         # IMPORTANT: boolean flag indicating whether to load images from image_iso/reference_iso path or
         # from original directory (not resized). If True we don't resize the image during loading
         self.use_iso_path = use_iso_path
         # IMPORTANT flag indicating whether we're loading only the validation set from the specified fold(s)
-        self.val_only = val_only
+        self.load_train = load_train
+        self.load_val = load_val
+        if not load_train and not load_val:
+            raise ValueError("You have to load at least train or validation files for this fold.")
         self.config = exper_config
         self.data_dir = os.path.join(self.config.root_dir, exper_config.data_dir)
         self.search_mask = search_mask
@@ -177,7 +180,7 @@ class ACDC2017TestHandler(object):
                                          os.path.join(ACDC2017TestHandler.val_path, ACDC2017TestHandler.image_path))
 
             # get images and labels
-            if not self.val_only:
+            if self.load_train:
                 # we're NOT only loading validation images
                 search_mask_img = os.path.join(self.train_path, self.search_mask)
                 print("INFO - Testhandler - >>> Search for {} <<<".format(search_mask_img))
@@ -187,9 +190,10 @@ class ACDC2017TestHandler(object):
 
             # get validation images and labels
             search_mask_img = os.path.join(self.val_path, self.search_mask)
-            for val_file in glob.glob(search_mask_img):
-                ref_file = val_file.replace(ACDC2017TestHandler.image_path, ACDC2017TestHandler.label_path)
-                file_list.append(tuple((val_file, ref_file)))
+            if self.load_val:
+                for val_file in glob.glob(search_mask_img):
+                    ref_file = val_file.replace(ACDC2017TestHandler.image_path, ACDC2017TestHandler.label_path)
+                    file_list.append(tuple((val_file, ref_file)))
         num_of_files = len(file_list)
         print("INFO - File list contains {} files, hence {} patients".format(num_of_files, num_of_files / 2))
 

@@ -44,9 +44,11 @@ class ExperimentHandler(object):
         self.num_val_runs += 1
         self.exper.val_stats["epoch_ids"][self.exper.val_run_id] = self.exper.epoch_id
 
-    def init_batch_statistics(self, image_names):
+    def init_batch_statistics(self, trans_img_name):
+        # trans_img_name is a dictionary (created in load_data.py) that we use to translate patientID to imageID
+        # so key of dict is "patien040" and value is e.g. 10 (imageID)
         # create a batch statistics object
-        self.exper.batch_stats = BatchStatistics(image_names)
+        self.exper.batch_stats = BatchStatistics(trans_img_name)
 
     def save_experiment(self, file_name=None, final_run=False):
 

@@ -1110,7 +1110,7 @@ class TestResults(object):
     def N(self):
         return len(self.pred_labels)
 
-    def save_results(self, fold_ids=None, outfile=None):
+    def save_results(self, fold_ids=None, outfile=None, epoch_id=None):
 
         # Saving the list with dictionaries for the slice statistics (probs, stddev) is amazingly slow.
         # So we don't save this object(s), but we can generate these stats when loading the object (see below).
@@ -1128,15 +1128,19 @@ class TestResults(object):
             num_of_images = len(self.image_names)
 
             if self.use_dropout:
-                outfile = "test_results_{}imgs_mc{}_".format(num_of_images, self.mc_samples)
+                outfile = "test_results_{}imgs_mc{}".format(num_of_images, self.mc_samples)
             else:
-                outfile = "test_results_{}imgs_".format(num_of_images)
+                outfile = "test_results_{}imgs".format(num_of_images)
             if fold_ids is not None:
-                str_fold_ids = "folds" + "_".join([str(i) for i in fold_ids])
-                outfile += str_fold_ids + "_"
+                str_fold_ids = "_folds" + "_".join([str(i) for i in fold_ids])
+                outfile += str_fold_ids
+            if epoch_id is not None:
+                str_epoch = "_ep" + str(epoch_id)
+                outfile += str_epoch
 
-            jetzt = datestr(withyear=False)
-            outfile = outfile + jetzt
+            if epoch_id is None:
+                jetzt = datestr(withyear=False)
+                outfile = outfile + "_" + jetzt
 
         outfile = os.path.join(self.save_output_dir, outfile + ".dll")
 

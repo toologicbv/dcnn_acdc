@@ -1,5 +1,5 @@
 import sys
-import SimpleITK as sitk
+from collections import OrderedDict
 import numpy as np
 import os
 import glob
@@ -113,10 +113,13 @@ class ACDC2017DataSet(BaseImageDataSet):
         self.abs_path_fold = os.path.join(self.data_dir, "fold")
         # extend data set with augmentations. For test images we don't want this to be performed
         self.do_augment = do_augment
+        self.num_of_augmentations = 3  # four rotations 90, 180, 270 degrees of rotations
         self.image_names = []
-
+        self.num_of_images = 0
         self.train_images = []
         self.train_labels = []
+        # dictionary with key is patientID and value is imageID that we assign when loading the stuff
+        self.trans_dict = OrderedDict()
         # we use the img-slice id, belonging to a training image-patch to track the statistics (how much to we train
         # on certain image/slices? We'll store tuples
         self.train_img_slice_ids = []
@@ -201,8 +204,9 @@ class ACDC2017DataSet(BaseImageDataSet):
             # es_abs_file_name = os.path.dirname(img_file)  # without actual filename, just directory
             es_file_name = os.path.splitext(os.path.basename(img_file))[0]
             # get rid off _frameXX and take only the patient name
-            es_file_name = es_file_name[:es_file_name.find("_")]
-            self.image_names.append(es_file_name)
+            patientID = es_file_name[:es_file_name.find("_")]
+            self.image_names.append(patientID)
+            self.trans_dict[patientID] = self.num_of_images
             # print("INFO - Loading ES-file {}".format(img_file))
             reference_es, origin, spacing = self.load_func(ref_file, data_type=ACDC2017DataSet.pixel_dta_type,
                                                            swap_axis=True)
@@ -216,11 +220,11 @@ class ACDC2017DataSet(BaseImageDataSet):
             # AUGMENT data and add to train, validation or test if applicable
             if self.do_augment:
                 self._augment_data(mri_scan_ed, reference_ed, mri_scan_es, reference_es,
-                                   is_train=is_train, img_id=image_num)
+                                   is_train=is_train, img_id=self.num_of_images)
             else:
                 # add "raw" images
                 raise NotImplementedError("Trying to load images without augmentation is currently not implemented")
-            image_num += 1
+            self.num_of_images += 1
             files_loaded += 2
         return files_loaded
 
@@ -267,6 +271,7 @@ class ACDC2017DataSet(BaseImageDataSet):
                 if is_train:
                     self.train_images.append(pad_img_slice)
                     self.train_labels.append(label_slice)
+                    # img_slice_id is a combination of imageid and sliceID e.g. (10, 1)
                     self.train_img_slice_ids.append(img_slice_id)
                 else:
                     self.val_images.append(pad_img_slice)
@@ -284,9 +289,10 @@ class ACDC2017DataSet(BaseImageDataSet):
             label_ed_slice = label_ed[:, :, z]
             image_es_slice = image_es[:, :, z]
             label_es_slice = label_es[:, :, z]
-            # Note: z is the sliceID
+            # Note: z is the sliceID. PLEASE also note that we're constructing a tuple of imgID and sliceID
+            # that we'll store for each image patch
             rotate_slice(image_ed_slice, label_ed_slice, image_es_slice, label_es_slice, is_train,
-                         img_slice_id=np.array([img_id, z]))
+                         img_slice_id=tuple((img_id, z)))
 
     def _resample_images(self, file_list):
         files_loaded = 0

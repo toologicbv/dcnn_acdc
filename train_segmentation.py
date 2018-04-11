@@ -24,7 +24,7 @@ def training(exper_hdl):
                               fold_ids=exper_hdl.exper.run_args.fold_ids, preprocess=False,
                               debug=exper_hdl.exper.run_args.quick_run)
 
-    exper_hdl.init_batch_statistics(dataset.image_names)
+    exper_hdl.init_batch_statistics(dataset.trans_dict)
     dcnn_model = load_model(exper_hdl)
     # IMPORTANT: I AM CURRENTLY NOT USING THE FUNCTIONALITY TO RUN MULTIPLE BATCHES PER EPOCH!!!
     exper_hdl.exper.batches_per_epoch = 1

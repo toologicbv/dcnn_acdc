@@ -18,15 +18,15 @@ class BatchStatistics(object):
     # TO DO: should be traced in the Dataset object, so that we can use it here
     max_img_slices = 20
 
-    def __init__(self, image_names):
+    def __init__(self, trans_imgid_name):
         """
         WE ARE CURRENTLY ONLY TRACKING THE USED IMAGE AND SLICE ID IN THE BATCHES.
         LATER WE WANT TO TRACK THE OFFSETs WHEN WE HOPEFULLY GUIDE TRAINING TO AREAS IN THE IMAGE
         WHERE THE UNCERTAINTY IS HIGH.
-        :param dataset:
+        :param trans_imgid_name: dictionary that translates patientID to imageIDs
         """
-        self.num_of_images = len(image_names)
-        self.image_names = image_names
+        self.num_of_images = len(trans_imgid_name)
+        self.image_names = trans_imgid_name
         self.img_slice_stats = np.zeros((self.num_of_images, BatchStatistics.max_img_slices))
 
     def update_stats(self, batch_stats):
@@ -131,7 +131,8 @@ class TwoDimBatchHandler(BatchHandler):
             img = images[ind]
             label = labels[ind]
             if img_slice_ids is not None:
-                img_sliceID = img_slice_ids[ind]
+                # img_slice_ids is a tuple()
+                img_sliceID = np.array(img_slice_ids[ind])
             else:
                 img_sliceID = np.zeros(2)
             # track imageID/sliceID
