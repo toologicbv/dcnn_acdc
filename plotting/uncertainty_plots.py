@@ -64,16 +64,34 @@ def compute_mean_std_per_class(test_results, u_type, image_range):
 
 
 def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=False, image_range=None,
-                   u_type="bald", translate_img_range=True):
+                   u_type="bald", use_high_threshold=False):
 
     model_name = exper_handler.exper.model_name
     fig_root_dir = os.path.join(exper_handler.exper.config.root_dir, exper_handler.exper.output_dir)
     fig_root_dir = os.path.join(fig_root_dir, exper_handler.exper.config.figure_path)
     image_names = exper_handler.test_results.image_names
+
     if image_range is None:
         image_range = exper_handler.test_results.image_ids
-        print(image_range)
-
+        patientID_range = exper_handler.test_results.image_names
+        print("INFO - No image range specified using test_result object.image_ids {}".format(image_range))
+    else:
+        patientID_range = []
+        np_test_img_ids = np.array(exper_handler.test_results.image_ids)
+        # translate imageIDs to patientIDs and check for inconsistencies:
+        if np.min(np.array(image_range)) < np.min(np_test_img_ids) or \
+            np.max(np.array(image_range)) > np.max(np_test_img_ids):
+            raise ValueError("ERROR - Invalid image range. Test set contains the following"
+                             "image IDs {}".format(exper_handler.test_results.image_ids))
+        # translate image range
+        for id in image_range:
+            img_name = exper_handler.test_results.image_names[id]
+            if exper_handler.test_results.trans_dict[img_name] != id:
+                raise ValueError("ERROR - Inconsistency detected between test_result.trans_dict"
+                                 "object and test_result.image_names, unfortunately...")
+            else:
+                patientID_range.append(img_name)
+    print("patientID_range ", patientID_range)
     """
         NOTE: test_results.uncertainty_stats is a list, containing dictionaries 1) "bald" and 2) "stddev"
         for each test image.
@@ -87,27 +105,28 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
     y_lims = [-0.1, 1.1]
     class_labels = ["BG", "RV", "MYO", "LV"]
     # translate image_range to indices in test_result object
-    if translate_img_range:
-        new_image_range = []
-        for idx in image_range:
-            try:
-                i = exper_handler.test_results.image_ids.index(idx)
-                new_image_range.append(i)
-            except ValueError:
-                print("WARNING - Can't find image with index {} in "
-                      "test_results.image_ids. Discarding!".format(idx))
-        image_range = new_image_range
+    # if translate_img_range:
+    #     new_image_range = []
+    #     for idx in image_range:
+    #         try:
+    #             i = exper_handler.test_results.image_ids.index(idx)
+    #             new_image_range.append(i)
+    #         except ValueError:
+    #             print("WARNING - Can't find image with index {} in "
+    #                   "test_results.image_ids. Discarding!".format(idx))
+    #     image_range = new_image_range
     # double height of figure because we're plotting 4 instead of 2 rows
     if u_type == "stddev":
         height *= 3
 
-    img_uncert_obj = ImageUncertainties.create_from_testresult(exper_handler.test_results.uncertainty_stats)
-    img_uncert_obj.gen_normalized_stats()
-    img_uncert_obj.detect_outliers()
-    print("OUTLIERS")
-    print(img_uncert_obj.outliers.keys())
-    for img_idx in image_range:
+    img_uncert_obj = ImageUncertainties.create_from_testresult(exper_handler.test_results)
+    img_outliers = img_uncert_obj.get_outlier_obj(use_high_threshold=use_high_threshold)
 
+    for idx, img_idx in enumerate(image_range):
+        # IMPORTANT: we filled the list patiendID_range successively with the patientIDs belonging to the
+        # image-range that we passed and hence we can use a simpel loop index counter to access the patientID from
+        # the list
+        patientID = patientID_range[idx]
         img_name = image_names[img_idx]
         img_id = exper_handler.test_results.image_ids[img_idx]
         img_acc = exper_handler.test_results.test_accuracy[img_idx]
@@ -161,9 +180,10 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         # print(ed_performance)
         # RESCALE TOTAL UNCERTAINTY VALUE TO INTERVAL [0,1]. stats_per_phase contains overall statistics for
         # each phase (ES/ED 1st index). 2nd index specifies stat-measure (0-3) mean/std/min/max
-        total_uncert_es = img_uncert_obj.norm_uncertainty_per_phase[img_idx][0]
-        total_uncert_ed = img_uncert_obj.norm_uncertainty_per_phase[img_idx][1]
-
+        total_uncert_es = img_uncert_obj.norm_uncertainty_per_phase[patientID][0]
+        total_uncert_ed = img_uncert_obj.norm_uncertainty_per_phase[patientID][1]
+        print("--------- Outlier slices -------------")
+        print(np.array(img_outliers.outliers_per_img[patientID]) + 1)
         fig = plt.figure(figsize=(width, height))
         fig.suptitle("Model " + model_name + "\n" + "Image: " + img_name + "(id={})".format(img_id) +
                      "\n\n" + es_performance + ed_performance,
@@ -195,8 +215,8 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
             # a couple of plots per class (RV/MYO/LV)
             for cls in np.arange(1, u_stats_cls.shape[1]):
 
-                total_uncert_es_cls = img_uncert_obj.norm_uncertainty_per_cls[img_idx][0, cls]
-                total_uncert_ed_cls = img_uncert_obj.norm_uncertainty_per_cls[img_idx][1, cls]
+                total_uncert_es_cls = img_uncert_obj.norm_uncertainty_per_cls[patientID][0, cls]
+                total_uncert_ed_cls = img_uncert_obj.norm_uncertainty_per_cls[patientID][1, cls]
                 es_u_mean = img_uncert_obj.norm_stats_per_cls[0, cls, 0]
                 es_u_stddev = img_uncert_obj.norm_stats_per_cls[0, cls, 1]
                 # ---------------------------- PLOT (cls, 0) ----------------------------------------------------

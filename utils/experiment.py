@@ -12,9 +12,19 @@ from common.parsing import create_def_argparser, run_dict
 from common.common import create_logger, create_exper_label, setSeed
 from config.config import config, DEFAULT_DCNN_MC_2D, DEFAULT_DCNN_2D
 from utils.batch_handlers import TwoDimBatchHandler, BatchStatistics
+from utils.generate_uncertainty_maps import UncertaintyMapsGenerator, ImageUncertainties
 import models.dilated_cnn
 from utils.test_results import TestResults
 from common.acquisition_functions import bald_function
+
+
+def get_exper_handler(args, root_dir, exper_path):
+    exp_model_path = os.path.join(root_dir, exper_path)
+    exper = ExperimentHandler.load_experiment(exp_model_path)
+    exper_hdl = ExperimentHandler(exper, use_logfile=False)
+    exper_hdl.set_root_dir(root_dir)
+    exper_hdl.set_model_name(args.model_name.format(exper.run_args.drop_prob))
+    return exper_hdl
 
 
 class ExperimentHandler(object):
@@ -305,6 +315,41 @@ class ExperimentHandler(object):
                                                    test_hd[1], test_hd[2],
                                                    test_hd[3], test_hd[5],
                                                    test_hd[6], test_hd[7]))
+
+    def create_outlier_dataset(self, dataset, model=None, checkpoint=None, mc_samples=10, u_threshold=0.1,
+                               do_save=False, use_high_threshold=False, use_train_set=True):
+        """
+
+        :param model: if not specified
+        :param dataset: we need the original training/val dataset in order to get hold of the image slices
+        and augmented slices and use the same imgID's as the original training set
+        :param mc_samples:
+        :param do_save:
+        :param u_threshold: we only consider pixel uncertainties above this value. VERY IMPORTANT!
+        :param use_high_threshold: use a threshold of MEAN + STDDEV. If False only use MEAN
+        :param use_train_set: use the current training set of the dataset for evaluation aka generation
+        of the uncertainty values which will determine the slice outliers per image.
+        :return:
+
+        Note: we don't specify the test_set. But, UncertaintyMapsGenerator will by default, load all training
+        images from the FOLD the current model is trained on!
+        """
+        if model is None and checkpoint is None:
+            raise ValueError("When model parameter is None, you need to specify the checkpoint model"
+                             "that needs to be loaded.")
+
+        maps_generator = UncertaintyMapsGenerator(self, model=model, test_set=None, verbose=False,
+                                                  mc_samples=mc_samples, u_threshold=u_threshold,
+                                                  checkpoint=checkpoint, store_test_results=True)
+        maps_generator(do_save=do_save, clean_up=True)
+        image_uncertainties = ImageUncertainties.create_from_testresult(maps_generator.test_results)
+        # detect outliers and return object OutOfDistributionSlices
+        img_outliers = image_uncertainties.get_outlier_obj(use_high_threshold)
+        img_outliers.create_dataset(dataset, train=use_train_set)
+        self.logger("INFO - Successfully created outlier-dataset. Number of outlier slices {}. "
+                    "Dataset contains {} slices in total".format(len(img_outliers.outlier_slices),
+                                                                 len(img_outliers.images)))
+        return img_outliers
 
     def set_lr(self, lr):
         self.exper.epoch_stats["lr"][self.exper.epoch_id - 1] = lr

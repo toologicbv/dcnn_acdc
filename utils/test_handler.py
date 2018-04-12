@@ -3,6 +3,7 @@ import numpy as np
 from config.config import config
 import os
 import glob
+from collections import OrderedDict
 from tqdm import tqdm
 from in_out.read_save_images import load_mhd_to_numpy, write_numpy_to_image
 from utils.dice_metric import dice_coefficient
@@ -142,6 +143,9 @@ class ACDC2017TestHandler(object):
         self.b_acc_slices = None
         self.debug = debug
         self._set_pathes()
+        # dictionary with key is patientID and value is imageID that we assign when loading the stuff
+        self.trans_dict = OrderedDict()
+        self.num_of_images = 0
 
         self.slice_counter = 0
         self.num_of_models = 1
@@ -183,7 +187,7 @@ class ACDC2017TestHandler(object):
             if self.load_train:
                 # we're NOT only loading validation images
                 search_mask_img = os.path.join(self.train_path, self.search_mask)
-                print("INFO - Testhandler - >>> Search for {} <<<".format(search_mask_img))
+                print("INFO - Testhandler - >>> Search in train-dir for {} <<<".format(search_mask_img))
                 for train_file in glob.glob(search_mask_img):
                     ref_file = train_file.replace(ACDC2017TestHandler.image_path, ACDC2017TestHandler.label_path)
                     file_list.append(tuple((train_file, ref_file)))
@@ -191,6 +195,7 @@ class ACDC2017TestHandler(object):
             # get validation images and labels
             search_mask_img = os.path.join(self.val_path, self.search_mask)
             if self.load_val:
+                print("INFO - Testhandler - >>> Search in val-dir for {} <<<".format(search_mask_img))
                 for val_file in glob.glob(search_mask_img):
                     ref_file = val_file.replace(ACDC2017TestHandler.image_path, ACDC2017TestHandler.label_path)
                     file_list.append(tuple((val_file, ref_file)))
@@ -216,9 +221,10 @@ class ACDC2017TestHandler(object):
             # es_abs_file_name = os.path.dirname(img_file)  # without actual filename, just directory
             es_file_name = os.path.splitext(os.path.basename(img_file))[0]
             # get rid off _frameXX and take only the patient name
-            es_file_name = es_file_name[:es_file_name.find("_")]
-            self.img_file_names.append(es_file_name)
-            print("{} - {}".format(idx, img_file))
+            patientID = es_file_name[:es_file_name.find("_")]
+            self.img_file_names.append(patientID)
+            self.trans_dict[patientID] = self.num_of_images
+            # print("{} - {}".format(idx, img_file))
             self.spacings.append(spacing)
             mri_scan_es = self._preprocess(mri_scan_es, spacing, poly_order=3, do_pad=True)
             # print("INFO - Loading ES-file {}".format(img_file))
@@ -228,8 +234,8 @@ class ACDC2017TestHandler(object):
 
             # do the same for the End-diastole pair of images
             img_file, ref_file = file_list[idx+1]
-            ed_frame_num = (os.path.splitext(os.path.basename(img_file))[0]).split("_")[1]
-            print("{} - {}".format(idx+1, img_file))
+
+            # print("{} - {}".format(idx+1, img_file))
             mri_scan_ed, _, _ = self.load_func(img_file, data_type=ACDC2017TestHandler.pixel_dta_type,
                                                swap_axis=True)
             mri_scan_ed = self._preprocess(mri_scan_ed, spacing, poly_order=3, do_pad=True)
@@ -244,6 +250,8 @@ class ACDC2017TestHandler(object):
             labels = self._split_class_labels(reference_ed, reference_es)
             self.images.append(images)
             self.labels.append(labels)
+            self.num_of_images += 1
+
         print("INFO - Successfully loaded {} ED/ES patient pairs".format(len(self.images)))
 
     def _preprocess(self, image, spacing, poly_order=3, do_zoom=True, do_pad=True):

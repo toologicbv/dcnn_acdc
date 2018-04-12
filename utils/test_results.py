@@ -237,7 +237,11 @@ class TestResults(object):
 
         self.images = []
         self.image_ids = []
+        # contains the patientxx IDs of images. IMPORTANT for linking the results to the original images on disk!!!
+        # we will actually combine image_ids and image_names (which both come from TestHandler object) into a
+        # dictionary that acts as a translation between key=patientID and imageID (value) as loaded by the TestHandler
         self.image_names = []
+        self.trans_dict = OrderedDict()
         self.labels = []
         self.pred_labels = []
         self.mc_pred_probs = []
@@ -306,6 +310,7 @@ class TestResults(object):
             self.image_ids.append(image_id)
             self.image_names.append(image_name)
             self.num_of_samples.append(b_predictions.shape[0])
+            self.trans_dict[image_name] = image_id
 
         self.test_accuracy.append(test_accuracy)
         self.test_hd.append(test_hd)
@@ -317,6 +322,21 @@ class TestResults(object):
         self.seg_errors.append(seg_errors)
         if self.num_of_samples[-1] > 1:
             self.uncertainty_stats.append(uncertainty_stats)
+
+    def get_uncertainty_stats(self):
+        """
+        We convert the TestResults.uncertainty_stats object (which is a list of dictionaries with two numpy arrays)
+        (1) ["stddev"] and (2) ["bald"], into a dictionary with keys (patientID) and as value the original numpy array.
+        We only convert the "stddev" entry.
+        :return:
+        """
+        # remember self.image_names contains the patientxxx IDs
+        u_stats_dict = OrderedDict([tuple((self.image_names[i], u_dict)) for i, u_dict in
+                                    enumerate(self.uncertainty_stats)])
+        return u_stats_dict
+
+    def get_image_patientID(self):
+        return self.image_names
 
     def compute_mean_stats(self):
 
