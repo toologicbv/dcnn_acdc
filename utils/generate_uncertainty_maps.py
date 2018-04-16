@@ -4,51 +4,15 @@ import time
 import glob
 from collections import OrderedDict
 from tqdm import tqdm
+import dill
 
-import torch
 import numpy as np
 from utils.test_handler import ACDC2017TestHandler
+# from utils.experiment import ExperimentHandler
 from common.acquisition_functions import bald_function
 from common.common import create_logger
 from config.config import config
 from utils.test_results import TestResults
-
-
-ROOT_DIR = os.getenv("REPO_PATH", "/home/jorg/repo/dcnn_acdc/")
-LOG_DIR = os.path.join(ROOT_DIR, "logs")
-EXPERS = {"MC005_F2": "20180328_10_54_36_dcnn_mcv1_150000E_lr2e02",
-          "MC005_F0": "20180330_09_56_01_dcnn_mcv1_150000E_lr2e02"}
-
-
-def do_parse_args():
-    # Training settings
-    parser = argparse.ArgumentParser(description='Generate Uncertainty Maps')
-
-    parser.add_argument('--exper_id', default="MC005_F2")
-    parser.add_argument('--model_name', default="MC dropout p={}")
-    parser.add_argument('--mc_samples', type=int, default=10, help="# of MC samples")
-    parser.add_argument('--cuda', action='store_true', default=False, help='use GPU')
-    parser.add_argument('--verbose', action='store_true', default=False, help='show debug messages')
-    args = parser.parse_args()
-
-    return args
-
-
-def _print_flags(args, logger=None):
-    """
-    Prints all entries in argument parser.
-    """
-    for key, value in vars(args).items():
-        if logger is not None:
-            logger.info(key + ' : ' + str(value))
-        else:
-            print(key + ' : ' + str(value))
-
-    if args.cuda:
-        if logger is not None:
-            logger.info(" *** RUNNING ON GPU *** ")
-        else:
-            print(" *** RUNNING ON GPU *** ")
 
 
 class OutOfDistributionSlices(object):
@@ -60,24 +24,51 @@ class OutOfDistributionSlices(object):
         [2 (ES/ED), 4 classes] containing the normalized uncertainty values (so per phase/class)
         """
         self.outlier_slices = outliers
+        # will store the image slices (augmented versions as well) that we extract from original dataset
+        # hence in order to create the OutlierSlices we need the original dataset (see method create_dataset)
         self.images = []
         self.labels = []
         self.spacings = []
+        # tuple (imgID, sliceID) that we will be using in the BatchHandler class to trace the imgID/sliceIDs that
+        # we processed in each batch.
         self.img_slice_ids = []
+        #
         self.trans_dict = {}
+        # dictionary with key "patientID" that holds a sorted list with the outlier slice IDs.
         self.outliers_per_img = OrderedDict([])
         for img_slice_id in outliers.keys():
             self.outliers_per_img.setdefault(img_slice_id[0], []).append(img_slice_id[1])
             self.outliers_per_img[img_slice_id[0]].sort()
+        self.num_of_images = len(self.outliers_per_img)
+        self.num_of_slices = 0
 
     def save(self, outfilename=None):
         """
         Save the self.outlier_slices dictionary which contains as keys (patientxxx, sliceID), and values
-        consist of tuples (phase, class, u-value)
+        consist of tuples (phase, class, u-value).
+        We also save the self.outliers_per_img which contains the same information but the dict has onlye the
+        "patientID" as key and stores a sorted list of sliceIDs, more convenient when we only want to know the
+        outlier slices per image.
         :param outfilename: absolute filepath. Should be responsibility of exper_handler to provide this
         :return: n.a.
         """
-        raise NotImplementedError()
+        try:
+            with open(outfilename, 'wb') as f:
+                dill.dump([self.outliers_per_img, self.outlier_slices], f)
+                print("INFO - Successfully saved OutOfDistributionSlices to {}".format(outfilename))
+        except IOError:
+            print("ERROR - unable to save object to {}".format(outfilename))
+
+    def load(self, load_filename):
+        try:
+            with open(load_filename, 'rb') as f:
+                # see method "save" for details about the two saved dictionaries
+                outliers_per_img = dill.load(f)
+                outlier_slices = dill.load(f)
+        except IOError as err:
+            print("ERROR - unable to load object from {}".format(load_filename))
+        else:
+            return outliers_per_img, outlier_slices
 
     def create_dataset(self, dataset, train=True):
 
@@ -89,12 +80,10 @@ class OutOfDistributionSlices(object):
             search_img_slice_id = tuple((imgID, sliceID))
             # important: we assume that we're creating this for the training set
             if train:
-                org_img_slice_ids = dataset.train_img_slice_ids
                 first_idx = dataset.train_img_slice_ids.index(search_img_slice_id)
                 images = dataset.train_images
                 labels = dataset.train_labels
             else:
-                org_img_slice_ids = dataset.val_img_slice_ids
                 first_idx = dataset.val_img_slice_ids.index(search_img_slice_id)
                 images = dataset.val_images
                 labels = dataset.val_labels
@@ -107,6 +96,8 @@ class OutOfDistributionSlices(object):
                 self.img_slice_ids.append(search_img_slice_id)
                 # print("Search {} - corresponding match in dataset {}".format(search_img_slice_id,
                 #                                                             org_img_slice_ids[idx]))
+        # total number of image slices in dataset
+        self.num_of_slices = len(self.images)
 
 
 class ImageUncertainties(object):
@@ -623,22 +614,4 @@ class UncertaintyMapsGenerator(object):
         else:
             self.exper_handler.logger.info(message)
 
-
-def main():
-    args = do_parse_args()
-    SEED = 4325
-    torch.manual_seed(SEED)
-    torch.cuda.manual_seed(SEED)
-    if args.cuda:
-        torch.backends.cudnn.enabled = True
-
-    np.random.seed(SEED)
-    exper_handler = get_exper_handler(args, root_dir= ROOT_DIR, exper_path=EXPERS[args.exper_id])
-    _print_flags(args)
-    maps_generator = UncertaintyMapsGenerator(exper_handler, verbose=args.verbose, mc_samples=args.mc_samples)
-    maps_generator()
-
-
-if __name__ == '__main__':
-    main()
 

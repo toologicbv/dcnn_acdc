@@ -115,18 +115,26 @@ class ACDC2017DataSet(BaseImageDataSet):
         self.do_augment = do_augment
         self.num_of_augmentations = 3  # four rotations 90, 180, 270 degrees of rotations
         self.image_names = []
+        # IMPORTANT: this is NOT the total number of slices in train_images or val_images, but in fact the number
+        # of patients or files loaded from disk (where ES/ED files (2) count as 1)!
         self.num_of_images = 0
         self.train_images = []
+        # the actual number of slices in train_images
+        self.train_num_slices = 0
         self.train_labels = []
         # dictionary with key is patientID and value is imageID that we assign when loading the stuff
         self.trans_dict = OrderedDict()
         # we use the img-slice id, belonging to a training image-patch to track the statistics (how much to we train
         # on certain image/slices? We'll store tuples
         self.train_img_slice_ids = []
+        # mean width, height, #slices per image
+        self.img_stats = np.zeros(3)
         self.train_spacings = []
         self.val_images = []
         self.val_labels = []
         self.val_img_slice_ids = []
+        # the actual number of slices in val_images
+        self.val_num_slices = 0
         self.val_spacings = []
         self.preprocess = preprocess
         self.debug = debug
@@ -201,6 +209,7 @@ class ACDC2017DataSet(BaseImageDataSet):
             # first frame is always the end-systolic MRI scan, filename ends with "1"
             mri_scan_es, origin, spacing = self.load_func(img_file, data_type=ACDC2017DataSet.pixel_dta_type,
                                                           swap_axis=True)
+            self.img_stats += mri_scan_es.shape
             # es_abs_file_name = os.path.dirname(img_file)  # without actual filename, just directory
             es_file_name = os.path.splitext(os.path.basename(img_file))[0]
             # get rid off _frameXX and take only the patient name
@@ -240,9 +249,15 @@ class ACDC2017DataSet(BaseImageDataSet):
             self.pre_process()
             train_file_list, val_file_list = self._get_file_lists()
         files_loaded += self._load_file_list(train_file_list, is_train=True)
+        self.train_num_slices = len(self.train_images)
         files_loaded += self._load_file_list(val_file_list, is_train=False)
+        self.val_num_slices = len(self.val_images)
+        self.img_stats *= 1./self.num_of_images
+        self.img_stats = self.img_stats.astype(np.int16)
         print("INFO - Using folds {} - loaded {} files: {} slices in train set, {} slices in validation set".format(
-            self.fold_ids, files_loaded, len(self.train_images), len(self.val_images)))
+            self.fold_ids, files_loaded, self.train_num_slices, self.val_num_slices))
+        print("INFO - Mean width/height/#slices per image {}/{}/{}".format(self.img_stats[0], self.img_stats[1],
+                                                                           self.img_stats[2]))
 
     def _augment_data(self, image_ed, label_ed, image_es, label_es, is_train=False, img_id=None):
         """

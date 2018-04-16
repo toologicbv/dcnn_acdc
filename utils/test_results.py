@@ -1152,7 +1152,7 @@ class TestResults(object):
             else:
                 outfile = "test_results_{}imgs".format(num_of_images)
             if fold_ids is not None:
-                str_fold_ids = "_folds" + "_".join([str(i) for i in fold_ids])
+                str_fold_ids = "_fold" + "_".join([str(i) for i in fold_ids])
                 outfile += str_fold_ids
             if epoch_id is not None:
                 str_epoch = "_ep" + str(epoch_id)

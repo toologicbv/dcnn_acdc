@@ -102,18 +102,26 @@ class TwoDimBatchHandler(BatchHandler):
     def get_labels(self):
         return self.b_labels_per_class
 
-    def generate_batch_2d(self, images, labels, img_slice_ids=None, save_batch=False, logger=None):
+    def generate_batch_2d(self, images, labels, img_slice_ids=None, num_of_slices=None, save_batch=False, logger=None,
+                          slice_range=None):
         """
         Variable images and labels are LISTS containing image slices, hence len(images) = number of total slices
         Each image slice (and label slice) has the following tensor dimensions:
 
-         images:    [2 (ES and ED channels), x-axis, y-axis]
-         labels:    [2 (ES and ED channels),  x-axis, y-axis]
+         :param images:    [2 (ES and ED channels), x-axis, y-axis]
+         :param labels:    [2 (ES and ED channels),  x-axis, y-axis]
+         :param img_slice_ids: list that contains tuples of (imgID, sliceID) which we use later for statistics
+         :param slice_range: we use this range of sliceIDs during validation in order to make sure that we always
+         process the same sliceIDs during validation (why? because we don't validate always the complete set and
+         we use a random selection of the slices (see below ind variable)
 
          IMPORTANT NOTE: first dim has size 2 and index "0" = ES image
                                                   index "1" = ED image
 
-        This applies to image and label
+        This applies to image and label.
+
+        :param num_of_slices: the length of our dataset in fact. If None, will be computed based on list images.
+        Useful when we train with outlier slices and more efficient
 
          Note that labels contains segmentation class values between 0 and 3 for the four classes.
          We will convert these values into binary values below and hence add (next to the batch dimension dim-0)
@@ -122,11 +130,15 @@ class TwoDimBatchHandler(BatchHandler):
 
         b_images = np.zeros((self.batch_size, 2, self.ps_wp, self.ps_wp))
         b_labels_per_class = np.zeros((self.batch_size, self.num_classes, self.patch_size + 1, self.patch_size + 1))
-
-        num_images = len(images)
-        # img_nums = []
+        if num_of_slices is None:
+            num_of_slices = len(images)
+        checksum = 0
         for idx in range(self.batch_size):
-            ind = np.random.randint(0, num_images)
+            if slice_range is None:
+                ind = np.random.randint(0, num_of_slices)
+            else:
+                ind = slice_range[idx]
+            checksum += ind
             # img_nums.append(str(ind))
             img = images[ind]
             label = labels[ind]
@@ -160,7 +172,6 @@ class TwoDimBatchHandler(BatchHandler):
         self.b_images = Variable(torch.FloatTensor(torch.from_numpy(b_images).float()), volatile=self.test_run)
         self.b_labels_per_class = Variable(torch.FloatTensor(torch.from_numpy(b_labels_per_class).float()),
                                            volatile=self.test_run)
-
         if save_batch:
             self.save_batch_img_to_files()
 

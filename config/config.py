@@ -87,12 +87,12 @@ class BaseConfig(object):
         # noise threshold
         self.noise_threshold = 0.01
 
-        # validation settings
+        # validation settings, of running on GPU with low RAM we choose a smaller val set size
         if socket.gethostname() == "qiaubuntu" or socket.gethostname() == "toologic-ubuntu2":
             self.val_set_size = 128
             self.val_batch_size = 16
         else:
-            self.val_set_size = 512
+            self.val_set_size = 640
             self.val_batch_size = 128
 
         # plotting
@@ -152,7 +152,7 @@ class BaseConfig(object):
             architecture = {'num_of_layers': num_of_layers,
                             'input_channels': 2,
                             'kernels': [3, 3, 3, 3, 3, 3, 3, 3, 1, 1],
-                            'channels': [16, 16, 32, 32, 32, 32, 64, 128, 128, 4],
+                            'channels': [32, 32, 32, 32, 32, 32, 64, 128, 128, 4],
                             # NOTE: last channel is num_of_classes
                             'dilation': [1, 1, 2, 4, 8, 16, 32, 1, 1, 1],
                             'stride': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
@@ -172,7 +172,7 @@ class BaseConfig(object):
             architecture = {'num_of_layers': num_of_layers,
                             'input_channels': 2,
                             'kernels': [3, 3, 3, 3, 3, 3, 3, 3, 1, 1],
-                            'channels': [16, 16, 32, 32, 32, 32, 64, 128, 128, 4],
+                            'channels': [32, 32, 32, 32, 32, 32, 64, 128, 128, 4],
                             # NOTE: last channel is num_of_classes
                             'dilation': [1, 1, 2, 4, 8, 16, 32, 1, 1, 1],
                             'stride': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],

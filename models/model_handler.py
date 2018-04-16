@@ -36,14 +36,13 @@ def load_model(exper_hdl, verbose=False):
     model_architecture = exper_hdl.exper.config.get_architecture(model=exper_hdl.exper.run_args.model,
                                                                  drop_prob=exper_hdl.exper.run_args.drop_prob)
     if exper_hdl.exper.run_args.model[:4] == 'dcnn':
+        message = "Creating new model BaseDilated2DCNN: {} " \
+                  "with architecture {}".format(exper_hdl.exper.run_args.model,
+                  model_architecture["description"])
         if use_logger:
-            exper_hdl.logger.info("Creating new model BaseDilated2DCNN: {} "
-                                  "with architecture {}".format(exper_hdl.exper.run_args.model,
-                                                                model_architecture["description"]))
+            exper_hdl.logger.info(message)
         else:
-            print("Creating new model BaseDilated2DCNN: {} "
-                                  "with architecture {}".format(exper_hdl.exper.run_args.model,
-                                                                model_architecture["description"]))
+            print(message)
         model = BaseDilated2DCNN(architecture=model_architecture,
                                  optimizer=exper_hdl.exper.config.optimizer,
                                  lr=exper_hdl.exper.run_args.lr,

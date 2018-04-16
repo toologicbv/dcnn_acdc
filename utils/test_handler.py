@@ -162,16 +162,19 @@ class ACDC2017TestHandler(object):
         self._load_file_list(file_list)
 
     def _set_pathes(self):
-
+        # kind of awkward. but because it's a class variable we need to check whether we extended the path
+        # earlier (e.g. when running ipython notebook session, otherwise we concatenate it twice).
         if self.use_iso_path:
-            # load images from a directory that only contains a couple of images
-            ACDC2017TestHandler.image_path = ACDC2017TestHandler.image_path + "_iso"
-            ACDC2017TestHandler.label_path = ACDC2017TestHandler.label_path + "_iso"
+            if ACDC2017TestHandler.image_path.find("_iso") == -1:
+                # load images from a directory that only contains a couple of images
+                ACDC2017TestHandler.image_path = ACDC2017TestHandler.image_path + "_iso"
+                ACDC2017TestHandler.label_path = ACDC2017TestHandler.label_path + "_iso"
 
         if self.debug:
-            # load images from a directory that only contains a couple of images
-            ACDC2017TestHandler.image_path = ACDC2017TestHandler.image_path + "_test"
-            ACDC2017TestHandler.label_path = ACDC2017TestHandler.label_path + "_test"
+            if ACDC2017TestHandler.image_path.find("_test") != -1:
+                # load images from a directory that only contains a couple of images
+                ACDC2017TestHandler.image_path = ACDC2017TestHandler.image_path + "_test"
+                ACDC2017TestHandler.label_path = ACDC2017TestHandler.label_path + "_test"
 
     def _get_file_lists(self):
 
@@ -212,6 +215,11 @@ class ACDC2017TestHandler(object):
         else:
             batch_file_list = file_list
 
+        if self.use_iso_path:
+            do_zoom = False
+        else:
+            do_zoom = True
+
         for idx in tqdm(np.arange(0, len(batch_file_list), 2)):
             # tuple contains [0]=train file name and [1] reference file name
             img_file, ref_file = file_list[idx]
@@ -226,11 +234,11 @@ class ACDC2017TestHandler(object):
             self.trans_dict[patientID] = self.num_of_images
             # print("{} - {}".format(idx, img_file))
             self.spacings.append(spacing)
-            mri_scan_es = self._preprocess(mri_scan_es, spacing, poly_order=3, do_pad=True)
+            mri_scan_es = self._preprocess(mri_scan_es, spacing, poly_order=3, do_pad=True, do_zoom=do_zoom)
             # print("INFO - Loading ES-file {}".format(img_file))
             reference_es, _, _ = self.load_func(ref_file, data_type=ACDC2017TestHandler.pixel_dta_type,
                                                 swap_axis=True)
-            reference_es = self._preprocess(reference_es, spacing, poly_order=0, do_pad=False)
+            reference_es = self._preprocess(reference_es, spacing, poly_order=0, do_pad=False, do_zoom=do_zoom)
 
             # do the same for the End-diastole pair of images
             img_file, ref_file = file_list[idx+1]
@@ -238,11 +246,11 @@ class ACDC2017TestHandler(object):
             # print("{} - {}".format(idx+1, img_file))
             mri_scan_ed, _, _ = self.load_func(img_file, data_type=ACDC2017TestHandler.pixel_dta_type,
                                                swap_axis=True)
-            mri_scan_ed = self._preprocess(mri_scan_ed, spacing, poly_order=3, do_pad=True)
+            mri_scan_ed = self._preprocess(mri_scan_ed, spacing, poly_order=3, do_pad=True, do_zoom=do_zoom)
 
             reference_ed, _, _ = self.load_func(ref_file, data_type=ACDC2017TestHandler.pixel_dta_type,
                                                 swap_axis=True)
-            reference_ed = self._preprocess(reference_ed, spacing, poly_order=0, do_pad=False)
+            reference_ed = self._preprocess(reference_ed, spacing, poly_order=0, do_pad=False, do_zoom=do_zoom)
             # concatenate both images for further processing
             images = np.concatenate((np.expand_dims(mri_scan_ed, axis=0),
                                      np.expand_dims(mri_scan_es, axis=0)))
@@ -345,7 +353,8 @@ class ACDC2017TestHandler(object):
 
         :return:
         """
-        if isinstance(pred_probs.data, torch.cuda.FloatTensor) or isinstance(pred_probs.data, torch.FloatTensor):
+
+        if not isinstance(pred_probs, np.ndarray):
             pred_probs = pred_probs.data.cpu().numpy()
         # remember dim0 of pred_probs is 1, so we squeeze it by taking index "0". Hence the argmax is over
         # axis 0, because we lost the original dim0

@@ -22,7 +22,8 @@ run_dict = {'cmd': 'train',
             'chkpnt_freq': 10,
             'weight_decay': 0.,
             'cycle_length': 100,
-            'drop_prob': 0.5
+            'drop_prob': 0.5,
+            'guided_train': False
 }
 
 
@@ -49,7 +50,7 @@ def create_def_argparser(**kwargs):
     args.quick_run = kwargs['quick_run']
     args.drop_prob = kwargs['drop_prob']
     args.loss_function = kwargs['loss_function']
-
+    args.guided_train = kwargs['guided_train']
     args.cuda = args.use_cuda and torch.cuda.is_available()
     args.chkpnt = os.path.join(config.checkpoint_path, "default.tar")
     return args
@@ -61,6 +62,10 @@ def do_parse_args():
 
     parser.add_argument('--model', default="dcnn", choices=['dcnn', 'dcnn_mc', 'dcnn_mcm', 'dcnn_mc_crelu'])
     parser.add_argument('--version', type=str, default='v1')
+    # in case we retrain a previous model/checkpoint this parameter specifies the experiment directory
+    # relative path (w.r.t. logs/ directory e.g. "20180330_09_56_01_dcnn_mcv1_150000E_lr2e02"
+    parser.add_argument('--retrain_exper', type=str, default=None)
+    parser.add_argument('--retrain_chkpnt', type=int, default=None)
     parser.add_argument('--root_dir', default=config.root_dir)
     parser.add_argument('--log_dir', default=None)
     parser.add_argument('--loss_function', type=str, choices=['softdice', 'brier'], default='softdice',
@@ -91,18 +96,13 @@ def do_parse_args():
 
     parser.add_argument('--retrain', action='store_true')
     parser.add_argument('--chkpnt', action='store_true')
+    parser.add_argument('--guided_train', action="store_true", help="train extra on slice outliers.")
     parser.add_argument('--quick_run', action='store_true')
     parser.add_argument('--chkpnt_freq', type=int, default=100, metavar='N',
                         help='Checkpoint frequency (saving model state) (default: 100)')
 
     args = parser.parse_args()
     args.cuda = args.use_cuda and torch.cuda.is_available()
-
-    # if we're using a cyclic learning rate schedule, set checkpoint interval to cycle_length
-    # hence we store a model each cycle length
-    if args.cycle_length != 0:
-        args.chkpnt_freq = args.cycle_length
-        args.chkpnt = True
 
     if args.model[:4] == "dcnn":
         pass

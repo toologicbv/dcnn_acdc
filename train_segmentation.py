@@ -1,14 +1,12 @@
 import time
-import os
-import glob
 import torch
-from torch.autograd import Variable
 import numpy as np
 
 from common.parsing import do_parse_args
 from config.config import config
 from utils.experiment import Experiment, ExperimentHandler
 from utils.batch_handlers import TwoDimBatchHandler
+from utils.test_handler import ACDC2017TestHandler
 from in_out.load_data import ACDC2017DataSet
 from models.model_handler import load_model, save_checkpoint
 
@@ -24,8 +22,26 @@ def training(exper_hdl):
                               fold_ids=exper_hdl.exper.run_args.fold_ids, preprocess=False,
                               debug=exper_hdl.exper.run_args.quick_run)
 
+    if exper_hdl.exper.run_args.guided_train:
+        test_set = ACDC2017TestHandler(exper_config=exper_hdl.exper.config,
+                                       search_mask=exper_hdl.exper.config.dflt_image_name + ".mhd", fold_ids=[0],
+                                       debug=False, batch_size=None, use_cuda=exper_hdl.exper.run_args.cuda,
+                                       load_train=True, load_val=False, use_iso_path=True)
+        outlier_dataset = None
+        outlier_freq = None
+    else:
+        test_set = None
+        outlier_dataset = None
+        outlier_freq = None
+
     exper_hdl.init_batch_statistics(dataset.trans_dict)
-    dcnn_model = load_model(exper_hdl)
+    if exper_hdl.exper.run_args.retrain_exper is not None:
+        dcnn_model = exper_hdl.load_checkpoint(verbose=False, drop_prob=exper_hdl.exper.run_args.drop_prob,
+                                               checkpoint=exper_hdl.exper.run_args.retrain_chkpnt,
+                                               retrain=True,
+                                               exper_dir=exper_hdl.exper.run_args.retrain_exper)
+    else:
+        dcnn_model = load_model(exper_hdl)
     # IMPORTANT: I AM CURRENTLY NOT USING THE FUNCTIONALITY TO RUN MULTIPLE BATCHES PER EPOCH!!!
     exper_hdl.exper.batches_per_epoch = 1
     exper_hdl.logger.info("Size train/val-data-set {}/{} :: number of epochs {} "
@@ -43,11 +59,22 @@ def training(exper_hdl):
         # in order to store the 2 mean dice losses (ES/ED)
         losses = np.zeros(exper_hdl.exper.batches_per_epoch)
         start_time = time.time()
-
+        used_outliers = False
         for batch_id in range(exper_hdl.exper.batches_per_epoch):
             new_batch = TwoDimBatchHandler(exper_hdl.exper)
-            new_batch.generate_batch_2d(dataset.train_images, dataset.train_labels,
-                                        img_slice_ids=dataset.train_img_slice_ids)
+            if exper_hdl.exper.run_args.guided_train and outlier_dataset is not None and \
+               (exper_hdl.exper.epoch_id % outlier_freq == 0):
+                # In this case we're only training on outlier image slices!
+                # exper_hdl.logger.info("Epoch {} using outlier dataset".format(exper_hdl.exper.epoch_id))
+                new_batch.generate_batch_2d(outlier_dataset.images, outlier_dataset.labels,
+                                            num_of_slices=outlier_dataset.num_of_slices,
+                                            img_slice_ids=outlier_dataset.img_slice_ids)
+                used_outliers = True
+            else:
+                new_batch.generate_batch_2d(dataset.train_images, dataset.train_labels,
+                                            num_of_slices=dataset.train_num_slices,
+                                            img_slice_ids=dataset.train_img_slice_ids)
+
             b_loss = dcnn_model.do_train(new_batch)
             exper_hdl.set_lr(dcnn_model.get_lr())
             # get the soft dice loss for ES and ED classes (average over each four classes)
@@ -59,8 +86,8 @@ def training(exper_hdl):
         losses = np.mean(losses)
         accuracy = np.mean(accuracy, axis=0)
         dices = np.mean(dices, axis=0)
-        exper_hdl.set_batch_loss(losses)
-        exper_hdl.set_accuracy(accuracy)
+        exper_hdl.set_batch_loss(losses, used_outliers=used_outliers)
+        exper_hdl.set_accuracy(accuracy, used_outliers=used_outliers)
         exper_hdl.set_dice_losses(dices)
 
         if exper_hdl.exper.run_args.val_freq != 0 and (exper_hdl.exper.epoch_id % exper_hdl.exper.run_args.val_freq == 0
@@ -75,6 +102,22 @@ def training(exper_hdl):
                                         'state_dict': dcnn_model.state_dict(),
                                         'best_prec1': 0.},
                             False, dcnn_model.__class__.__name__)
+            if exper_hdl.exper.run_args.guided_train:
+                outlier_dataset = exper_hdl.create_outlier_dataset(dataset, model=dcnn_model, test_set=test_set,
+                                                                   checkpoint=None, mc_samples=5,
+                                                                   u_threshold=0.1, use_train_set=True,
+                                                                   do_save_u_stats=True, use_high_threshold=True,
+                                                                   do_save_outlier_stats=True)
+                # the size of the outlier dataset can never exceed the size of the original training set. In the worst
+                # case it's equal to 1 (all slices are outliers!). Current heuristic for how often do we make
+                # training batches from the outlier set: epochs / outlier_freq
+                # So e.g. if there're twice as much training slices as outlier slices we take every second time
+                # slices from outliers. NOTE: we're not removing the outliers from the original dataset!!!
+                # which means, they have an extra chance of being trained on with the danger of overfitting to these
+                # slices. We'll see what happens.
+                outlier_freq = int(exper_hdl.exper.run_args.epochs / (exper_hdl.exper.run_args.epochs *
+                                  (float(outlier_dataset.num_of_slices) / float(dataset.train_num_slices))))
+                exper_hdl.info("NOTE: using outlier dataset every {} epoch".format(outlier_freq))
             # save exper statistics
             exper_hdl.save_experiment()
         end_time = time.time()
@@ -117,6 +160,6 @@ if __name__ == '__main__':
 
 """
 python train_segmentation.py --lr=0.0002 --batch_size=4 --val_freq=10 --epochs=15 --use_cuda --fold_ids=0 
---print_freq=5 --weight_decay=0.0001 --model="dcnn_mc" --drop_prob=0.05 --cycle_length=10000 --loss_function=brier 
+--print_freq=5 --weight_decay=0.0001 --model="dcnn_mc" --drop_prob=0.05 --cycle_length=10000 --loss_function=softdice 
 --quick_run
 """

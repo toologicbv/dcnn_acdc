@@ -18,15 +18,6 @@ from utils.test_results import TestResults
 from common.acquisition_functions import bald_function
 
 
-def get_exper_handler(args, root_dir, exper_path):
-    exp_model_path = os.path.join(root_dir, exper_path)
-    exper = ExperimentHandler.load_experiment(exp_model_path)
-    exper_hdl = ExperimentHandler(exper, use_logfile=False)
-    exper_hdl.set_root_dir(root_dir)
-    exper_hdl.set_model_name(args.model_name.format(exper.run_args.drop_prob))
-    return exper_hdl
-
-
 class ExperimentHandler(object):
 
     exp_filename = "exper_stats"
@@ -85,10 +76,24 @@ class ExperimentHandler(object):
         if self.exper.run_args.cuda:
             self.logger.info(" *** RUNNING ON GPU *** ")
 
-    def load_checkpoint(self, root_dir=None, checkpoint=None, verbose=False, drop_prob=0.):
+    def load_checkpoint(self, exper_dir=None, checkpoint=None, verbose=False, drop_prob=0., retrain=False):
 
-        if root_dir is None:
-            root_dir = self.exper.config.root_dir
+        if exper_dir is None:
+            # chkpnt_dir should be /home/jorg/repository/dcnn_acdc/logs/<experiment dir>/checkpoints/
+            chkpnt_dir = os.path.join(self.exper.config.root_dir, self.exper.chkpnt_dir)
+            # will be concatenated with "<checkpoint dir> further below
+        elif retrain:
+            # if we retrain a model exper_dir should be a relative path of the experiment:
+            # e.g. "20180330_09_56_01_dcnn_mcv1_150000E_lr2e02".
+            # first we concatenate root_dir (/home/jorg/repo/dcnn_acdc/) with self.log_root_path (e.g. "logs/")
+            chkpnt_dir = os.path.join(self.exper.config.root_dir, self.exper.config.log_root_path)
+            # then concatenate with the exper_dir (name of experiment abbreviation)
+            chkpnt_dir = os.path.join(chkpnt_dir, exper_dir)
+            # and then finally with the checkpoint_path e.g. "checkpoints/"
+            chkpnt_dir = os.path.join(chkpnt_dir, self.exper.config.checkpoint_path)
+
+        else:
+            chkpnt_dir = os.path.join(self.exper.config.root_dir, self.exper.chkpnt_dir)
 
         if checkpoint is None:
             checkpoint = self.exper.epoch_id
@@ -118,18 +123,16 @@ class ExperimentHandler(object):
                           use_cuda=self.exper.run_args.cuda,
                           cycle_length=self.exper.run_args.cycle_length,
                           verbose=verbose)
-        abs_checkpoint_dir = os.path.join(root_dir,
-                                          os.path.join(self.exper.chkpnt_dir, checkpoint_file))
+        abs_checkpoint_dir = os.path.join(chkpnt_dir, checkpoint_file)
         if os.path.exists(abs_checkpoint_dir):
             checkpoint = torch.load(abs_checkpoint_dir)
             model.load_state_dict(checkpoint["state_dict"])
             if self.exper.run_args.cuda:
                 model.cuda()
-            if verbose:
-                if use_logger:
-                    self.logger.info("INFO - loaded existing model from checkpoint {}".format(abs_checkpoint_dir))
-                else:
-                    print("INFO - loaded existing model from checkpoint {}".format(abs_checkpoint_dir))
+            if verbose and not retrain:
+                self.info("INFO - loaded existing model from checkpoint {}".format(abs_checkpoint_dir))
+            else:
+                self.info("Retraining existing model loaded from checkpoint dir {}".format(chkpnt_dir))
         else:
             raise IOError("Path to checkpoint not found {}".format(abs_checkpoint_dir))
 
@@ -146,7 +149,7 @@ class ExperimentHandler(object):
         self.next_val_run()
 
         if val_set_size <= self.exper.config.val_batch_size:
-            # we don't need to chunk, the number of patches for validation is smaller than the batch_size
+            # we don't need to chunk, if the number of patches for validation is smaller than the batch_size
             num_of_chunks = 1
         else:
             num_of_chunks = val_set_size // self.exper.config.val_batch_size
@@ -154,16 +157,19 @@ class ExperimentHandler(object):
         arr_val_loss = np.zeros(num_of_chunks)
         arr_val_acc = np.zeros(6)  # array of 6 values for accuracy of ES/ED RV/MYO/LV
         arr_val_dice = np.zeros(2)  # array of 2 values, loss for ES and ED
+        s_offset = 0
         for chunk in np.arange(num_of_chunks):
+            slice_range = np.arange(s_offset, s_offset + self.exper.config.val_batch_size)
             val_batch = TwoDimBatchHandler(self.exper, batch_size=self.exper.config.val_batch_size,
                                            test_run=True)
-            val_batch.generate_batch_2d(dataset.images(train=False), dataset.labels(train=False))
+            val_batch.generate_batch_2d(dataset.images(train=False), dataset.labels(train=False),
+                                        slice_range=slice_range)
             val_loss, _ = model.do_test(val_batch.get_images(), val_batch.get_labels())
             arr_val_loss[chunk] = val_loss.data.cpu().numpy()[0]
             # returns array of 6 values
             arr_val_acc += model.get_accuracy()
             arr_val_dice += model.get_dice_losses(average=True)
-
+            s_offset += self.exper.config.val_batch_size
         val_loss = np.mean(arr_val_loss)
         arr_val_acc *= 1./float(num_of_chunks)
         arr_val_dice *= 1./float(num_of_chunks)
@@ -317,14 +323,18 @@ class ExperimentHandler(object):
                                                    test_hd[6], test_hd[7]))
 
     def create_outlier_dataset(self, dataset, model=None, checkpoint=None, mc_samples=10, u_threshold=0.1,
-                               do_save=False, use_high_threshold=False, use_train_set=True):
+                               do_save_u_stats=False, use_high_threshold=False, use_train_set=True,
+                               do_save_outlier_stats=False, test_set=None):
         """
 
         :param model: if not specified
         :param dataset: we need the original training/val dataset in order to get hold of the image slices
         and augmented slices and use the same imgID's as the original training set
         :param mc_samples:
-        :param do_save:
+        :param do_save_u_stats: save the uncertainty statistics and raw values. See object UncertaintyMapsGenerator
+        method save_maps for more details (will be stored in "/u_maps/" directory of the experiment.
+        :param do_save_outlier_stats: saves 2 dictionaries of the object "OutOfDistributionSlices", enables us
+        to trace the img/slice outlier statistics later.
         :param u_threshold: we only consider pixel uncertainties above this value. VERY IMPORTANT!
         :param use_high_threshold: use a threshold of MEAN + STDDEV. If False only use MEAN
         :param use_train_set: use the current training set of the dataset for evaluation aka generation
@@ -338,26 +348,46 @@ class ExperimentHandler(object):
             raise ValueError("When model parameter is None, you need to specify the checkpoint model"
                              "that needs to be loaded.")
 
-        maps_generator = UncertaintyMapsGenerator(self, model=model, test_set=None, verbose=False,
+        maps_generator = UncertaintyMapsGenerator(self, model=model, test_set=test_set, verbose=False,
                                                   mc_samples=mc_samples, u_threshold=u_threshold,
                                                   checkpoint=checkpoint, store_test_results=True)
-        maps_generator(do_save=do_save, clean_up=True)
+        maps_generator(do_save=do_save_u_stats, clean_up=True)
         image_uncertainties = ImageUncertainties.create_from_testresult(maps_generator.test_results)
         # detect outliers and return object OutOfDistributionSlices
         img_outliers = image_uncertainties.get_outlier_obj(use_high_threshold)
         img_outliers.create_dataset(dataset, train=use_train_set)
-        self.logger("INFO - Successfully created outlier-dataset. Number of outlier slices {}. "
-                    "Dataset contains {} slices in total".format(len(img_outliers.outlier_slices),
+        self.info("INFO - Successfully created outlier-dataset. Number of outlier slices {}. "
+                  "Dataset contains {} slices in total".format(len(img_outliers.outlier_slices),
                                                                  len(img_outliers.images)))
+        if do_save_outlier_stats:
+            save_output_dir = os.path.join(self.exper.config.root_dir,
+                                           os.path.join(self.exper.output_dir, self.exper.config.stats_path))
+            if checkpoint is None:
+                checkpoint = self.exper.epoch_id
+            out_filename = os.path.join(save_output_dir, "image_outliers_fold{}_".format(self.exper.run_args.fold_ids[0])
+                                        + str(checkpoint) + ".dll")
+            img_outliers.save(out_filename)
+        del maps_generator
+        del image_uncertainties
         return img_outliers
+
+    def info(self, message):
+        if self.logger is None:
+            print(message)
+        else:
+            self.logger.info(message)
 
     def set_lr(self, lr):
         self.exper.epoch_stats["lr"][self.exper.epoch_id - 1] = lr
 
-    def set_batch_loss(self, loss):
+    def set_batch_loss(self, loss, used_outliers=False):
         if isinstance(loss, Variable) or isinstance(loss, torch.FloatTensor):
             loss = loss.data.cpu().squeeze().numpy()
-        self.exper.epoch_stats["mean_loss"][self.exper.epoch_id-1] = loss
+        if not used_outliers:
+            self.exper.epoch_stats["mean_loss"][self.exper.epoch_id-1] = loss
+        else:
+            self.exper.epoch_stats["mean_loss_outliers"][self.exper.epoch_id - 1] = loss
+            self.exper.epoch_stats["num_of_outlier_batches"] += 1
 
     def set_dice_losses(self, dice_losses, val_run_id=None):
 
@@ -366,10 +396,13 @@ class ExperimentHandler(object):
         else:
             self.exper.val_stats["soft_dice_loss"][val_run_id-1] = dice_losses
 
-    def set_accuracy(self, accuracy, val_run_id=None):
+    def set_accuracy(self, accuracy, val_run_id=None, used_outliers=False):
 
         if val_run_id is None:
-            self.exper.epoch_stats["dice_coeff"][self.exper.epoch_id - 1] = accuracy
+            if not used_outliers:
+                self.exper.epoch_stats["dice_coeff"][self.exper.epoch_id - 1] = accuracy
+            else:
+                self.exper.epoch_stats["dice_coeff_outliers"][self.exper.epoch_id - 1] = accuracy
         else:
             # want to store the
             self.exper.val_stats["dice_coeff"][val_run_id-1] = accuracy
@@ -459,10 +492,13 @@ class Experiment(object):
                 self.num_val_runs += 1
         self.epoch_stats = {'lr': np.zeros(self.run_args.epochs),
                             'mean_loss': np.zeros(self.run_args.epochs),
+                            'mean_loss_outliers': np.zeros(self.run_args.epochs),
+                            'num_of_outlier_batches': 0,
                             # storing the mean dice loss for ES and ED separately
                             'soft_dice_loss': np.zeros((self.run_args.epochs, 2)),
                             # storing dice coefficients for LV, RV and myocardium classes for ES and ED = six values
-                            'dice_coeff': np.zeros((self.run_args.epochs, 6))}
+                            'dice_coeff': np.zeros((self.run_args.epochs, 6)),
+                            'dice_coeff_outliers': np.zeros((self.run_args.epochs, 6))}
         self.val_stats = {'epoch_ids': np.zeros(self.num_val_runs),
                           'mean_loss': np.zeros(self.num_val_runs),
                           'soft_dice_loss': np.zeros((self.num_val_runs, 2)),
