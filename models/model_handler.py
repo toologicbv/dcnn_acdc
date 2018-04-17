@@ -38,7 +38,7 @@ def load_model(exper_hdl, verbose=False):
     if exper_hdl.exper.run_args.model[:4] == 'dcnn':
         message = "Creating new model BaseDilated2DCNN: {} " \
                   "with architecture {}".format(exper_hdl.exper.run_args.model,
-                  model_architecture["description"])
+                   model_architecture["description"])
         if use_logger:
             exper_hdl.logger.info(message)
         else:

@@ -10,6 +10,7 @@ import numpy as np
 import torch
 from torch.autograd import Variable
 from in_out.read_save_images import write_numpy_to_image
+from config.config import config
 # from in_out.load_data import ACDC2017DataSet
 
 
@@ -28,6 +29,19 @@ class BatchStatistics(object):
         self.num_of_images = len(trans_imgid_name)
         self.image_names = trans_imgid_name
         self.img_slice_stats = np.zeros((self.num_of_images, BatchStatistics.max_img_slices))
+        # overall frequencies of sliceIDs during training (e.g. for guided training the first and last
+        # slices should have a higher frequency
+        self.slice_frequencies_train = None
+        # actual slice frequencies in the dataset (e.g. slice 1 75 times...)
+        self.slice_frequencies_dataset = None
+        # distribution of number of slices per (train) image
+        self.num_of_slice_freq = None
+        # distribution of slices (how many times appears slice 1, remember for all images with num_of_slice >=1
+        self.slice_freq = None
+        # 1D numpy array of unique maximal sliceIDs, will be used to create a histgram of #slices frequencies
+        self.unique_sliceIDs = None
+        # the maximum sliceID for the complete dataset
+        self.max_sliceid = 0
 
     def update_stats(self, batch_stats):
         """
@@ -43,6 +57,72 @@ class BatchStatistics(object):
             i = int(batch_stats[idx, 0])
             j = int(batch_stats[idx, 1])
             self.img_slice_stats[i, j] += 1
+
+    def compute_slice_histogram(self):
+        # REMEMBER: self.img_slice_stats is a matrix of shape [number of images (100), 20] <- we assumed that no
+        # image has more than 20 slices!
+
+        # determine the maximum number of images we trained on (should be 75)
+        # although this returns 75, this is correct for slicing numpy arrays
+        max_image_id = np.argmax(self.img_slice_stats[:, 0] == 0)
+        img_slice_stats = self.img_slice_stats[:max_image_id, :]
+        # determine for each image the maximum number of slices, note: the returned idx is the first which is equal
+        # to zero, which give us the correct #slices, hence we can use "max_sliceid" for slicing
+        max_sliceid_images = np.argmax(img_slice_stats == 0, axis=1)
+        self.max_sliceid = np.max(max_sliceid_images)
+        self.unique_sliceIDs = np.unique(max_sliceid_images)
+        self.num_of_slice_freq, _ = np.histogram(max_sliceid_images, bins=self.unique_sliceIDs.shape[0])
+        # finally we slice the columns, so we end up with a matrix [:max_image_id, :max_sliceid]
+        img_slice_stats = img_slice_stats[:, :self.max_sliceid]
+        # now sum over images/rows
+        slice_freq = np.sum(img_slice_stats, axis=0)
+        denominator = np.zeros(self.max_sliceid)
+        for imgID in np.arange(max_image_id):
+            col = max_sliceid_images[imgID]
+            denominator[:col] += np.ones(col)
+        # we need a counter that specifies for each slice how many times it occurs in the overall dataset (train).
+        # "slice_frequencies_train". we'll use this later to scale the frequencies of the outliers e.g. when
+        # we detected slice 17 as an outlier twice but it occurs only twice in the complete dataset, than this is
+        # higher compared to twice finding slice 1, which occurs 75 times in the dataset
+        counter = np.zeros(self.max_sliceid)
+        for i, num_of_slices in enumerate(self.unique_sliceIDs):
+            loc_counter = np.ones(num_of_slices) * self.num_of_slice_freq[i]
+            counter[:num_of_slices] += loc_counter
+        # USED IN plot_outlier_slice_hists
+        self.slice_frequencies_dataset = 1./counter
+        # the actual frequencies of each slice used during training
+        self.slice_frequencies_train = slice_freq * (1. / denominator)
+
+    def plot_histgrams(self, width=16, height=8, do_save=False, do_show=False, model_name=None):
+
+        rows = 1
+        columns = 2
+        fig = plt.figure(figsize=(width, height))
+        ax = fig.gca()
+        fig.suptitle("SliceID histograms obtained during training", **config.title_font_medium)
+
+        ax5 = plt.subplot2grid((rows, columns), (0, 0), rowspan=1, colspan=1)
+        ax5.bar(self.unique_sliceIDs, self.num_of_slice_freq, label=r"Densities", color='g', alpha=0.2)
+        ax5.legend(loc="best", prop={'size': 12})
+        ax5.set_xlabel("# of slices per image", **config.axis_font)
+        ax5.set_xticks(self.unique_sliceIDs)
+        ax5.set_ylabel("Density")
+        ax5.set_title("Distribution of #slices per image", **config.title_font_small)
+
+        ax6 = plt.subplot2grid((rows, columns), (0, 1), rowspan=1, colspan=1)
+        sliceIDs = np.arange(1, self.max_sliceid + 1)
+        ax6.bar(sliceIDs, self.slice_frequencies_train, label=r"Densities", color='b', alpha=0.2)
+        ax6.legend(loc="best", prop={'size': 12})
+        ax6.set_xlabel("SliceID", **config.axis_font)
+        ax6.set_xticks(sliceIDs)
+        ax6.set_ylabel("Density")
+        ax6.set_title("Distribution of sliceIDs", **config.title_font_small)
+
+        if do_save:
+            pass
+
+        if do_show:
+            plt.show()
 
 
 class BatchHandler(object):

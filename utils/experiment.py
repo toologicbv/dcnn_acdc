@@ -4,6 +4,8 @@ import torch
 from torch.autograd import Variable
 import numpy as np
 import os
+import glob
+from collections import OrderedDict
 from datetime import datetime
 from pytz import timezone
 import dill
@@ -12,7 +14,7 @@ from common.parsing import create_def_argparser, run_dict
 from common.common import create_logger, create_exper_label, setSeed
 from config.config import config, DEFAULT_DCNN_MC_2D, DEFAULT_DCNN_2D
 from utils.batch_handlers import TwoDimBatchHandler, BatchStatistics
-from utils.generate_uncertainty_maps import UncertaintyMapsGenerator, ImageUncertainties
+from utils.generate_uncertainty_maps import UncertaintyMapsGenerator, ImageUncertainties, OutOfDistributionSlices
 import models.dilated_cnn
 from utils.test_results import TestResults
 from common.acquisition_functions import bald_function
@@ -98,11 +100,6 @@ class ExperimentHandler(object):
         if checkpoint is None:
             checkpoint = self.exper.epoch_id
 
-        if self.logger is None:
-            use_logger = False
-        else:
-            use_logger = True
-
         str_classname = "BaseDilated2DCNN"
         checkpoint_file = str_classname + "checkpoint" + str(checkpoint).zfill(5) + ".pth.tar"
         act_class = getattr(models.dilated_cnn, str_classname)
@@ -132,7 +129,7 @@ class ExperimentHandler(object):
             if verbose and not retrain:
                 self.info("INFO - loaded existing model from checkpoint {}".format(abs_checkpoint_dir))
             else:
-                self.info("Retraining existing model loaded from checkpoint dir {}".format(chkpnt_dir))
+                self.info("Loading existing model loaded from checkpoint dir {}".format(chkpnt_dir))
         else:
             raise IOError("Path to checkpoint not found {}".format(abs_checkpoint_dir))
 
@@ -210,9 +207,9 @@ class ExperimentHandler(object):
         :param do_filter: use post processing 6-connected components on predicted labels (per class)
         :param store_details: if TRUE TestResult object will hold all images/labels/predicted labels, mc-stats etc.
         which basically results in a very large object. Should not be used for evaluation of many test images,
+               evaluate the performance on the test set. Variable is used in order to indicate this situation
         most certainly only for 1-3 images in order to generate some figures.
         :param repeated_run: used during ensemble testing. so we use the same model, different checkpoint, to
-               evaluate the performance on the test set. Variable is used in order to indicate this situation
         :return:
         """
 
@@ -371,6 +368,25 @@ class ExperimentHandler(object):
         del image_uncertainties
         return img_outliers
 
+    def get_outlier_stats(self):
+        load_dir_stats = os.path.join(self.exper.config.root_dir,
+                                      os.path.join(self.exper.output_dir, self.exper.config.stats_path))
+        search_path = os.path.join(load_dir_stats, "image_outliers*.dll")
+        self.exper.outliers_per_epoch = OrderedDict()
+        c = 0
+        for filename in glob.glob(search_path):
+            outliers_per_img, outlier_slices = OutOfDistributionSlices.load(filename)
+            start = filename.rfind("_") + 1
+            end = filename.find(".")
+            epoch = int(filename[start:end])
+            c += 1
+            search_test_result = os.path.join(load_dir_stats, "test_results*{}.dll".format(epoch))
+            filename_test_result = glob.glob(search_test_result)[0]
+            test_result = TestResults.load_results(path_to_exp=filename_test_result, verbose=False)
+            self.exper.outliers_per_epoch[epoch] = tuple((outliers_per_img, outlier_slices))
+        print("Loaded outlier stats for {} training epochs"
+              " (property=outliers_per_epoch, dictionary with tuple)".format(c))
+
     def info(self, message):
         if self.logger is None:
             print(message)
@@ -480,6 +496,7 @@ class Experiment(object):
         self.val_run_id = -1
         self.init_statistics()
         self.batch_statistics = None
+        self.outliers_per_epoch
 
     def init_statistics(self):
         if self.run_args.val_freq != 0:

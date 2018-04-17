@@ -83,10 +83,13 @@ def loss_plot(exper, fig_name=None, height=8, width=6, save=False, show=True, va
 
     if save:
         if fig_name is None:
-            fig_name = os.path.join(exper.root_directory , os.path.join(exper.log_directory,
+            fig_name = os.path.join(exper.root_directory, os.path.join(exper.log_directory,
                                                                         "figures/learning_curve" + config.figure_ext))
         plt.savefig(fig_name, bbox_inches='tight')
         print("INFO - Successfully saved fig %s" % fig_name)
     if show:
         plt.show()
     plt.close()
+
+
+

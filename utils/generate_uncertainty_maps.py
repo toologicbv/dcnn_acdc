@@ -58,13 +58,14 @@ class OutOfDistributionSlices(object):
                 print("INFO - Successfully saved OutOfDistributionSlices to {}".format(outfilename))
         except IOError:
             print("ERROR - unable to save object to {}".format(outfilename))
-
-    def load(self, load_filename):
+    @staticmethod
+    def load(load_filename):
         try:
             with open(load_filename, 'rb') as f:
                 # see method "save" for details about the two saved dictionaries
-                outliers_per_img = dill.load(f)
-                outlier_slices = dill.load(f)
+                saved_data = dill.load(f)
+                outliers_per_img = saved_data[0]
+                outlier_slices = saved_data[1]
         except IOError as err:
             print("ERROR - unable to load object from {}".format(load_filename))
         else:

@@ -1182,9 +1182,9 @@ class TestResults(object):
         del image_probs_categorized
 
     @staticmethod
-    def load_results(path_to_exp, generate_stats=False):
-
-        print("INFO - Loading results from file {}".format(path_to_exp))
+    def load_results(path_to_exp, generate_stats=False, verbose=True):
+        if verbose:
+            print("INFO - Loading results from file {}".format(path_to_exp))
         try:
             with open(path_to_exp, 'rb') as f:
                 test_results = dill.load(f)
@@ -1194,11 +1194,12 @@ class TestResults(object):
             print("ERROR - Can't open file {}".format(path_to_exp))
             raise IOError
         if generate_stats:
-            print("INFO - Generating slice statistics for all {} images.".format(test_results.N))
+            if verbose:
+                print("INFO - Generating slice statistics for all {} images.".format(test_results.N))
             for image_num in tqdm(np.arange(len(test_results.N))):
                 test_results.generate_slice_statistics(image_num)
-
-        print("INFO - Successfully loaded TestResult object.")
+        if verbose:
+            print("INFO - Successfully loaded TestResult object.")
         return test_results
 
     def show_results(self):
