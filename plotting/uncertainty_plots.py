@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 
-from utils.generate_uncertainty_maps import UncertaintyMapsGenerator, ImageUncertainties
+from utils.generate_uncertainty_maps import ImageOutliers, ImageUncertainties
 
 
 def create_figure_dir(fig_path):
@@ -64,7 +64,12 @@ def compute_mean_std_per_class(test_results, u_type, image_range):
 
 
 def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=False, image_range=None,
-                   u_type="bald", use_high_threshold=False):
+                   u_type="bald", use_high_threshold=False, translate_img_range=False):
+
+    # NOTE: translate_img_range can be used in case we have a test_set of 25 images but we only
+    # tested on 3 images. Then it can be useful to use imageIDs (in the range) from the test set
+    # [12, 14] and translate them back into the imageIDs of the test_result object. We could also
+    # use the patientIDs, may be this is something for the future
 
     model_name = exper_handler.exper.model_name
     fig_root_dir = os.path.join(exper_handler.exper.config.root_dir, exper_handler.exper.output_dir)
@@ -76,6 +81,7 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         patientID_range = exper_handler.test_results.image_names
         print("INFO - No image range specified using test_result object.image_ids {}".format(image_range))
     else:
+
         patientID_range = []
         np_test_img_ids = np.array(exper_handler.test_results.image_ids)
         # translate imageIDs to patientIDs and check for inconsistencies:
@@ -84,14 +90,29 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
             raise ValueError("ERROR - Invalid image range. Test set contains the following"
                              "image IDs {}".format(exper_handler.test_results.image_ids))
         # translate image range
+        new_image_range = []
         for id in image_range:
-            img_name = exper_handler.test_results.image_names[id]
+            try:
+                img_name = exper_handler.test_results.image_names[id]
+                new_image_range.append(id)
+            except:
+                # we can't find the imageID in the test_result lists. Happens when we specify an image number
+                # that relates to the ID in the test_set. The trans_dict object holds the translations that we can
+                # use to find the patientID and subsequently we retrieve the index from the test_result object
+                # image_ids.
+                for patientID, test_set_id in exper_handler.test_results.trans_dict.iteritems():
+                    if test_set_id == id:
+                        img_name = patientID
+                        new_idx = exper_handler.test_results.image_ids.index(id)
+                        new_image_range.append(new_idx)
+                        print("Found {} {}".format(new_idx, img_name))
+                        break
             if exper_handler.test_results.trans_dict[img_name] != id:
                 raise ValueError("ERROR - Inconsistency detected between test_result.trans_dict"
                                  "object and test_result.image_names, unfortunately...")
             else:
                 patientID_range.append(img_name)
-    print("patientID_range ", patientID_range)
+        image_range = new_image_range
     """
         NOTE: test_results.uncertainty_stats is a list, containing dictionaries 1) "bald" and 2) "stddev"
         for each test image.
@@ -117,8 +138,8 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
     #     image_range = new_image_range
     # double height of figure because we're plotting 4 instead of 2 rows
     if u_type == "stddev":
-        height *= 3
-
+        height *= 2.5
+    # I WAS HERE: load outliers from file
     img_uncert_obj = ImageUncertainties.create_from_testresult(exper_handler.test_results)
     img_outliers = img_uncert_obj.get_outlier_obj(use_high_threshold=use_high_threshold)
 
@@ -171,6 +192,7 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         es_hd = np.mean(img_hd[0], axis=0, keepdims=True)
         ed_hd = np.mean(img_hd[1], axis=0, keepdims=True)
         es_seg_errors = img_seg_errors[:, :4]
+        # TODO ed_seg_errors are all emtpy???
         ed_seg_errors = img_seg_errors[:, 4:]
         es_mean_seg_errors = np.mean(es_seg_errors, axis=1)
         ed_mean_seg_errors = np.mean(ed_seg_errors, axis=1)
@@ -182,8 +204,9 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         # each phase (ES/ED 1st index). 2nd index specifies stat-measure (0-3) mean/std/min/max
         total_uncert_es = img_uncert_obj.norm_uncertainty_per_phase[patientID][0]
         total_uncert_ed = img_uncert_obj.norm_uncertainty_per_phase[patientID][1]
-        print("--------- Outlier slices -------------")
-        print(np.array(img_outliers.outliers_per_img[patientID]) + 1)
+        if patientID in img_outliers.outliers_per_img:
+            print("--------- Outlier slices -------------")
+            print(np.array(img_outliers.outliers_per_img[patientID]) + 1)
         fig = plt.figure(figsize=(width, height))
         fig.suptitle("Model " + model_name + "\n" + "Image: " + img_name + "(id={})".format(img_id) +
                      "\n\n" + es_performance + ed_performance,
@@ -252,26 +275,26 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
         # Use number of seg errors as area of the marker
         # ---------------------------------------------------------------------------------------------------------
         # ---------------------------- PLOT (1,0) ----------------------------------------------------
-        ax3 = plt.subplot2grid((rows, columns), (row_offset, 0), rowspan=1, colspan=1)
-        ax3.scatter(es_dice.squeeze(), total_uncert_es, s=es_mean_seg_errors * 1.5, alpha=0.3, c='g')
-        plot_slices_nums(ax3, es_dice.squeeze(), total_uncert_es)
-
-        ax3.set_ylabel("total uncertainty")
-        ax3.set_xlabel("mean dice")
-        ax3.set_title("ES mean-slice-uncertainties (area=pixels) (#slices={})".format(num_of_slices))
-        ax3.set_xlim(x_lims)
-        ax3.set_ylim(y_lims)
-        plot_cross(ax3, es_dice.squeeze(), total_uncert_es, x_lims, y_lims)
-        # ---------------------------- PLOT (1,1) ----------------------------------------------------
-        ax4 = plt.subplot2grid((rows, columns), (row_offset, 1), rowspan=1, colspan=1)
-        ax4.scatter(ed_dice.squeeze(), total_uncert_ed, s=ed_mean_seg_errors * 1.5, alpha=0.3, c='b')
-        plot_slices_nums(ax4, ed_dice.squeeze(), total_uncert_ed)
-        ax4.set_ylabel("total uncertainty")
-        ax4.set_xlabel("mean dice")
-        ax4.set_title("ED mean-slice-uncertainties (area=seg-errors) (#slices={})".format(num_of_slices))
-        ax4.set_xlim(x_lims)
-        ax4.set_ylim(y_lims)
-        plot_cross(ax4, ed_dice.squeeze(), total_uncert_ed, x_lims, y_lims)
+        # ax3 = plt.subplot2grid((rows, columns), (row_offset, 0), rowspan=1, colspan=1)
+        # ax3.scatter(es_dice.squeeze(), total_uncert_es, s=es_mean_seg_errors * 1.5, alpha=0.3, c='g')
+        # plot_slices_nums(ax3, es_dice.squeeze(), total_uncert_es)
+        #
+        # ax3.set_ylabel("total uncertainty")
+        # ax3.set_xlabel("mean dice")
+        # ax3.set_title("ES mean-slice-uncertainties (area=pixels) (#slices={})".format(num_of_slices))
+        # ax3.set_xlim(x_lims)
+        # ax3.set_ylim(y_lims)
+        # plot_cross(ax3, es_dice.squeeze(), total_uncert_es, x_lims, y_lims)
+        # # ---------------------------- PLOT (1,1) ----------------------------------------------------
+        # ax4 = plt.subplot2grid((rows, columns), (row_offset, 1), rowspan=1, colspan=1)
+        # ax4.scatter(ed_dice.squeeze(), total_uncert_ed, s=ed_mean_seg_errors * 1.5, alpha=0.3, c='b')
+        # plot_slices_nums(ax4, ed_dice.squeeze(), total_uncert_ed)
+        # ax4.set_ylabel("total uncertainty")
+        # ax4.set_xlabel("mean dice")
+        # ax4.set_title("ED mean-slice-uncertainties (area=seg-errors) (#slices={})".format(num_of_slices))
+        # ax4.set_xlim(x_lims)
+        # ax4.set_ylim(y_lims)
+        # plot_cross(ax4, ed_dice.squeeze(), total_uncert_ed, x_lims, y_lims)
 
         #   fig.tight_layout(rect=[0, 0.03, 1, 0.97])
         if do_save:

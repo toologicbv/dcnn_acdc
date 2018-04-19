@@ -57,7 +57,8 @@ def test_ensemble(test_set, exper_hdl, mc_samples=10, sample_weights=True, use_u
     if reset_results:
         exper_hdl.reset_results(mc_samples=mc_samples, use_dropout=sample_weights)
     if use_uncertainty:
-        print("INFO - Using {:.2f} as uncertainty threshold".format(referral_threshold))
+        # print("INFO - Using {:.2f} as uncertainty threshold".format(referral_threshold))
+        print("WARNING - Using outlier statistics.")
     repeated_run = True
     for run_id, checkpoint in enumerate(checkpoints):
         if run_id == 0:
@@ -84,8 +85,11 @@ def test_ensemble(test_set, exper_hdl, mc_samples=10, sample_weights=True, use_u
     exper_hdl.test_results.show_results()
 
     if generate_stats:
-        print("INFO - generating statistics for {} run(s). May take a while".format(exper_hdl.test_results.N))
-        exper_hdl.test_results.generate_all_statistics()
+        if mc_samples == 1:
+            print("--->>> WARNING: can't compute statistics because mc_samples=1!! Skipping this step.")
+        else:
+            print("INFO - generating statistics for {} run(s). May take a while".format(exper_hdl.test_results.N))
+            exper_hdl.test_results.generate_all_statistics()
     if save_results:
         exper_hdl.test_results.save_results(fold_ids=test_set.fold_ids)
 

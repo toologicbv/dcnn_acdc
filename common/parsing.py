@@ -65,6 +65,7 @@ def do_parse_args():
     # in case we retrain a previous model/checkpoint this parameter specifies the experiment directory
     # relative path (w.r.t. logs/ directory e.g. "20180330_09_56_01_dcnn_mcv1_150000E_lr2e02"
     parser.add_argument('--retrain_exper', type=str, default=None)
+    # if --retrain_exper is specified but without checkpoint, we'll try to load the last model in the checkpoints-dir
     parser.add_argument('--retrain_chkpnt', type=int, default=None)
     parser.add_argument('--root_dir', default=config.root_dir)
     parser.add_argument('--log_dir', default=None)
@@ -94,7 +95,7 @@ def do_parse_args():
     parser.add_argument('--cycle_length', type=int, default=0, metavar='N',
                         help='Cycle length for update of leardcnn_mcning rate (and snapshot ensemble) (default: 0)')
 
-    parser.add_argument('--retrain', action='store_true')
+    parser.add_argument('--train_outlier_only', action='store_true')
     parser.add_argument('--chkpnt', action='store_true')
     parser.add_argument('--guided_train', action="store_true", help="train extra on slice outliers.")
     parser.add_argument('--quick_run', action='store_true')

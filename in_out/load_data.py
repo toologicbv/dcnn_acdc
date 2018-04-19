@@ -351,6 +351,12 @@ class ACDC2017DataSet(BaseImageDataSet):
         else:
             return self.val_images
 
+    def get_num_of_slices(self, train=True):
+        if train:
+            return len(self.train_images)
+        else:
+            return len(self.val_images)
+
     def labels(self, train=True):
         if train:
             return self.train_labels

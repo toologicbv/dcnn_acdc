@@ -15,6 +15,7 @@ from common.common import create_logger, create_exper_label, setSeed
 from config.config import config, DEFAULT_DCNN_MC_2D, DEFAULT_DCNN_2D
 from utils.batch_handlers import TwoDimBatchHandler, BatchStatistics
 from utils.generate_uncertainty_maps import UncertaintyMapsGenerator, ImageUncertainties, OutOfDistributionSlices
+from utils.generate_uncertainty_maps import ImageOutliers
 import models.dilated_cnn
 from utils.test_results import TestResults
 from common.acquisition_functions import bald_function
@@ -143,21 +144,25 @@ class ExperimentHandler(object):
         # validate model
         if val_set_size is None:
             val_set_size = self.exper.config.val_set_size
-        self.next_val_run()
+        if val_set_size > dataset.get_num_of_slices(train=False):
+            val_set_size = dataset.get_num_of_slices(train=False)
 
+        self.next_val_run()
         if val_set_size <= self.exper.config.val_batch_size:
             # we don't need to chunk, if the number of patches for validation is smaller than the batch_size
             num_of_chunks = 1
+            val_batch_size = val_set_size
         else:
             num_of_chunks = val_set_size // self.exper.config.val_batch_size
+            val_batch_size = self.exper.config.val_batch_size
 
         arr_val_loss = np.zeros(num_of_chunks)
         arr_val_acc = np.zeros(6)  # array of 6 values for accuracy of ES/ED RV/MYO/LV
         arr_val_dice = np.zeros(2)  # array of 2 values, loss for ES and ED
         s_offset = 0
         for chunk in np.arange(num_of_chunks):
-            slice_range = np.arange(s_offset, s_offset + self.exper.config.val_batch_size)
-            val_batch = TwoDimBatchHandler(self.exper, batch_size=self.exper.config.val_batch_size,
+            slice_range = np.arange(s_offset, s_offset + val_batch_size)
+            val_batch = TwoDimBatchHandler(self.exper, batch_size=val_batch_size,
                                            test_run=True)
             val_batch.generate_batch_2d(dataset.images(train=False), dataset.labels(train=False),
                                         slice_range=slice_range)
@@ -166,7 +171,7 @@ class ExperimentHandler(object):
             # returns array of 6 values
             arr_val_acc += model.get_accuracy()
             arr_val_dice += model.get_dice_losses(average=True)
-            s_offset += self.exper.config.val_batch_size
+            s_offset += val_batch_size
         val_loss = np.mean(arr_val_loss)
         arr_val_acc *= 1./float(num_of_chunks)
         arr_val_dice *= 1./float(num_of_chunks)
@@ -212,12 +217,76 @@ class ExperimentHandler(object):
         :param repeated_run: used during ensemble testing. so we use the same model, different checkpoint, to
         :return:
         """
+        half_classes = 4
+        ref_dice_es = [[], [], []]
+        ref_dice_ed = [[], [], []]
+        dice_es = [[], [], []]
+        dice_ed = [[], [], []]
 
+        # -------------------------------------- local procedures BEGIN -----------------------------------------
+
+        def format_print_string(outlier_list, phase):
+            # dice_score is a list and will be used to calculate mean-dice after referral
+            f_str = ""
+            str_elem = "{:.2f}"
+            cls_range = np.arange(1, 4)
+
+            for cls in cls_range:
+                if cls in outlier_list:
+                    f_str += "*" + str_elem + "*"
+                    # remove outlier dice score
+                    if phase == 0:
+                        # print("Remove-es {}".format(slice_acc[cls]))
+                        del ref_dice_es[cls - 1][-1]
+                    else:
+                        # print("Remove-ed {}".format(slice_acc[cls + half_classes]))
+                        del ref_dice_ed[cls - 1][-1]
+                else:
+                    f_str += str_elem
+                if cls != cls_range[-1]:
+                    f_str += "/"
+            return f_str
+
+        def print_detailed_results(es_outliers, ed_outliers):
+
+            if es_outliers:
+                es_print_string = format_print_string(es_outliers, phase=0)
+            else:
+                es_print_string = "{:.2f}/{:.2f}/{:.2f}"
+            if ed_outliers:
+                ed_print_string = format_print_string(ed_outliers, phase=1)
+            else:
+                ed_print_string = "{:.2f}/{:.2f}/{:.2f}"
+
+            es_print_string = "Test img/slice {}/{} \tES: Dice (RV/Myo/LV)" + es_print_string
+            ed_print_string = "\tED: dice (RV/Myo/LV)" + ed_print_string
+            msg_part1 = es_print_string.format(image_num, slice_idx + 1, slice_acc[1], slice_acc[2], slice_acc[3])
+            msg_part2 = ed_print_string.format(slice_acc[5], slice_acc[6], slice_acc[7])
+            print(msg_part1 + msg_part2)
+
+        # -------------------------------------- local procedures END -----------------------------------------
         if use_seed:
             setSeed(1234, self.exper.run_args.cuda)
         if self.test_results is None:
             self.test_results = TestResults(self.exper, use_dropout=sample_weights, mc_samples=mc_samples)
-
+        # if we're discarding outlier slices/classes we need to initialize a couple of things
+        if use_uncertainty:
+            if not self.exper.outliers_per_epoch:
+                print("------>>>>> INFO - Loading outlier statistics from disk <<<<<-------")
+                self.get_outlier_stats()
+            # geth the patient id for this image_num
+            patient_id = test_set.img_file_names[image_num]
+            print("INFO - Using outlier statistics for this image {}".format(patient_id))
+            # get the "latest" (max epoch) outlier statistics, tuple with 6 dictionaries
+            outlier_stats = self.exper.outliers_per_epoch[self.exper.epoch_id]
+            # we only need the most detailed dictionaries (key=(patient_id, slice_id, phase)) for ES & ED
+            outliers_per_img_class_es = outlier_stats[4]
+            outliers_per_img_class_ed = outlier_stats[5]
+            image_outliers = ImageOutliers(patient_id, outliers_per_img_class_es, outliers_per_img_class_ed)
+        else:
+            image_outliers = None
+            referral_dice = None
+            non_referral_dice = None
         # correct the divisor for calculation of stdev when low number of samples (biased), used in np.std
         if mc_samples <= 25 and mc_samples != 1:
             ddof = 1
@@ -253,63 +322,104 @@ class ExperimentHandler(object):
             bald_values[1] = bald_function(b_predictions[:, 4:, :, :, test_set.slice_counter])
 
             means_test_loss = np.mean(b_test_losses)
-            if use_uncertainty:
-                test_set.set_pred_labels(mean_test_pred, pred_stddev=std_test_pred,
-                                         referral_threshold=referral_threshold,
-                                         verbose=verbose, do_filter=do_filter)
-            else:
-                # NOTE: we set do_filter (connected components post-processing) to FALSE here because we will do
-                # this at the end for the complete 3D label object, but not for the individual slices
-                # NOTE: we set referral_threshold to 0. because we don't want to use uncertainties!
-                test_set.set_pred_labels(mean_test_pred, referral_threshold=0.,
-                                         verbose=verbose, do_filter=False)
+            # THIS IS A PIECE OF RESIDUAL CODING WHICH SHOULD BE NOT USED. THE FUNCTIONALITY IS STILL IN TACT
+            # BUT WE ARE CURRENTLY USING THE Uncertainty MAPS which we generate to refer image slices-phase-class
+            # to an UNKNOWN expert, we mark the dice values as OUTLIERS.
+            # if use_uncertainty:
+            #     test_set.set_pred_labels(mean_test_pred, pred_stddev=std_test_pred,
+            #                              referral_threshold=referral_threshold,
+            #                              verbose=verbose, do_filter=do_filter)
+            # else:
+            # NOTE: we set do_filter (connected components post-processing) to FALSE here because we will do
+            # this at the end for the complete 3D label object, but not for the individual slices
+            # NOTE: we set referral_threshold to 0. because we don't want to use uncertainties!
+            test_set.set_pred_labels(mean_test_pred, referral_threshold=0., verbose=verbose, do_filter=False)
 
             test_set.set_stddev_map(std_test_pred, u_threshold=u_threshold)
             test_set.set_bald_map(bald_values, u_threshold=u_threshold)
             slice_acc, slice_hd = test_set.compute_slice_accuracy(compute_hd=compute_hd)
+            if use_uncertainty:
+                # add the current dice score to the referral arrays
+                for cls in np.arange(1, half_classes):
+                    ref_dice_es[cls - 1].append(slice_acc[cls])
+                    ref_dice_ed[cls - 1].append(slice_acc[cls + half_classes])
+
+                    dice_es[cls - 1].append(slice_acc[cls])
+                    dice_ed[cls - 1].append(slice_acc[cls + half_classes])
+
+                if image_outliers and image_outliers.has_outliers:
+                    outliers_es = image_outliers.get_slice_outliers(test_set.slice_counter, phase=0)
+                    outliers_ed = image_outliers.get_slice_outliers(test_set.slice_counter, phase=1)
+                else:
+                    outliers_es = None
+                    outliers_ed = None
+                print_detailed_results(outliers_es, outliers_ed)
             if sample_weights:
-                # NOTE: currently only displaying the BALD uncertainty stats but we also capture the stddev stats
+                # NOTE: currently only displaying the MEAN STDDEV uncertainty stats but we also capture the stddev stats
+                # b_uncertainty_stats["stddev"] has shape [2, 4cls, 4measures, #slices]
                 es_total_uncert, es_num_of_pixel_uncert, es_num_pixel_uncert_above_tre, num_of_conn_commponents = \
-                    test_set.b_uncertainty_stats["bald"][0, :, slice_idx]  # ES
+                    np.mean(test_set.b_uncertainty_stats["stddev"][0, :, :, slice_idx], axis=0)  # ES
                 ed_total_uncert, ed_num_of_pixel_uncert, ed_num_pixel_uncert_above_tre, num_of_conn_commponents = \
-                    test_set.b_uncertainty_stats["bald"][1, :, slice_idx]  # ED
+                    np.mean(test_set.b_uncertainty_stats["stddev"][1, :, :, slice_idx], axis=0) # ED
                 es_seg_errors = np.sum(test_set.b_seg_errors[slice_idx, :4])
                 ed_seg_errors = np.sum(test_set.b_seg_errors[slice_idx, 4:])
                 if verbose:
+                    if slice_hd is None:
+                        slice_hd = np.zeros(8)
                     print("Test img/slice {}/{}".format(image_num, slice_idx))
-                    print("ES: Total BALD/seg-errors/#pixel/#pixel(tre) \tDice (RV/Myo/LV)\tHD (RV/Myo/LV)")
+                    print("ES: Total U-value/seg-errors/#pixel/#pixel(tre) \tDice (RV/Myo/LV)\tHD (RV/Myo/LV)")
                     print("  \t{:.2f}/{}/{}/{} \t\t\t{:.2f}/{:.2f}/{:.2f}"
                           "\t\t{:.2f}/{:.2f}/{:.2f}".format(es_total_uncert, es_seg_errors, es_num_of_pixel_uncert,
                                                                        es_num_pixel_uncert_above_tre,
                                                                        slice_acc[1], slice_acc[2], slice_acc[3],
                                                                        slice_hd[1], slice_hd[2], slice_hd[3]))
                     # print(np.array_str(np.array(es_region_mean_uncert), precision=3))
-                    print("ED: Total BALD/seg-errors/#pixel/#pixel(tre)\tDice (RV/Myo/LV)\tHD (RV/Myo/LV)")
+                    print("ED: Total U-value/seg-errors/#pixel/#pixel(tre)\tDice (RV/Myo/LV)\tHD (RV/Myo/LV)")
                     print("  \t{:.2f}/{}/{}/{} \t\t\t{:.2f}/{:.2f}/{:.2f}"
                           "\t\t{:.2f}/{:.2f}/{:.2f}".format(ed_total_uncert, ed_seg_errors, ed_num_of_pixel_uncert,
                                                           ed_num_pixel_uncert_above_tre,
                                                           slice_acc[5], slice_acc[6], slice_acc[7],
                                                           slice_hd[5], slice_hd[6], slice_hd[7]))
-                    # print(np.array_str(np.array(ed_region_mean_uncert), precision=3))
+
                     print("------------------------------------------------------------------------")
             slice_idx += 1
 
         test_accuracy, test_hd = test_set.get_accuracy(compute_hd=compute_hd, do_filter=do_filter)
-        self.test_results.add_results(test_set.b_image, test_set.b_labels, test_set.b_image_id,
-                                      test_set.b_pred_labels, b_predictions, test_set.b_stddev_map,
-                                      test_accuracy, test_hd, seg_errors=test_set.b_seg_errors,
-                                      store_all=store_details,
-                                      bald_maps=test_set.b_bald_map,
-                                      uncertainty_stats=test_set.b_uncertainty_stats,
-                                      test_accuracy_slices=test_set.b_acc_slices,
-                                      test_hd_slices=test_set.b_hd_slices,
-                                      image_name=test_set.b_image_name, repeated_run=repeated_run)
+
         print("Image {} - Test accuracy: test loss {:.3f}\t "
-              "dice(RV/Myo/LV): ES {:.2f}/{:.2f}/{:.2f} --- "
-              "ED {:.2f}/{:.2f}/{:.2f}".format(image_num+1, means_test_loss,
+              " dice(RV/Myo/LV): ES {:.2f}/{:.2f}/{:.2f} --- "
+              "ED {:.2f}/{:.2f}/{:.2f}".format(str(image_num+1) + "-" + test_set.b_image_name, means_test_loss,
                                                test_accuracy[1], test_accuracy[2],
                                                test_accuracy[3], test_accuracy[5],
                                                test_accuracy[6], test_accuracy[7]))
+        if use_uncertainty:
+            referral_dice_es, referral_dice_ed = np.zeros(3), np.zeros(3)
+            np_dice_es = np.zeros(3)
+            np_dice_ed = np.zeros(3)
+            for cls in np.arange(3):
+                np_dice_es[cls] = np.mean(dice_es[cls])
+                np_dice_ed[cls] = np.mean(dice_ed[cls])
+                if len(ref_dice_es[cls]) != 0:
+                    referral_dice_es[cls] = np.mean(np.array(ref_dice_es[cls]))
+                else:
+                    # test_accuracy is numpy array with shape 8.
+                    referral_dice_es[cls] = test_accuracy[cls + 1]
+                if len(ref_dice_ed[cls]) != 0:
+                    referral_dice_ed[cls] = np.mean(np.array(ref_dice_ed[cls]))
+                else:
+                    # test_accuracy is numpy array with shape 8.
+                    referral_dice_ed[cls] = test_accuracy[cls + 1 + half_classes]
+            referral_dice = np.concatenate((referral_dice_es, referral_dice_ed))
+            non_referral_dice = np.array([np_dice_es[0], np_dice_es[1], np_dice_es[2],
+                                          np_dice_ed[0], np_dice_ed[1], np_dice_ed[2]])
+            print("\t\t\t\tWithout outliers: dice(RV/Myo/LV): ES {:.2f}/{:.2f}/{:.2f} --- "
+                  "ED {:.2f}/{:.2f}/{:.2f}".format(referral_dice_es[0], referral_dice_es[1],
+                                                   referral_dice_es[2], referral_dice_ed[0],
+                                                   referral_dice_ed[1], referral_dice_ed[2]))
+            print("\t\t\t\t    Wih outliers: dice(RV/Myo/LV): ES {:.2f}/{:.2f}/{:.2f} --- "
+                  "ED {:.2f}/{:.2f}/{:.2f}".format(np_dice_es[0], np_dice_es[1],
+                                                   np_dice_es[2], np_dice_ed[0],
+                                                   np_dice_ed[1], np_dice_ed[2]))
         if compute_hd:
             print("Image {} - Test accuracy: test loss {:.3f}\t "
 
@@ -318,10 +428,20 @@ class ExperimentHandler(object):
                                                    test_hd[1], test_hd[2],
                                                    test_hd[3], test_hd[5],
                                                    test_hd[6], test_hd[7]))
+        self.test_results.add_results(test_set.b_image, test_set.b_labels, test_set.b_image_id,
+                                      test_set.b_pred_labels, b_predictions, test_set.b_stddev_map,
+                                      test_accuracy, test_hd, seg_errors=test_set.b_seg_errors,
+                                      store_all=store_details,
+                                      bald_maps=test_set.b_bald_map,
+                                      uncertainty_stats=test_set.b_uncertainty_stats,
+                                      test_accuracy_slices=test_set.b_acc_slices,
+                                      test_hd_slices=test_set.b_hd_slices,
+                                      image_name=test_set.b_image_name, repeated_run=repeated_run,
+                                      referral_accuracy=referral_dice, non_referral_accuracy=non_referral_dice)
 
     def create_outlier_dataset(self, dataset, model=None, checkpoint=None, mc_samples=10, u_threshold=0.1,
                                do_save_u_stats=False, use_high_threshold=False, use_train_set=True,
-                               do_save_outlier_stats=False, test_set=None):
+                               do_save_outlier_stats=False, test_set=None, use_existing_umaps=False):
         """
 
         :param model: if not specified
@@ -335,7 +455,12 @@ class ExperimentHandler(object):
         :param u_threshold: we only consider pixel uncertainties above this value. VERY IMPORTANT!
         :param use_high_threshold: use a threshold of MEAN + STDDEV. If False only use MEAN
         :param use_train_set: use the current training set of the dataset for evaluation aka generation
-        of the uncertainty values which will determine the slice outliers per image.
+        of the uncertainty values which will determine the slice outliers per image. If False we use the validation set
+        :param use_existing_umaps: If True we load existing U-maps from the u_maps directory, so skipping the step
+        of generating the U-maps.
+        :param test_set: the test_set we're operating on i.e. we're determining the outliers. If not specified
+        UncertaintyMapsGenerator will load the test_set, assuming, we want to load the validation set of the FOLD
+        we trained on (info comes from exper_handler.exper.run_args.fold_ids
         :return:
 
         Note: we don't specify the test_set. But, UncertaintyMapsGenerator will by default, load all training
@@ -345,17 +470,25 @@ class ExperimentHandler(object):
             raise ValueError("When model parameter is None, you need to specify the checkpoint model"
                              "that needs to be loaded.")
 
-        maps_generator = UncertaintyMapsGenerator(self, model=model, test_set=test_set, verbose=False,
-                                                  mc_samples=mc_samples, u_threshold=u_threshold,
-                                                  checkpoint=checkpoint, store_test_results=True)
-        maps_generator(do_save=do_save_u_stats, clean_up=True)
-        image_uncertainties = ImageUncertainties.create_from_testresult(maps_generator.test_results)
+        if not use_existing_umaps:
+            maps_generator = UncertaintyMapsGenerator(self, model=model, test_set=test_set, verbose=False,
+                                                      mc_samples=mc_samples, u_threshold=u_threshold,
+                                                      checkpoint=checkpoint, store_test_results=True)
+            maps_generator(do_save=do_save_u_stats, clean_up=True)
+            image_uncertainties = ImageUncertainties.create_from_testresult(maps_generator.test_results)
+        else:
+            # load existing u_maps from umaps directory of current experiment
+            image_uncertainties = ImageUncertainties.load_uncertainty_maps(self)
         # detect outliers and return object OutOfDistributionSlices
         img_outliers = image_uncertainties.get_outlier_obj(use_high_threshold)
         img_outliers.create_dataset(dataset, train=use_train_set)
+
+        dta_set_num_of_slices = dataset.get_num_of_slices(train=use_train_set)
+        referral_perc = len(img_outliers.images) / float(dta_set_num_of_slices) * 100
         self.info("INFO - Successfully created outlier-dataset. Number of outlier slices {}. "
-                  "Dataset contains {} slices in total".format(len(img_outliers.outlier_slices),
-                                                                 len(img_outliers.images)))
+                  "Dataset contains {} slices in total "
+                  "(referral {:.2f})%.".format(len(img_outliers.outlier_slices), len(img_outliers.images),
+                                             referral_perc))
         if do_save_outlier_stats:
             save_output_dir = os.path.join(self.exper.config.root_dir,
                                            os.path.join(self.exper.output_dir, self.exper.config.stats_path))
@@ -364,18 +497,32 @@ class ExperimentHandler(object):
             out_filename = os.path.join(save_output_dir, "image_outliers_fold{}_".format(self.exper.run_args.fold_ids[0])
                                         + str(checkpoint) + ".dll")
             img_outliers.save(out_filename)
-        del maps_generator
-        del image_uncertainties
+
+        try:
+            del maps_generator
+            del image_uncertainties
+        except:
+            pass
+
         return img_outliers
 
-    def get_outlier_stats(self):
+    def get_outlier_stats(self, verbose=False):
         load_dir_stats = os.path.join(self.exper.config.root_dir,
                                       os.path.join(self.exper.output_dir, self.exper.config.stats_path))
         search_path = os.path.join(load_dir_stats, "image_outliers*.dll")
         self.exper.outliers_per_epoch = OrderedDict()
+        self.exper.test_results_per_epoch = OrderedDict()
+        files = glob.glob(search_path)
+        if len(files) == 0:
+            raise ValueError("ERROR - There are no outlier statistics in {}".format(search_path))
         c = 0
         for filename in glob.glob(search_path):
-            outliers_per_img, outlier_slices = OutOfDistributionSlices.load(filename)
+            # outlier_slices, dict of [2 (es/ed), 4 classes] per (patientxxx, sliceid), see specifications
+            # in method load for details.
+            # outliers_per_img_class_es: key (patientxxx, sliceid, phase)
+            outliers_per_img, outlier_slices, outliers_per_img_es, outliers_per_img_ed, outliers_per_img_class_es, \
+                            outliers_per_img_class_ed = OutOfDistributionSlices.load(filename)
+
             start = filename.rfind("_") + 1
             end = filename.find(".")
             epoch = int(filename[start:end])
@@ -383,9 +530,20 @@ class ExperimentHandler(object):
             search_test_result = os.path.join(load_dir_stats, "test_results*{}.dll".format(epoch))
             filename_test_result = glob.glob(search_test_result)[0]
             test_result = TestResults.load_results(path_to_exp=filename_test_result, verbose=False)
-            self.exper.outliers_per_epoch[epoch] = tuple((outliers_per_img, outlier_slices))
-        print("Loaded outlier stats for {} training epochs"
-              " (property=outliers_per_epoch, dictionary with tuple)".format(c))
+            # see method load_results for further details about TestResults properties
+            self.exper.outliers_per_epoch[epoch] = tuple((outliers_per_img, outlier_slices,
+                                                          outliers_per_img_es, outliers_per_img_ed,
+                                                          outliers_per_img_class_es,
+                                                          outliers_per_img_class_ed))
+            # test_accuracy_slices, test_hd_slices, seg_errors: [phase, class, #slices]
+            self.exper.test_results_per_epoch[epoch] = tuple((test_result.test_accuracy_slices,
+                                                              test_result.test_hd_slices,
+                                                              test_result.seg_errors,
+                                                              test_result.trans_dict))
+        if verbose:
+            print("Loaded outlier stats for {} training epochs"
+                  " (property=outliers_per_epoch, dictionary (key=epoch) with tuple (6 elements)"
+                  " and property=test_results_per_epoch, dict (key=epoch) with tuple (4))".format(c))
 
     def info(self, message):
         if self.logger is None:
@@ -496,7 +654,8 @@ class Experiment(object):
         self.val_run_id = -1
         self.init_statistics()
         self.batch_statistics = None
-        self.outliers_per_epoch
+        self.outliers_per_epoch = None
+        self.test_results_per_epoch = None
 
     def init_statistics(self):
         if self.run_args.val_freq != 0:

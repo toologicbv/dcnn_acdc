@@ -15,15 +15,64 @@ from config.config import config
 from utils.test_results import TestResults
 
 
+class ImageOutliers(object):
+
+    def __init__(self, patient_id, outliers_per_img_class_es, outliers_per_img_class_ed):
+        self.patient_id = patient_id
+        # outliers_per_img_class_es, outliers_per_img_class_ed are dicts with key (patient_id, slice_id, phase_id)
+        # and values: list of classes 1=RV, 2=MYO, 3=LV
+
+        # find outliers for this patient img-slices. key[1]=slice_id, values=list of classes
+        self.out_img_cls_es = {key[1]: value for key, value in outliers_per_img_class_es.items() if patient_id in key}
+        self.out_img_cls_ed = {key[1]: value for key, value in outliers_per_img_class_ed.items() if patient_id in key}
+        if not self.out_img_cls_es:
+            self.out_img_cls_es = None
+        if not self.out_img_cls_ed:
+            self.out_img_cls_ed = None
+        if self.out_img_cls_es or self.out_img_cls_ed:
+            self.has_outliers = True
+        else:
+            self.has_outliers = False
+
+        del outliers_per_img_class_es
+        del outliers_per_img_class_ed
+
+    def get_slice_outliers(self, slice_id, phase):
+        """
+        returns a list of classes that are considered outliers. 1=RV, 2=MYO, 3=LV
+        :param slice_id:
+        :param phase:
+        :return:
+        """
+        if phase == 0:
+            if self.out_img_cls_es is not None and slice_id in self.out_img_cls_es:
+                return self.out_img_cls_es[slice_id]
+            else:
+                return None
+        else:
+            if self.out_img_cls_ed is not None and slice_id in self.out_img_cls_ed:
+                return self.out_img_cls_ed[slice_id]
+            else:
+                return None
+
+
 class OutOfDistributionSlices(object):
 
-    def __init__(self, outliers):
+    def __init__(self, outliers, outliers_per_img_es, outliers_per_img_ed, outliers_per_img_class_es,
+                 outliers_per_img_class_ed):
         """
 
         :param outliers: is a dictionary with key=patiendID/sliceID. key values are tensors with shape
         [2 (ES/ED), 4 classes] containing the normalized uncertainty values (so per phase/class)
+
+        :param outliers_per_img_es: dictionary (key patientxxx) with list of ES outlier slices
+        :param outliers_per_img_ed: dictionary (key patientxxx) with list of ED outlier slices
         """
         self.outlier_slices = outliers
+        self.outliers_per_img_es = outliers_per_img_es
+        self.outliers_per_img_ed = outliers_per_img_ed
+        self.outliers_per_img_class_es = outliers_per_img_class_es
+        self.outliers_per_img_class_ed = outliers_per_img_class_ed
         # will store the image slices (augmented versions as well) that we extract from original dataset
         # hence in order to create the OutlierSlices we need the original dataset (see method create_dataset)
         self.images = []
@@ -36,11 +85,17 @@ class OutOfDistributionSlices(object):
         self.trans_dict = {}
         # dictionary with key "patientID" that holds a sorted list with the outlier slice IDs.
         self.outliers_per_img = OrderedDict([])
-        for img_slice_id in outliers.keys():
+        for img_slice_id, ph_cls_ustat in outliers.iteritems():
+            # ph_cls_ustat has shape [2, 4 classes]
+            # this is the union of ES and ED slices per image
             self.outliers_per_img.setdefault(img_slice_id[0], []).append(img_slice_id[1])
             self.outliers_per_img[img_slice_id[0]].sort()
+
         self.num_of_images = len(self.outliers_per_img)
         self.num_of_slices = 0
+
+    def __len__(self):
+        return self.num_of_slices
 
     def save(self, outfilename=None):
         """
@@ -54,22 +109,51 @@ class OutOfDistributionSlices(object):
         """
         try:
             with open(outfilename, 'wb') as f:
-                dill.dump([self.outliers_per_img, self.outlier_slices], f)
+                dill.dump([self.outliers_per_img, self.outlier_slices, self.outliers_per_img_es,
+                           self.outliers_per_img_ed, self.outliers_per_img_class_es,
+                           self.outliers_per_img_class_ed], f)
                 print("INFO - Successfully saved OutOfDistributionSlices to {}".format(outfilename))
         except IOError:
             print("ERROR - unable to save object to {}".format(outfilename))
+
     @staticmethod
     def load(load_filename):
+        """
+        We're loading the statistics w.r.t. the outliers we detected during training.
+        The following objects are returned:
+            outliers_per_img: a dictionary (key patientxxx) which contains a list with the sliceIDs detected
+                              Note, no separation of ES and ED in this lists.
+
+            outlier_slices: a dictionary (key patientxxx, sliceID) with numpy arrays of shape [2 (es/ed), 4 classes]
+                            the array contains the normalized uncertainty values per phase and class.
+                            Not that although the array has shape 4 classes, the first index (background) will
+                            always be zero. We currently load these stats in the experiment handler class
+        :param load_filename:
+        :return: I admit, no good programming here. We don't return an object but just the separate objects, in this
+        case dictionaries that we need for the analysis. Please see __init__ method for description of these
+        dictionaries we are returning.
+        """
         try:
             with open(load_filename, 'rb') as f:
                 # see method "save" for details about the two saved dictionaries
                 saved_data = dill.load(f)
                 outliers_per_img = saved_data[0]
                 outlier_slices = saved_data[1]
+                if len(saved_data) > 2:
+                    outliers_per_img_es = saved_data[2]
+                    outliers_per_img_ed = saved_data[3]
+                    outliers_per_img_class_es = saved_data[4]
+                    outliers_per_img_class_ed = saved_data[5]
+                else:
+                    outliers_per_img_es = None
+                    outliers_per_img_ed = None
+                    outliers_per_img_class_es = None
+                    outliers_per_img_class_ed = None
         except IOError as err:
             print("ERROR - unable to load object from {}".format(load_filename))
         else:
-            return outliers_per_img, outlier_slices
+            return outliers_per_img, outlier_slices, outliers_per_img_es, outliers_per_img_ed, \
+                   outliers_per_img_class_es, outliers_per_img_class_ed
 
     def create_dataset(self, dataset, train=True):
 
@@ -136,7 +220,14 @@ class ImageUncertainties(object):
             # imageID just numbers 0...N
             self.image_range = np.arange(len(uncertainty_stats))
             self.u_type = "stddev"
+        # dictionary (key patientxxx, sliceID) with numpy arr [2, 4 classes] uncertainty values
         self.outliers = None
+        # dictionary (key patientxxx) with list of sliceIDs per phase (two different objects)
+        self.outliers_per_img_es = None
+        self.outliers_per_img_ed = None
+        # dictionary (key patientxxx, sliceid, phase). values is list of classes
+        self.outliers_per_img_class_es = None
+        self.outliers_per_img_class_ed = None
 
     def set_stats(self, stats_per_phase, stats_per_cls):
         """
@@ -289,28 +380,51 @@ class ImageUncertainties(object):
                 # index 0 = mean, 1 = stddev
                 es_mean_cls, es_std_cls = self.norm_stats_per_cls[0, cls, 0], self.norm_stats_per_cls[0, cls, 1]
                 ed_mean_cls, ed_std_cls = self.norm_stats_per_cls[1, cls, 0], self.norm_stats_per_cls[1, cls, 1]
-                es_set = determine_class_outliers(es_total_uncerty_cls, es_mean_cls, es_std_cls, use_high_threshold)
-                ed_set = determine_class_outliers(ed_total_uncerty_cls, ed_mean_cls, ed_std_cls, use_high_threshold)
-                # union of both set = total set of outlier slices
-                cls_outliers = es_set | ed_set
-                if cls_outliers:
+                es_set_outliers = determine_class_outliers(es_total_uncerty_cls, es_mean_cls, es_std_cls,
+                                                           use_high_threshold)
+                ed_set_outliers = determine_class_outliers(ed_total_uncerty_cls, ed_mean_cls, ed_std_cls,
+                                                           use_high_threshold)
+                if es_set_outliers:
                     # make dict tuples
-                    outliers = make_dict_tuples(outliers, cls_outliers, es_total_uncerty_cls, imgID, cls, phase=0)
-                    outliers = make_dict_tuples(outliers, cls_outliers, ed_total_uncerty_cls, imgID, cls, phase=1)
+                    outliers = make_dict_tuples(outliers, es_set_outliers, es_total_uncerty_cls, imgID, cls, phase=0)
+                if ed_set_outliers:
+                    outliers = make_dict_tuples(outliers, ed_set_outliers, ed_total_uncerty_cls, imgID, cls, phase=1)
         # post-processing: transform the dict key values (a list) into a numpy array
-        outlier_stats = {}
+        outlier_stats = OrderedDict()
+        self.outliers_per_img_es = OrderedDict([])
+        self.outliers_per_img_ed = OrderedDict([])
+        self.outliers_per_img_class_es = OrderedDict([])
+        self.outliers_per_img_class_ed = OrderedDict([])
         for img_slice_id, u_tuples in outliers.iteritems():
+            # img_slice_id is tuple (patientxxx, sliceID)
             # u_tuples is a list of tuples. a tuple consists of (phase, cls, u-value)
             # create tensor for u-values [2 (es/ed), 4 classes]
             u_stats = np.zeros((2, 4))
             for slice_det in u_tuples:
+                # slice_det[0]=phase, slice_det[1]=class
+                # index phase, class
                 u_stats[slice_det[0], slice_det[1]] += slice_det[2]
+                # new dictionary key (patientxxx, sliceid, phase), values is list of classes
+                new_key = tuple((img_slice_id[0], img_slice_id[1], slice_det[0]))
+                if slice_det[0] == 0:
+                    # ES
+                    self.outliers_per_img_es.setdefault(img_slice_id[0], []).append(img_slice_id[1])
+                    self.outliers_per_img_class_es.setdefault(new_key, []).append(slice_det[1])
+                else:
+                    self.outliers_per_img_ed.setdefault(img_slice_id[0], []).append(img_slice_id[1])
+                    self.outliers_per_img_class_ed.setdefault(new_key, []).append(slice_det[1])
             outlier_stats[img_slice_id] = u_stats
+        # remove duplicates from the slice list (happens because outliers are detected per class
+        for patientid in self.outliers_per_img_es.keys():
+            self.outliers_per_img_es[patientid] = list(set(self.outliers_per_img_es[patientid]))
+        for patientid in self.outliers_per_img_ed.keys():
+            self.outliers_per_img_ed[patientid] = list(set(self.outliers_per_img_ed[patientid]))
         self.outliers = outlier_stats
 
     def get_outlier_obj(self, use_high_threshold=False):
         self._detect_outliers(use_high_threshold)
-        return OutOfDistributionSlices(self.outliers)
+        return OutOfDistributionSlices(self.outliers, self.outliers_per_img_es, self.outliers_per_img_ed,
+                                       self.outliers_per_img_class_es, self.outliers_per_img_class_ed)
 
     @staticmethod
     def load_uncertainty_maps(exper_handler=None, full_path=None):
@@ -321,7 +435,7 @@ class ImageUncertainties(object):
 
         :param exper_handler:
         :param full_path:
-        :return: An ImageUncertainties object with properties (IMPORTANT FOR THIS OBJECT WE ONL CONSIDER THE
+        :return: An ImageUncertainties object with properties (IMPORTANT FOR THIS OBJECT WE ONLY CONSIDER THE
                  STDDEV uncerainty maps.
         (1) ImageUncertainties.raw_uncertainties:
             An OrderedDictionary. The primary key is the patientID e.g. "patient002". Further the dictionary
@@ -339,7 +453,7 @@ class ImageUncertainties(object):
         else:
             umap_output_dir = full_path
         search_path = os.path.join(umap_output_dir, "*" + UncertaintyMapsGenerator.file_suffix)
-        print(search_path)
+        c = 0
         for fname in glob.glob(search_path):
             # get base filename first and then extract patient/name/ID (filename is e.g. patient012_umap.npz)
             file_basename = os.path.splitext(os.path.basename(fname))[0]
@@ -352,7 +466,8 @@ class ImageUncertainties(object):
                                            "bald_slice": data['bald_slice'],
                                            "u_thresold": data["u_threshold"]}
             del data
-
+            c += 1
+        print("INFO - Loaded {} U-maps from {}. Creating ImageUncertainties object.".format(c, search_path))
         img_uncertainties = ImageUncertainties(image_umap_stats)
         img_uncertainties.stats_per_phase, img_uncertainties.stats_per_cls = \
             UncertaintyMapsGenerator.compute_mean_std_per_class(image_umap_stats)
@@ -379,7 +494,9 @@ class UncertaintyMapsGenerator(object):
         # hence the index [0]
         self.fold_id = int(self.exper_handler.exper.run_args.fold_ids[0])
         if test_set is None:
-            self.test_set = self._get_test_set()
+            self.info("Loading validation set of fold {} as test "
+                      "set.".format(self.exper_handler.exper.run_args.fold_ids[0]))
+            self.test_set = self._get_test_set(load_val=True, load_train=False, batch_size=None)
         else:
             self.test_set = test_set
         self.num_of_images = len(self.test_set.images)
@@ -585,7 +702,7 @@ class UncertaintyMapsGenerator(object):
         a_stats[1, :] = [np.mean(ed_all), np.std(ed_all), np.min(ed_all), np.max(ed_all)]
         return a_stats, cls_stats
 
-    def _get_test_set(self, load_train=True, load_val=False):
+    def _get_test_set(self, load_train=True, load_val=False, batch_size=None):
         """
         Important note:
         we set batch_size to None, which means all images will be loaded
@@ -599,7 +716,7 @@ class UncertaintyMapsGenerator(object):
         return ACDC2017TestHandler(exper_config=self.exper_handler.exper.config,
                                    search_mask=self.exper_handler.exper.config.dflt_image_name + ".mhd",
                                    fold_ids=[self.fold_id],
-                                   debug=False, batch_size=5,
+                                   debug=False, batch_size=batch_size,
                                    use_cuda=self.exper_handler.exper.run_args.cuda,
                                    load_train=load_train, load_val=load_val, use_iso_path=True)
 

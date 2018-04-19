@@ -3,6 +3,7 @@ import torch
 import numpy as np
 
 from common.parsing import do_parse_args
+from common.common import compute_batch_freq_outliers
 from config.config import config
 from utils.experiment import Experiment, ExperimentHandler
 from utils.batch_handlers import TwoDimBatchHandler
@@ -11,30 +12,26 @@ from in_out.load_data import ACDC2017DataSet
 from models.model_handler import load_model, save_checkpoint
 
 
+def check_dependencies_run_args(run_args):
+
+    if run_args.train_outlier_only and not run_args.guided_train:
+        raise ValueError("if train_outlier_only then guided_train needs to be true!")
+
+    if run_args.retrain_chkpnt and not run_args.retrain_chkpnt:
+        raise ValueError("if retrain_chkpnt then retrain_chkpnt needs to be true!")
+
+
 def training(exper_hdl):
     """
 
     :param args:
     :return:
     """
-
+    # create dataset
     dataset = ACDC2017DataSet(exper_hdl.exper.config, search_mask=config.dflt_image_name + ".mhd",
                               fold_ids=exper_hdl.exper.run_args.fold_ids, preprocess=False,
                               debug=exper_hdl.exper.run_args.quick_run)
-
-    if exper_hdl.exper.run_args.guided_train:
-        test_set = ACDC2017TestHandler(exper_config=exper_hdl.exper.config,
-                                       search_mask=exper_hdl.exper.config.dflt_image_name + ".mhd", fold_ids=[0],
-                                       debug=False, batch_size=None, use_cuda=exper_hdl.exper.run_args.cuda,
-                                       load_train=True, load_val=False, use_iso_path=True)
-        outlier_dataset = None
-        outlier_freq = None
-    else:
-        test_set = None
-        outlier_dataset = None
-        outlier_freq = None
-
-    exper_hdl.init_batch_statistics(dataset.trans_dict)
+    # Load model
     if exper_hdl.exper.run_args.retrain_exper is not None:
         dcnn_model = exper_hdl.load_checkpoint(verbose=False, drop_prob=exper_hdl.exper.run_args.drop_prob,
                                                checkpoint=exper_hdl.exper.run_args.retrain_chkpnt,
@@ -42,6 +39,39 @@ def training(exper_hdl):
                                                exper_dir=exper_hdl.exper.run_args.retrain_exper)
     else:
         dcnn_model = load_model(exper_hdl)
+
+    if exper_hdl.exper.run_args.guided_train:
+        test_set = ACDC2017TestHandler(exper_config=exper_hdl.exper.config,
+                                       search_mask=exper_hdl.exper.config.dflt_image_name + ".mhd", fold_ids=[0],
+                                       debug=False, batch_size=None, use_cuda=exper_hdl.exper.run_args.cuda,
+                                       load_train=True, load_val=False, use_iso_path=True)
+        # when retraining a model and we're training on outlier slices, we first create an outlier set
+        if exper_hdl.exper.run_args.retrain_exper:
+            exper_hdl.info("NOTE: Before we start training we create an outlier (slice) dataset. This may"
+                           " take a while.")
+            outlier_dataset = exper_hdl.create_outlier_dataset(dataset, model=dcnn_model, test_set=test_set,
+                                                               checkpoint=None, mc_samples=5,
+                                                               u_threshold=0.1, use_train_set=True,
+                                                               do_save_u_stats=True, use_high_threshold=True,
+                                                               do_save_outlier_stats=True)
+            if outlier_dataset.__len__() != 0:
+                # outlier_freq = compute_batch_freq_outliers(exper_hdl.exper.run_args, outlier_dataset, dataset)
+                outlier_freq = 2
+                exper_hdl.info("NOTE: using outlier dataset every {} epoch".format(outlier_freq))
+            else:
+                # No outliers detected!
+                outlier_dataset = None
+                outlier_freq = None
+        else:
+            outlier_dataset = None
+            outlier_freq = None
+    else:
+        test_set = None
+        outlier_dataset = None
+        outlier_freq = None
+
+    exper_hdl.init_batch_statistics(dataset.trans_dict)
+
     # IMPORTANT: I AM CURRENTLY NOT USING THE FUNCTIONALITY TO RUN MULTIPLE BATCHES PER EPOCH!!!
     exper_hdl.exper.batches_per_epoch = 1
     exper_hdl.logger.info("Size train/val-data-set {}/{} :: number of epochs {} "
@@ -62,8 +92,8 @@ def training(exper_hdl):
         used_outliers = False
         for batch_id in range(exper_hdl.exper.batches_per_epoch):
             new_batch = TwoDimBatchHandler(exper_hdl.exper)
-            if exper_hdl.exper.run_args.guided_train and outlier_dataset is not None and \
-               (exper_hdl.exper.epoch_id % outlier_freq == 0):
+            if (exper_hdl.exper.run_args.guided_train and outlier_dataset is not None and \
+               (exper_hdl.exper.epoch_id % outlier_freq == 0)) or exper_hdl.exper.run_args.train_outlier_only:
                 # In this case we're only training on outlier image slices!
                 # exper_hdl.logger.info("Epoch {} using outlier dataset".format(exper_hdl.exper.epoch_id))
                 new_batch.generate_batch_2d(outlier_dataset.images, outlier_dataset.labels,
@@ -108,15 +138,8 @@ def training(exper_hdl):
                                                                    u_threshold=0.1, use_train_set=True,
                                                                    do_save_u_stats=True, use_high_threshold=True,
                                                                    do_save_outlier_stats=True)
-                # the size of the outlier dataset can never exceed the size of the original training set. In the worst
-                # case it's equal to 1 (all slices are outliers!). Current heuristic for how often do we make
-                # training batches from the outlier set: epochs / outlier_freq
-                # So e.g. if there're twice as much training slices as outlier slices we take every second time
-                # slices from outliers. NOTE: we're not removing the outliers from the original dataset!!!
-                # which means, they have an extra chance of being trained on with the danger of overfitting to these
-                # slices. We'll see what happens.
-                outlier_freq = int(exper_hdl.exper.run_args.epochs / (exper_hdl.exper.run_args.epochs *
-                                  (float(outlier_dataset.num_of_slices) / float(dataset.train_num_slices))))
+                # outlier_freq = compute_batch_freq_outliers(exper_hdl.exper.run_args, outlier_dataset, dataset)
+                outlier_freq = 2
                 exper_hdl.info("NOTE: using outlier dataset every {} epoch".format(outlier_freq))
             # save exper statistics
             exper_hdl.save_experiment()
@@ -152,6 +175,7 @@ def main():
     exper = Experiment(config, run_args=args)
     exper_hdl = ExperimentHandler(exper)
     exper_hdl.print_flags()
+    check_dependencies_run_args(exper_hdl.exper.run_args)
     training(exper_hdl)
 
 

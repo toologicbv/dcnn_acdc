@@ -109,8 +109,14 @@ def plot_outlier_slice_hists(exper, width=16, height=5.5, do_save=False, do_show
         slices = []
         for key, slice_list in dict_of_slices.iteritems():
             slices.extend(slice_list)
-        unique_slices = np.unique(np.array(slices))
-        slice_freq, _ = np.histogram(np.array(slices), bins=unique_slices.shape[0])
+        slices.sort()
+        slices = np.array(slices)
+        unique_slices = np.unique(slices)
+        num_of_bins = np.max(unique_slices)
+        slice_freq, _ = np.histogram(slices, bins=num_of_bins+1)
+        # remove zeros from slice_freq, twist, because the unique_slices are not contiguous, and we set num_of_bins
+        # to max slices, we'll probably end up with zero-holes in the frequenties, which need to be removed
+        slice_freq = slice_freq[np.nonzero(slice_freq)]
         # we need to rescale the outlier slice freqs with the freq their occur in the dataset
         slice_freq = slice_freq.astype(np.float32)
         for idx, s in enumerate(unique_slices):
@@ -138,6 +144,7 @@ def plot_outlier_slice_hists(exper, width=16, height=5.5, do_save=False, do_show
     fig.suptitle("Histogram of outlier sliceIDs", **config.title_font_medium)
     ax5 = plt.subplot2grid((1, 1), (0, 0), rowspan=1, colspan=1)
     bar_width = 0.9/num_of_plots
+
     for i, epoch in enumerate(epochs):
         slice_freq, unique_slices = slice_frequenties(exper.outliers_per_epoch[epoch][0],
                                                       exper.batch_stats.slice_frequencies_dataset)

@@ -252,9 +252,19 @@ class TestResults(object):
         self.test_accuracy = []
         self.test_hd = []
         self.test_accuracy_slices = []
+        # the following two measure are probably temporary, they capture the mean dice-coeff for an image based
+        # on the dice-coeff of the individual slices (so no post-processing 6 most connected components).
+        # At least these two measure (referral and non_referral_accuray) should differ significantly because we
+        # filter the "referral" on outliers slices (taking into account the class)
+        self.referral_accuracy = []
+        self.non_referral_accuracy = []
+        self.referral = False
+        # end temporaray
         self.test_hd_slices = []
         self.dice_results = None
         self.hd_results = None
+        self.dice_non_referral_results = None
+        self.dice_referral_results = None
         self.num_of_samples = []
         # for each image we are using during testing we append ONE LIST, which contains for each image slice
         # and ordered dictionary with the following keys a) es_err b) es_corr c) ed_err d) ed_corr
@@ -270,8 +280,8 @@ class TestResults(object):
 
     def add_results(self, batch_image, batch_labels, image_id, pred_labels, b_predictions, stddev_map,
                     test_accuracy, test_hd, seg_errors, store_all=False, bald_maps=None, uncertainty_stats=None,
-                    test_hd_slices=None, test_accuracy_slices=None, image_name=None,
-                    repeated_run=False):
+                    test_hd_slices=None, test_accuracy_slices=None, image_name=None, referral_accuracy=None,
+                    non_referral_accuracy=None, repeated_run=False):
         """
 
         :param batch_image: [2, width, height, slices]
@@ -283,6 +293,8 @@ class TestResults(object):
         :param bald_maps: [2, width, height, slices]
         :param uncertainty_stats: dictionary with keys "bald", "stddev" and "u_threshold"
                                   the first 2 contain numpy arrays of shape [2, half classes (4), #slices]
+        :param referral_accuracy: dice score per image (6 classes) after filtering the outliers
+        :param non_referral_accuracy: see above in __init__ section
         :param test_accuracy:
         :param test_hd:
         :param repeated_run: when we use multiple checkpoints aka models during testing, we don't want to
@@ -318,8 +330,17 @@ class TestResults(object):
             self.test_hd_slices.append(test_hd_slices)
         if test_accuracy_slices is not None:
             self.test_accuracy_slices.append(test_accuracy_slices)
+        if referral_accuracy is not None:
+            self.referral = True
+            self.referral_accuracy.append(referral_accuracy)
+        if non_referral_accuracy is not None:
+            self.non_referral_accuracy.append(non_referral_accuracy)
         # segmentation errors is a numpy error with size [#slices, #classes (8)]
-        self.seg_errors.append(seg_errors)
+        # unfortunately, due to EVOLUTION mistakes. We will reshape to our common used shape [2, 4classes, #slices]
+        new_seg_errors = np.zeros_like(test_accuracy_slices)
+        new_seg_errors[0, :, :] = np.reshape(seg_errors[:, :4], (4, seg_errors.shape[0]))  # ES
+        new_seg_errors[1, :, :] = np.reshape(seg_errors[:, 4:], (4, seg_errors.shape[0]))  # ED
+        self.seg_errors.append(new_seg_errors)
         if self.num_of_samples[-1] > 1:
             self.uncertainty_stats.append(uncertainty_stats)
 
@@ -349,6 +370,10 @@ class TestResults(object):
         columns_hd = self.test_hd[0].shape[0]
         mean_dice = np.empty((0, columns_dice))
         mean_hd = np.empty((0, columns_hd))
+        # temporary for referral stuff
+        if self.referral_accuracy is not None:
+            mean_ref_dice = np.empty((0, 6))
+            mean_non_ref_dice = np.empty((0, 6))
 
         for img_idx in np.arange(N):
             # test_accuracy and test_hd are a vectors of 8 values, 0-3: ES, 4:7: ED
@@ -356,16 +381,30 @@ class TestResults(object):
             hausd = self.test_hd[img_idx]
             mean_dice = np.vstack([mean_dice, dice]) if mean_dice.size else dice
             mean_hd = np.vstack([mean_hd, hausd]) if mean_hd.size else hausd
-
+            if self.referral:
+                ref_dice_img = self.referral_accuracy[img_idx]
+                mean_ref_dice = np.vstack((mean_ref_dice, ref_dice_img))
+                non_ref_dice = self.non_referral_accuracy[img_idx]
+                mean_non_ref_dice = np.vstack((mean_non_ref_dice, non_ref_dice))
         # so we stack the image results and should end up with a matrix [#images, 8] for dice and hd
 
         if N > 1:
             self.dice_results = np.array([np.mean(mean_dice, axis=0), np.std(mean_dice, axis=0)])
             self.hd_results = np.array([np.mean(mean_hd, axis=0), np.std(mean_hd, axis=0)])
+            if self.referral:
+                self.dice_non_referral_results = np.array([np.mean(mean_non_ref_dice, axis=0),
+                                                           np.std(mean_non_ref_dice, axis=0)])
+                self.dice_referral_results = np.array([np.mean(mean_ref_dice, axis=0), np.std(mean_ref_dice, axis=0)])
         else:
             # only one image tested, there is no mean or stddev
             self.dice_results = np.array([mean_dice, np.zeros(mean_dice.shape[0])])
             self.hd_results = np.array([mean_hd, np.zeros(mean_hd.shape[0])])
+            if self.referral:
+                mean_non_ref_dice = mean_non_ref_dice.squeeze()
+                mean_ref_dice = mean_ref_dice.squeeze()
+                self.dice_non_referral_results = np.array([mean_non_ref_dice,
+                                                           np.zeros(mean_non_ref_dice.shape[0])])
+                self.dice_referral_results = np.array([mean_ref_dice, np.zeros(mean_ref_dice.shape[0])])
 
     def generate_all_statistics(self):
         for image_num in np.arange(self.N):
@@ -873,7 +912,11 @@ class TestResults(object):
             print("WARNING - Can't find image with index {} in "
                   "test_results.image_ids. Discarding!".format(image_num))
         image = self.images[image_num]
-        image_probs = self.image_probs_categorized[image_num]
+        if errors_only:
+            image_probs = None
+        else:
+            image_probs = self.image_probs_categorized[image_num]
+
         pred_labels = self.pred_labels[image_num]
         label = self.labels[image_num]
         uncertainty_map = self.stddev_maps[image_num]
@@ -892,8 +935,7 @@ class TestResults(object):
         if slice_range is None:
             slice_range = np.arange(0, image.shape[3])
         num_of_slices = len(slice_range)
-        str_slice_range = [str(i) for i in slice_range]
-        str_slice_range = "_".join(str_slice_range)
+
         columns = half_classes
         if errors_only:
             rows = 4  # multiply with 4 because two rows ES, two rows ED for each slice
@@ -920,7 +962,11 @@ class TestResults(object):
             row = 0
             # get the slice and then split ED and ES slices
             image_slice = image[:, :, :, img_slice]
-            img_slice_probs = image_probs[img_slice]
+            if errors_only:
+                img_slice_probs = None
+            else:
+                img_slice_probs = image_probs[img_slice]
+
             # print("INFO - Slice {}".format(img_slice+1))
             for phase in np.arange(2):
                 cls_offset = phase * half_classes
@@ -994,6 +1040,7 @@ class TestResults(object):
                     plt.axis('off')
 
                 if use_bald:
+                    # NOTE: WE NEVER COME HERE IF errors_only=True
                     # create histogram
                     if phase == 0:
                         bald_corr = img_slice_probs["es_cor_bald"]
@@ -1206,6 +1253,7 @@ class TestResults(object):
         if self.dice_results is not None:
             mean_dice = self.dice_results[0]
             stddev = self.dice_results[1]
+            print(self.dice_results.shape)
             print("Test accuracy: \t "
                   "dice(RV/Myo/LV): ES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f}) --- "
                   "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(mean_dice[1], stddev[1], mean_dice[2],
@@ -1221,6 +1269,24 @@ class TestResults(object):
                                                                               stddev[2], mean_hd[3], stddev[3],
                                                                               mean_hd[5], stddev[5], mean_hd[6],
                                                                               stddev[6], mean_hd[7], stddev[7]))
+        if self.referral:
+            mean_dice = self.dice_referral_results[0]
+            print(self.dice_referral_results.shape)
+            stddev = self.dice_referral_results[1]
+            print("W-Out outliers: "
+                  "dice(RV/Myo/LV): ES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f}) --- "
+                  "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(mean_dice[0], stddev[0], mean_dice[1],
+                                                                              stddev[1], mean_dice[2], stddev[2],
+                                                                              mean_dice[3], stddev[3], mean_dice[4],
+                                                                              stddev[4], mean_dice[5], stddev[5]))
+            mean_dice = self.dice_non_referral_results[0]
+            stddev = self.dice_non_referral_results[1]
+            print("With outliers: \t"
+                  "dice(RV/Myo/LV): ES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f}) --- "
+                  "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(mean_dice[0], stddev[0], mean_dice[1],
+                                                                              stddev[1], mean_dice[2], stddev[2],
+                                                                              mean_dice[3], stddev[3], mean_dice[4],
+                                                                              stddev[4], mean_dice[5], stddev[5]))
 
     def _create_figure_dir(self, image_num):
         image_name = self.image_names[image_num]

@@ -212,6 +212,7 @@ class TwoDimBatchHandler(BatchHandler):
         b_labels_per_class = np.zeros((self.batch_size, self.num_classes, self.patch_size + 1, self.patch_size + 1))
         if num_of_slices is None:
             num_of_slices = len(images)
+
         checksum = 0
         for idx in range(self.batch_size):
             if slice_range is None:
@@ -219,6 +220,7 @@ class TwoDimBatchHandler(BatchHandler):
             else:
                 ind = slice_range[idx]
             checksum += ind
+            # print("Batch: ind={} and len={}".format(ind, num_of_slices))
             # img_nums.append(str(ind))
             img = images[ind]
             label = labels[ind]

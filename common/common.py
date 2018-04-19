@@ -53,6 +53,7 @@ def create_exper_label(exper):
 
     return exper_label
 
+
 def logsumexp(a):
     a_max = a.max(axis=0)
     return np.log(np.sum(np.exp(a - a_max), axis=0)) + a_max
@@ -67,3 +68,17 @@ def setSeed(seed=None, use_cuda=False):
         torch.backends.cudnn.enabled = True
 
     np.random.seed(seed)
+
+
+def compute_batch_freq_outliers(run_args, outlier_dataset, dataset):
+    # the size of the outlier dataset can never exceed the size of the original training set. In the worst
+    # case it's equal to 1 (all slices are outliers!). Current heuristic for how often do we make
+    # training batches from the outlier set: epochs / outlier_freq
+    # So e.g. if there're twice as much training slices as outlier slices we take every second time
+    # slices from outliers. NOTE: we're not removing the outliers from the original dataset!!!
+    # which means, they have an extra chance of being trained on with the danger of overfitting to these
+    # slices. We'll see what happens.
+    outlier_freq = int(run_args.epochs / (run_args.epochs *
+                                                          (float(outlier_dataset.num_of_slices) / float(
+                                                              dataset.train_num_slices))))
+    return outlier_freq
