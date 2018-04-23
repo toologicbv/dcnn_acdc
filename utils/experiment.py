@@ -279,6 +279,7 @@ class ExperimentHandler(object):
                 self.get_u_maps()
             patient_id = test_set.img_file_names[image_num]
             u_maps_image = self.u_maps[patient_id]
+            self.test_results.referral_threshold = referral_threshold
         else:
             u_maps_image = None
         # if we're discarding outlier slices/classes we need to initialize a couple of things
@@ -334,23 +335,15 @@ class ExperimentHandler(object):
             bald_values[1] = bald_function(b_predictions[:, 4:, :, :, test_set.slice_counter])
 
             means_test_loss = np.mean(b_test_losses)
+            test_set.set_stddev_map(std_test_pred, u_threshold=u_threshold)
+            test_set.set_bald_map(bald_values, u_threshold=u_threshold)
             # THIS IS A PIECE OF RESIDUAL CODING WHICH SHOULD BE NOT USED. THE FUNCTIONALITY IS STILL IN TACT
             # BUT WE ARE CURRENTLY USING THE Uncertainty MAPS which we generate to refer image slices-phase-class
             # to an UNKNOWN expert, we mark the dice values as OUTLIERS.
-            if use_uncertainty:
-                # u_maps_image shape [2, 4classes, width, height, #slices]
-                test_set.set_pred_labels(mean_test_pred, pred_stddev=u_maps_image[:, :, :, :, test_set.slice_counter],
-                                         referral_threshold=referral_threshold,
-                                         verbose=False, do_filter=False)
-            else:
-                # NOTE: we set do_filter (connected components post-processing) to FALSE here because we will do
-                # this at the end for the complete 3D label object, but not for the individual slices
-                # NOTE: we set referral_threshold to 0. because we don't want to use uncertainties!
-                test_set.set_pred_labels(mean_test_pred, referral_threshold=0., verbose=verbose, do_filter=False)
 
-            test_set.set_stddev_map(std_test_pred, u_threshold=u_threshold)
-            test_set.set_bald_map(bald_values, u_threshold=u_threshold)
+            test_set.set_pred_labels(mean_test_pred, verbose=verbose, do_filter=False)
             slice_acc, slice_hd = test_set.compute_slice_accuracy(compute_hd=compute_hd)
+
             if discard_outliers:
                 # add the current dice score to the referral arrays
                 for cls in np.arange(1, half_classes):
@@ -397,14 +390,31 @@ class ExperimentHandler(object):
                     print("------------------------------------------------------------------------")
             slice_idx += 1
 
-        test_accuracy, test_hd = test_set.get_accuracy(compute_hd=compute_hd, do_filter=do_filter)
+        test_accuracy, test_hd, seg_errors = test_set.get_accuracy(compute_hd=compute_hd, compute_seg_errors=True,
+                                                                   do_filter=do_filter)
+        if use_uncertainty:
+            # u_maps_image shape [2, 4classes, width, height, #slices]
+            test_set.filter_referrals(u_maps=u_maps_image,
+                                      referral_threshold=referral_threshold, verbose=False)
+            test_accuracy_ref, test_hd_ref, seg_errors_ref = test_set.get_accuracy(compute_hd=compute_hd,
+                                                                                   compute_seg_errors=True,
+                                                                                   do_filter=do_filter)
 
-        print("Image {} - Test accuracy: test loss {:.3f}\t "
-              " dice(RV/Myo/LV): ES {:.2f}/{:.2f}/{:.2f} --- "
+        print("Image {} - test loss {:.3f} "
+              " dice(RV/Myo/LV):\tES {:.2f}/{:.2f}/{:.2f}\t"
               "ED {:.2f}/{:.2f}/{:.2f}".format(str(image_num+1) + "-" + test_set.b_image_name, means_test_loss,
                                                test_accuracy[1], test_accuracy[2],
                                                test_accuracy[3], test_accuracy[5],
                                                test_accuracy[6], test_accuracy[7]))
+        if use_uncertainty:
+            print("\t\t\t\t\t After referral\t\tES {:.2f}/{:.2f}/{:.2f}\t"
+                  "ED {:.2f}/{:.2f}/{:.2f}".format(test_accuracy_ref[1], test_accuracy_ref[2],
+                                                   test_accuracy_ref[3], test_accuracy_ref[5],
+                                                   test_accuracy_ref[6], test_accuracy_ref[7]))
+        else:
+            test_accuracy_ref = None
+            test_hd_ref = None
+
         if discard_outliers:
             referral_dice_es, referral_dice_ed = np.zeros(3), np.zeros(3)
             np_dice_es = np.zeros(3)
@@ -434,23 +444,28 @@ class ExperimentHandler(object):
                                                    np_dice_es[2], np_dice_ed[0],
                                                    np_dice_ed[1], np_dice_ed[2]))
         if compute_hd:
-            print("Image {} - Test accuracy: test loss {:.3f}\t "
-
-                  "Hausdorff(RV/Myo/LV): ES {:.2f}/{:.2f}/{:.2f} --- "
-                  "ED {:.2f}/{:.2f}/{:.2f}".format(image_num+1, means_test_loss,
-                                                   test_hd[1], test_hd[2],
+            print("\t\t\t\t\t"
+                  "Hausdorff(RV/Myo/LV):\tES {:.2f}/{:.2f}/{:.2f}\t"
+                  "ED {:.2f}/{:.2f}/{:.2f}".format(test_hd[1], test_hd[2],
                                                    test_hd[3], test_hd[5],
                                                    test_hd[6], test_hd[7]))
+            if use_uncertainty:
+                print("\t\t\t\t\t"
+                      "After referral:\t\tES {:.2f}/{:.2f}/{:.2f}\t"
+                      "ED {:.2f}/{:.2f}/{:.2f}".format(test_hd_ref[1], test_hd_ref[2],
+                                                       test_hd_ref[3], test_hd_ref[5],
+                                                       test_hd_ref[6], test_hd_ref[7]))
         self.test_results.add_results(test_set.b_image, test_set.b_labels, test_set.b_image_id,
                                       test_set.b_pred_labels, b_predictions, test_set.b_stddev_map,
-                                      test_accuracy, test_hd, seg_errors=test_set.b_seg_errors,
+                                      test_accuracy, test_hd, seg_errors=seg_errors,
                                       store_all=store_details,
                                       bald_maps=test_set.b_bald_map,
                                       uncertainty_stats=test_set.b_uncertainty_stats,
                                       test_accuracy_slices=test_set.b_acc_slices,
                                       test_hd_slices=test_set.b_hd_slices,
                                       image_name=test_set.b_image_name, repeated_run=repeated_run,
-                                      referral_accuracy=referral_dice, non_referral_accuracy=non_referral_dice)
+                                      referral_accuracy=test_accuracy_ref, referral_hd=test_hd_ref,
+                                      referral_stats=test_set.referral_stats)
 
     def create_u_maps(self, model=None, checkpoint=None, mc_samples=10, u_threshold=0.1, do_save_u_stats=False,
                       save_actual_maps=False, test_set=None):

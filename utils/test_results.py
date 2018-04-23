@@ -219,15 +219,18 @@ class TestResults(object):
         # At least these two measure (referral and non_referral_accuray) should differ significantly because we
         # filter the "referral" on outliers slices (taking into account the class)
         self.referral_accuracy = []
-        self.non_referral_accuracy = []
+        self.referral_hd = []
         self.referral = False
         # end temporaray
         self.test_hd_slices = []
         self.dice_results = None
         self.hd_results = None
-        self.dice_non_referral_results = None
+        self.hd_referral_results = None
         self.dice_referral_results = None
         self.num_of_samples = []
+        self.referral_threshold = 0.
+        self.referral_stats = []
+        self.referral_stats_results = None
         # for each image we are using during testing we append ONE LIST, which contains for each image slice
         # and ordered dictionary with the following keys a) es_err b) es_corr c) ed_err d) ed_corr
         # this object is used for the detailed analysis of the uncertainties per image-slice, distinguishing
@@ -243,7 +246,7 @@ class TestResults(object):
     def add_results(self, batch_image, batch_labels, image_id, pred_labels, mc_pred_probs, stddev_map,
                     test_accuracy, test_hd, seg_errors, store_all=False, bald_maps=None, uncertainty_stats=None,
                     test_hd_slices=None, test_accuracy_slices=None, image_name=None, referral_accuracy=None,
-                    non_referral_accuracy=None, repeated_run=False):
+                    referral_hd=None, referral_stats=None, repeated_run=False):
         """
 
         :param batch_image: [2, width, height, slices]
@@ -256,11 +259,13 @@ class TestResults(object):
         :param uncertainty_stats: dictionary with keys "bald", "stddev" and "u_threshold"
                                   the first 2 contain numpy arrays of shape [2, half classes (4), #slices]
         :param referral_accuracy: dice score per image (6 classes) after filtering the outliers
-        :param non_referral_accuracy: see above in __init__ section
+        :param referral_stats: for ES/ED the referral percentages and error reduction percentages
+                               array has shape [2, 4classes,  3, #slices]
+                               the 3 measures: ref%, reduction%, #true positives in gt
         :param test_accuracy:
         :param test_hd:
         :param repeated_run: when we use multiple checkpoints aka models during testing, we don't want to
-               save the image details everytime we run the same model ensemble on the test set although we want
+               save the image details every time we run the same model ensemble on the test set although we want
                to average the final result over the ensemble runs (hence we save the performance measures but not
                the image details.
 
@@ -295,14 +300,12 @@ class TestResults(object):
         if referral_accuracy is not None:
             self.referral = True
             self.referral_accuracy.append(referral_accuracy)
-        if non_referral_accuracy is not None:
-            self.non_referral_accuracy.append(non_referral_accuracy)
-        # segmentation errors is a numpy error with size [#slices, #classes (8)]
-        # unfortunately, due to EVOLUTION mistakes. We will reshape to our common used shape [2, 4classes, #slices]
-        new_seg_errors = np.zeros_like(test_accuracy_slices)
-        new_seg_errors[0, :, :] = np.reshape(seg_errors[:, :4], (4, seg_errors.shape[0]))  # ES
-        new_seg_errors[1, :, :] = np.reshape(seg_errors[:, 4:], (4, seg_errors.shape[0]))  # ED
-        self.seg_errors.append(new_seg_errors)
+        if referral_hd is not None:
+            self.referral_hd.append(referral_hd)
+        if referral_stats is not None:
+            self.referral_stats.append(referral_stats)
+        # segmentation errors is a numpy error with size [2, 4classes, #slices]
+        self.seg_errors.append(seg_errors)
         if self.num_of_samples[-1] > 1:
             self.uncertainty_stats.append(uncertainty_stats)
 
@@ -332,10 +335,14 @@ class TestResults(object):
         columns_hd = self.test_hd[0].shape[0]
         mean_dice = np.empty((0, columns_dice))
         mean_hd = np.empty((0, columns_hd))
+        mean_ref_perc, mean_reduc_perc = [[], []], [[], []]
         # temporary for referral stuff
-        if self.referral_accuracy is not None:
-            mean_ref_dice = np.empty((0, 6))
-            mean_non_ref_dice = np.empty((0, 6))
+        if self.referral:
+            mean_ref_dice = np.empty((0, columns_dice))
+            mean_hd_ref = np.empty((0, columns_hd))
+            # summarize the referral percentages, error reduction percentages for both phases ES/ED
+            # we store mean, stddev and median for both measures (percentages)
+            self.referral_stats_results = np.zeros((2, 2, 3))
 
         for img_idx in np.arange(N):
             # test_accuracy and test_hd are a vectors of 8 values, 0-3: ES, 4:7: ED
@@ -344,28 +351,48 @@ class TestResults(object):
             mean_dice = np.vstack([mean_dice, dice]) if mean_dice.size else dice
             mean_hd = np.vstack([mean_hd, hausd]) if mean_hd.size else hausd
             if self.referral:
+                ref_stats = self.referral_stats[img_idx]
                 ref_dice_img = self.referral_accuracy[img_idx]
                 mean_ref_dice = np.vstack((mean_ref_dice, ref_dice_img))
-                non_ref_dice = self.non_referral_accuracy[img_idx]
-                mean_non_ref_dice = np.vstack((mean_non_ref_dice, non_ref_dice))
+                ref_hd_img = self.referral_hd[img_idx]
+                mean_hd_ref = np.vstack((mean_hd_ref, ref_hd_img))
+                # append the referral percentages for ES and ED for class 1 and 3 (2nd index). Do the same for the
+                # reduction percentages (last index 1 = reduction%)
+                mean_ref_perc[0].extend(list(ref_stats[0, 1, 0])), mean_ref_perc[0].extend(list(ref_stats[0, 3, 0]))
+                mean_ref_perc[1].extend(list(ref_stats[1, 1, 0])), mean_ref_perc[1].extend(list(ref_stats[1, 3, 0]))
+                mean_reduc_perc[0].extend(list(ref_stats[0, 1, 1])), mean_reduc_perc[0].extend(list(ref_stats[0, 3, 1]))
+                mean_reduc_perc[1].extend(list(ref_stats[1, 1, 1])), mean_reduc_perc[1].extend(list(ref_stats[1, 3, 1]))
+        # ES referral statistics
+        self.referral_stats_results[0, 0] = np.array([np.std(mean_ref_perc[0]), np.median(mean_ref_perc[0]),
+                                                      np.mean(mean_ref_perc[0])])
+        # ED referral statistics
+        self.referral_stats_results[1, 0] = np.array([np.std(mean_ref_perc[1]), np.median(mean_ref_perc[1]),
+                                                      np.mean(mean_ref_perc[1])])
+        # ES reduction percentages
+        self.referral_stats_results[0, 1] = np.array([np.std(mean_reduc_perc[0]), np.median(mean_reduc_perc[0]),
+                                                      np.mean(mean_reduc_perc[0])])
+        # ED reduction percentages
+        self.referral_stats_results[1, 1] = np.array([np.std(mean_reduc_perc[1]), np.median(mean_reduc_perc[1]),
+                                                      np.mean(mean_reduc_perc[1])])
+
         # so we stack the image results and should end up with a matrix [#images, 8] for dice and hd
 
         if N > 1:
             self.dice_results = np.array([np.mean(mean_dice, axis=0), np.std(mean_dice, axis=0)])
             self.hd_results = np.array([np.mean(mean_hd, axis=0), np.std(mean_hd, axis=0)])
             if self.referral:
-                self.dice_non_referral_results = np.array([np.mean(mean_non_ref_dice, axis=0),
-                                                           np.std(mean_non_ref_dice, axis=0)])
+                self.hd_referral_results = np.array([np.mean(mean_hd_ref, axis=0),
+                                                           np.std(mean_hd_ref, axis=0)])
                 self.dice_referral_results = np.array([np.mean(mean_ref_dice, axis=0), np.std(mean_ref_dice, axis=0)])
         else:
             # only one image tested, there is no mean or stddev
             self.dice_results = np.array([mean_dice, np.zeros(mean_dice.shape[0])])
             self.hd_results = np.array([mean_hd, np.zeros(mean_hd.shape[0])])
             if self.referral:
-                mean_non_ref_dice = mean_non_ref_dice.squeeze()
+                mean_hd_ref = mean_hd_ref.squeeze()
                 mean_ref_dice = mean_ref_dice.squeeze()
-                self.dice_non_referral_results = np.array([mean_non_ref_dice,
-                                                           np.zeros(mean_non_ref_dice.shape[0])])
+                self.hd_referral_results = np.array([mean_hd_ref,
+                                                           np.zeros(mean_hd_ref.shape[0])])
                 self.dice_referral_results = np.array([mean_ref_dice, np.zeros(mean_ref_dice.shape[0])])
 
     def generate_all_statistics(self):
@@ -1172,6 +1199,10 @@ class TestResults(object):
                 str_epoch = "_ep" + str(epoch_id)
                 outfile += str_epoch
 
+            if self.referral_threshold > 0.:
+                u_thre = "_utr{.:2f}".format(self.referral_threshold).replace(".", "_")
+                outfile += u_thre
+
             if epoch_id is None:
                 jetzt = datestr(withyear=False)
                 outfile = outfile + "_" + jetzt
@@ -1220,40 +1251,53 @@ class TestResults(object):
         if self.dice_results is not None:
             mean_dice = self.dice_results[0]
             stddev = self.dice_results[1]
-            print(self.dice_results.shape)
-            print("Test accuracy: \t "
-                  "dice(RV/Myo/LV): ES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f}) --- "
+            print("------------------------------------------------------------------------------------------------")
+            print("Overall:\t"
+                  "dice(RV/Myo/LV): ES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})\t"
                   "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(mean_dice[1], stddev[1], mean_dice[2],
                                                                               stddev[2], mean_dice[3], stddev[3],
                                                                               mean_dice[5], stddev[5], mean_dice[6],
                                                                               stddev[6], mean_dice[7], stddev[7]))
+            if self.referral:
+                mean_dice = self.dice_referral_results[0]
+                stddev = self.dice_referral_results[1]
+                print("\t\t\t\t ES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})\t"
+                      "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(mean_dice[1], stddev[1], mean_dice[2],
+                                                                                  stddev[2], mean_dice[3], stddev[3],
+                                                                                  mean_dice[5], stddev[5], mean_dice[6],
+                                                                                  stddev[6], mean_dice[7], stddev[7]))
         if self.hd_results is not None:
             mean_hd = self.hd_results[0]
             stddev = self.hd_results[1]
-            print("Test accuracy: \t "
-                  "Hausdorff(RV/Myo/LV): ES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f}) --- "
+            print("Hausdorff(RV/Myo/LV):\tES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})\t"
                   "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(mean_hd[1], stddev[1], mean_hd[2],
                                                                               stddev[2], mean_hd[3], stddev[3],
                                                                               mean_hd[5], stddev[5], mean_hd[6],
                                                                               stddev[6], mean_hd[7], stddev[7]))
+            if self.referral:
+                mean_hd = self.hd_referral_results[0]
+                stddev = self.hd_referral_results[1]
+                print("After referral:\t\t"
+                      "ES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})\t"
+                      "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(mean_hd[1], stddev[1], mean_hd[2],
+                                                                                  stddev[2], mean_hd[3], stddev[3],
+                                                                                  mean_hd[5], stddev[5], mean_hd[6],
+                                                                                  stddev[6], mean_hd[7], stddev[7]))
         if self.referral:
-            mean_dice = self.dice_referral_results[0]
-            print(self.dice_referral_results.shape)
-            stddev = self.dice_referral_results[1]
-            print("W-Out outliers: "
-                  "dice(RV/Myo/LV): ES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f}) --- "
-                  "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(mean_dice[0], stddev[0], mean_dice[1],
-                                                                              stddev[1], mean_dice[2], stddev[2],
-                                                                              mean_dice[3], stddev[3], mean_dice[4],
-                                                                              stddev[4], mean_dice[5], stddev[5]))
-            mean_dice = self.dice_non_referral_results[0]
-            stddev = self.dice_non_referral_results[1]
-            print("With outliers: \t"
-                  "dice(RV/Myo/LV): ES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f}) --- "
-                  "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(mean_dice[0], stddev[0], mean_dice[1],
-                                                                              stddev[1], mean_dice[2], stddev[2],
-                                                                              mean_dice[3], stddev[3], mean_dice[4],
-                                                                              stddev[4], mean_dice[5], stddev[5]))
+            ref_perc_es = self.referral_stats_results[0, 0]
+            ref_reduc_es = self.referral_stats_results[0, 1]
+            print("Referral ES %: {:.2f} (std={:.2f}, median={:.2f})\t"
+                  "Reduction %: {:.2f} (std={:.2f}, median={:.2f})".format(ref_perc_es[0], ref_perc_es[1],
+                                                                           ref_perc_es[2], ref_reduc_es[0],
+                                                                           ref_reduc_es[1],
+                                                                           ref_reduc_es[2]))
+            ref_perc_ed = self.referral_stats_results[1, 0]
+            ref_reduc_ed = self.referral_stats_results[1, 1]
+            print("Referral ED %: {:.2f} (std={:.2f}, median={:.2f})\t"
+                  "Reduction %: {:.2f} (std={:.2f}, median={:.2f})".format(ref_perc_ed[0], ref_perc_ed[1],
+                                                                           ref_perc_ed[2], ref_reduc_ed[0],
+                                                                           ref_reduc_ed[1],
+                                                                           ref_reduc_ed[2]))
 
     def _create_figure_dir(self, image_num):
         image_name = self.image_names[image_num]

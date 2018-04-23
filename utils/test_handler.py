@@ -50,8 +50,8 @@ def test_ensemble(test_set, exper_hdl, mc_samples=10, sample_weights=True, disca
     if test_set.fold_ids[0] != int(exper_hdl.exper.run_args.fold_ids[0]):
         raise ValueError("Model {} was trained on different fold {} "
                          "than test fold {}".format(exper_hdl.exper.model_name,
-                                                    test_set.fold_ids[0],
-                                                    exper_hdl.exper.run_args.fold_ids[0]))
+                                                    exper_hdl.exper.run_args.fold_ids[0],
+                                                    test_set.fold_ids[0]))
 
     if checkpoints is None:
         checkpoints = [100000, 110000, 120000, 130000, 140000, 150000]
@@ -150,6 +150,7 @@ class ACDC2017TestHandler(object):
         self.b_orig_spacing = None
         self.b_seg_errors = None
         self.b_uncertainty_stats = None
+        self.referral_stats = None
         # accuracy and hausdorff measure for slices (per image)
         self.b_hd_slices = None
         self.b_acc_slices = None
@@ -349,14 +350,11 @@ class ACDC2017TestHandler(object):
             self.slice_counter += 1
             yield b_image, b_label
 
-    def set_pred_labels(self, pred_probs, pred_stddev=None, referral_threshold=0., verbose=False, do_filter=False):
+    def set_pred_labels(self, pred_probs, verbose=False, do_filter=False):
         """
 
         :param pred_probs: [1, num_of_classes(8), width, height]
-        :param pred_stddev: [2, 4 classes, width, height] uncertainty maps for this slice ES/ED
-        :param referral_threshold: only used if pred_stddev object is non None. Used to filter prediction errors based
-        on standard deviation (uncertainty) or BALD values. This is different than the u_threshold used in the
-        uncertainty statistics in method compute_img_slice_uncertainty_stats
+
         Also note that object self.b_labels has dims [num_classes(8), width, height, slices]
 
         :param do_filter: filter predicted labels on connected components. This is an important post processing step
@@ -365,7 +363,7 @@ class ACDC2017TestHandler(object):
 
         :return:
         """
-        cls_lbl = ["BG", "RV", "MYO", "LV"]
+
         if not isinstance(pred_probs, np.ndarray):
             pred_probs = pred_probs.data.cpu().numpy()
         # remember dim0 of pred_probs is 1, so we squeeze it by taking index "0". Hence the argmax is over
@@ -373,7 +371,7 @@ class ACDC2017TestHandler(object):
         pred_labels_es = np.argmax(pred_probs[0, 0:self.num_of_classes, :, :], axis=0)
         pred_labels_ed = np.argmax(pred_probs[0, self.num_of_classes:self.num_of_classes+self.num_of_classes,
                                    :, :], axis=0)
-        total_num_pixels = pred_labels_es.shape[0] * pred_labels_es.shape[1]
+
         for cls in np.arange(self.num_of_classes):
             pred_labels_cls_es = (pred_labels_es == cls).astype(np.int)
             pred_labels_cls_ed = (pred_labels_ed == cls).astype(np.int)
@@ -381,71 +379,6 @@ class ACDC2017TestHandler(object):
                 # use 6-connected components to filter out blobs that are not relevant for segmentation
                 pred_labels_cls_es = filter_connected_components(pred_labels_cls_es, cls, verbose=verbose)
                 pred_labels_cls_ed = filter_connected_components(pred_labels_cls_ed, cls, verbose=verbose)
-            true_labels_cls_es = self.b_labels[cls, :, :, self.slice_counter]
-            true_labels_cls_ed = self.b_labels[cls + self.num_of_classes, :, :, self.slice_counter]
-            dice_es_before = dice_coefficient(true_labels_cls_es, pred_labels_cls_es)
-            dice_ed_before = dice_coefficient(true_labels_cls_ed, pred_labels_cls_ed)
-            errors_es = pred_labels_cls_es != true_labels_cls_es
-            errors_ed = pred_labels_cls_ed != true_labels_cls_ed
-            # IMPORTANT. IF threshold above 0 -> we filter EVERYTHING! and SET PIXELS WITH HIGH UNCERTAINTY
-            #            ABOVE THRESHOLD, TO THE MOST COMMON (BINARY) LABEL VALUE! pred_stddev [2, 4, width, height]
-            # ------->>> ONLY FOR RV CLASS CURRENTLY <<<-------------------
-            if pred_stddev is not None and referral_threshold > 0. and (cls == 1 or cls == 3):
-                pixel_std_es = np.copy(pred_stddev[0, cls])
-                pixel_std_ed = np.copy(pred_stddev[1, cls])
-                # IMPORTANT!!! - THE THRESHOLD MUST BE EQUAL TO 0, ONLY IF WE WANT TO USE THE THRESHOLD TO CORRECT
-                # LABELS WITH HIGH UNCERTAINTY, THE THRESOLD SHOULD BE ABOVE 0.
-                pred_labels_cls_es_pos_idx = pred_labels_cls_es == 1
-                error_es_idx = pixel_std_es > referral_threshold
-                num_pixel_above_threshold_es = np.count_nonzero(np.logical_and(pred_labels_cls_es_pos_idx,
-                                                                               error_es_idx))
-                pred_labels_cls_ed_pos_idx = pred_labels_cls_ed == 1
-                error_ed_idx = pixel_std_ed > referral_threshold
-                num_pixel_above_threshold_ed = np.count_nonzero(np.logical_and(pred_labels_cls_ed_pos_idx,
-                                                                               error_ed_idx))
-                abs_perc_es = num_pixel_above_threshold_es / float(total_num_pixels)
-                abs_perc_ed = num_pixel_above_threshold_ed / float(total_num_pixels)
-                num_pos_labels_es = np.count_nonzero(pred_labels_cls_es)
-                num_pos_labels_ed = np.count_nonzero(pred_labels_cls_ed)
-                try:
-                    rel_perc_es = num_pixel_above_threshold_es / float(num_pos_labels_es)
-                except ZeroDivisionError:
-                    rel_perc_es = 0.
-                try:
-                    rel_perc_ed = num_pixel_above_threshold_ed / float(num_pos_labels_ed)
-                except ZeroDivisionError:
-                    rel_perc_ed = 0.
-                print("Slice {}/{} - Referral ({}/{} of {}): Absolute/relative "
-                      "ES {:.2f} / {:.2f} ({}) - ED {:.2f} / {:.2f} ({})".format(self.slice_counter+1, cls_lbl[cls],
-                                                                       num_pixel_above_threshold_es,
-                                                                       num_pixel_above_threshold_ed,
-                                                                       total_num_pixels,
-                                                                       abs_perc_es, rel_perc_es, num_pos_labels_es,
-                                                                       abs_perc_ed, rel_perc_ed,
-                                                                       num_pos_labels_ed))
-                # IMPORTANT: this is the EXPERT, setting the high uncertainty pixels to the ground truth labels
-                pred_labels_cls_es[error_es_idx] = true_labels_cls_es[error_es_idx]
-                pred_labels_cls_ed[error_ed_idx] = true_labels_cls_ed[error_ed_idx]
-                errors_es_filtered = pred_labels_cls_es != true_labels_cls_es
-                errors_ed_filtered = pred_labels_cls_ed != true_labels_cls_ed
-                self.b_seg_errors[self.slice_counter, cls] = np.count_nonzero(errors_es_filtered)
-                self.b_seg_errors[self.slice_counter, cls + self.num_of_classes] = np.count_nonzero(errors_ed_filtered)
-                dice_es_after = dice_coefficient(true_labels_cls_es, pred_labels_cls_es)
-                dice_ed_after = dice_coefficient(true_labels_cls_ed, pred_labels_cls_ed)
-                if cls != 0 and verbose:
-                    print("Slice {} - Class {}: before/after ES: errors: {}/{} dice: {:.2f}/{:.2f} "
-                          "ED errors {}/{} dice: {:.2f}/{:.2f}".format(self.slice_counter+1, cls,
-                                                                       np.count_nonzero(errors_es),
-                                                                       np.count_nonzero(errors_es_filtered),
-                                                                       dice_es_before, dice_es_after,
-                                                                       np.count_nonzero(errors_ed),
-                                                                       np.count_nonzero(errors_ed_filtered),
-                                                                       dice_ed_before, dice_ed_after))
-            else:
-                # not filtering high uncertainty pixels
-                # store # of segmentation errors that we made per class and slice
-                self.b_seg_errors[self.slice_counter, cls] = np.count_nonzero(errors_es)
-                self.b_seg_errors[self.slice_counter, cls + self.num_of_classes] = np.count_nonzero(errors_ed)
 
             self.b_pred_labels[cls, :, :, self.slice_counter] = pred_labels_cls_es
             self.b_pred_labels[cls + self.num_of_classes, :, :, self.slice_counter] = pred_labels_cls_ed
@@ -523,6 +456,123 @@ class ACDC2017TestHandler(object):
                         np.array([total_uncertainty, t_num_pixel_uncertain, t_num_pixel_uncertain_above_tre,
                                   num_of_objects])
 
+    def filter_referrals(self, u_maps, referral_threshold=0., verbose=True, ):
+        """
+        Based on the uncertainty maps (probably produced before inference time) we "refer" pixels with
+        high uncertainty (above referral_threshold) to an expert who corrects the pixels. Hence we compute
+        again the dice and HD after correction (simulation).
+
+        :param u_maps: We assume this is a tensor of shape [2 (ES/ED), 4classes, width, height, #slices]
+        :param referral_threshold:
+        :param verbose:
+        :return:
+        """
+        cls_lbl = ["BG", "RV", "MYO", "LV"]
+        num_of_slices = self.b_labels.shape[3]  # [#classes, width, height, #slices]
+        # referral statistics: 1) relative percentage of referred pixels (number of referred / positive predicted pixels
+        #                      2) error reduction (%) #reduced errors / #segmentation errors
+        #                      3) Number of true, positive labels (ground truth)
+        self.referral_stats = np.zeros((2, self.num_of_classes,  3, num_of_slices))
+        for slice_id in np.arange(num_of_slices):
+
+            for cls in np.arange(self.num_of_classes):
+                pred_labels_cls_es = self.b_pred_labels[cls, :, :, slice_id]
+                pred_labels_cls_ed = self.b_pred_labels[cls + self.num_of_classes, :, :, slice_id]
+                true_labels_cls_es = self.b_labels[cls, :, :, slice_id]
+                true_labels_cls_ed = self.b_labels[cls + self.num_of_classes, :, :, slice_id]
+                num_true_labels_es = np.count_nonzero(true_labels_cls_es)
+                num_true_labels_ed = np.count_nonzero(true_labels_cls_ed)
+                errors_es = np.count_nonzero(pred_labels_cls_es != true_labels_cls_es)
+                errors_ed = np.count_nonzero(pred_labels_cls_ed != true_labels_cls_ed)
+                # CURRENTLY ONLY FOR RV AND LV CLASS
+                if cls == 1 or cls == 3:
+                    # self.b_stddev_map [8classes, width, height, #slices]
+                    pixel_std_es = u_maps[0, cls, :, :, slice_id]
+                    pixel_std_ed = u_maps[1, cls, :, :, slice_id]
+                    pixel_null_std_es = pixel_std_es <= 0.
+                    pixel_null_std_ed = pixel_std_ed <= 0.
+
+                    # get indices of the "positives" of the seg-predictions (we don't referral the bg pixels)
+                    pred_labels_cls_es_pos_idx = pred_labels_cls_es == 1
+                    true_labels_cls_es_pos_idx = true_labels_cls_es == 1
+                    # indices of positive labels where predictions disagree with ground-truth
+                    error_es_cls_pos_idx = pred_labels_cls_es_pos_idx != true_labels_cls_es_pos_idx
+                    # get the indices of the positive pixels our model is uncertain about (defining uncertain
+                    # based on the parameter referral_threshold (e.g. 0.3)
+                    uncertain_es_idx = pixel_std_es >= referral_threshold
+                    # which of the uncertain pixels belong to the ones we predicted as positive
+                    inter_section_pixels_es = np.logical_and(pred_labels_cls_es_pos_idx,
+                                                             uncertain_es_idx)
+                    # intersection of uncertain pixels that are indeed wrong predictions (predicting positives 1)
+                    # we want this number to be close to the total number of pixels we are uncertain about
+                    # and that we predicted a postive label for
+                    unc_wrong_pixels_es = np.logical_and(error_es_cls_pos_idx,
+                                                             uncertain_es_idx)
+                    print("Check {} and {}".format(np.count_nonzero(inter_section_pixels_es),
+                                                   np.count_nonzero(unc_wrong_pixels_es)))
+                    # intersection count: how many of the positive predicted pixels are we uncertain about
+                    num_pixel_above_threshold_es = np.count_nonzero(np.logical_and(pred_labels_cls_es_pos_idx,
+                                                                                   uncertain_es_idx))
+                    # do the same stuff for ED phase
+                    pred_labels_cls_ed_pos_idx = pred_labels_cls_ed == 1
+                    uncertain_ed_idx = pixel_std_ed >= referral_threshold
+                    inter_section_pixels_ed = np.logical_and(pred_labels_cls_ed_pos_idx,
+                                                                                   uncertain_ed_idx)
+
+                    num_pixel_above_threshold_ed = np.count_nonzero(np.logical_and(pred_labels_cls_ed_pos_idx,
+                                                                                   uncertain_ed_idx))
+                    # get the total number of positive predicted pixels for ES and ED in order to compute percs
+                    num_pos_labels_es = np.count_nonzero(pred_labels_cls_es)
+                    num_pos_labels_ed = np.count_nonzero(pred_labels_cls_ed)
+                    # temporary, number of all pixels equal to 0
+                    # IMPORTANT: this is the EXPERT, setting the high uncertainty pixels to the ground truth labels
+                    pred_labels_cls_es[inter_section_pixels_es] = true_labels_cls_es[inter_section_pixels_es]
+                    pred_labels_cls_ed[inter_section_pixels_ed] = true_labels_cls_ed[inter_section_pixels_ed]
+                    errors_es_filtered = np.count_nonzero(pred_labels_cls_es != true_labels_cls_es)
+                    errors_ed_filtered = np.count_nonzero(pred_labels_cls_ed != true_labels_cls_ed)
+                    # how many seg-errors did we improve (can't be negative)
+                    less_errors_es = errors_es - errors_es_filtered
+                    less_errors_ed = errors_ed - errors_ed_filtered
+
+                    try:
+                        rel_perc_es = (num_pixel_above_threshold_es / float(num_pos_labels_es)) * 100
+                    except ZeroDivisionError:
+                        rel_perc_es = 0.
+                    try:
+                        rel_perc_ed = (num_pixel_above_threshold_ed / float(num_pos_labels_ed)) * 100
+                    except ZeroDivisionError:
+                        rel_perc_ed = 0.
+                    try:
+                        error_es_reduction = (less_errors_es / float(errors_es)) * 100
+                    except ZeroDivisionError:
+                        error_es_reduction = 0.
+                    try:
+                        error_ed_reduction = (less_errors_ed / float(errors_ed)) * 100
+                    except ZeroDivisionError:
+                        error_ed_reduction = 0.
+
+                    print("ES: Total unc {} total pos1 {} pos1-unc {} {:.2f} true-errors-unc {},"
+                          " errors {} errors-after "
+                          "{}".format(np.count_nonzero(uncertain_es_idx), num_pos_labels_es,
+                                      np.count_nonzero(inter_section_pixels_es),
+                                      rel_perc_es, np.count_nonzero(unc_wrong_pixels_es),
+                                      errors_es,
+                                      errors_es_filtered))
+
+                    self.referral_stats[0, cls, :, slice_id] = np.array([rel_perc_es, error_es_reduction,
+                                                                         num_true_labels_es])
+                    self.referral_stats[1, cls, :, slice_id] = np.array([rel_perc_ed, error_ed_reduction,
+                                                                         num_true_labels_ed])
+
+                    if verbose:
+                        print("Slice {}/{} - % referred ES/ED {:.2f}/{:.2f} / " 
+                              "% error reduc. {:.2f}/{}".format(slice_id + 1, cls_lbl[cls],
+                                                                    rel_perc_es * 100, rel_perc_ed* 100,
+                                                                    error_es_reduction * 100,
+                                                                    error_ed_reduction * 100))
+                self.b_pred_labels[cls, :, :, slice_id] = pred_labels_cls_es
+                self.b_pred_labels[cls + self.num_of_classes, :, :, slice_id] = pred_labels_cls_ed
+
     def set_stddev_map(self, slice_std, u_threshold=0.01):
         """
             Important: we assume slice_std is a numpy array with shape [num_classes, width, height]
@@ -542,7 +592,7 @@ class ACDC2017TestHandler(object):
         self.b_bald_map[:, :, :, self.slice_counter] = slice_bald
         self.compute_img_slice_uncertainty_stats(u_type="bald", u_threshold=u_threshold)
 
-    def get_accuracy(self, compute_hd=False, do_filter=True):
+    def get_accuracy(self, compute_hd=False, compute_seg_errors=False, do_filter=True):
         """
 
             Compute dice coefficients for the complete 3D volume
@@ -551,9 +601,18 @@ class ACDC2017TestHandler(object):
                                                                     (0=ES, 1=ED)
 
             compute_hd: Boolean indicating whether or not to compute Hausdorff distance
+            compute_seg_errors: boolean indicating whether or not to compute segmentation errors
+
+            :returns: always: 2 numpy arrays dice [8classes], hd [8classes]
+                      if we compute seg-errors then in addition: [8classes, #slices] -> errors per class per slice
         """
         dices = np.zeros(2 * self.num_of_classes)
         hausdff = np.zeros(2 * self.num_of_classes)
+        num_of_slices = self.b_labels.shape[3]
+        if compute_seg_errors:
+            # if we compute seg-errors then shape of results is [2, 4classes, #slices]
+
+            seg_errors = np.zeros((2, self.num_of_classes, num_of_slices))
         for cls in np.arange(self.num_of_classes):
             if do_filter:
                 # use 6-connected components to filter out blobs that are not relevant for segmentation
@@ -580,8 +639,26 @@ class ACDC2017TestHandler(object):
                            voxelspacing=self.b_new_spacing, connectivity=1)
                 else:
                     hausdff[cls + self.num_of_classes] = 0.
+            if compute_seg_errors:
+                true_labels_cls_es = self.b_labels[cls]
+                true_labels_cls_ed = self.b_labels[cls + self.num_of_classes]
+                pred_labels_cls_es = self.b_pred_labels[cls]
+                pred_labels_cls_ed = self.b_pred_labels[cls + self.num_of_classes]
 
-        return dices, hausdff
+                errors_es = pred_labels_cls_es != true_labels_cls_es
+                errors_ed = pred_labels_cls_ed != true_labels_cls_ed
+                # Compute seg-errors per slice for this class. error_es/ed has shape [width, height, #slices]
+                # we first reshape [#slices, width * height] and then compute errors
+                errors_es = np.count_nonzero(np.reshape(errors_es, (errors_es.shape[2], -1)), axis=1)
+                errors_ed = np.count_nonzero(np.reshape(errors_ed, (errors_ed.shape[2], -1)), axis=1)
+                # store # of segmentation errors that we made per class and slice
+
+                seg_errors[0, cls, :] = errors_es
+                seg_errors[1, cls, :] = errors_ed
+        if compute_seg_errors:
+            return dices, hausdff, seg_errors
+        else:
+            return dices, hausdff
 
     def compute_slice_accuracy(self, slice_idx=None, compute_hd=False):
         """

@@ -586,7 +586,7 @@ class UncertaintyMapsGenerator(object):
             # NOTE: we set do_filter (connected components post-processing) to FALSE here because we will do
             # this at the end for the complete 3D label object, but not for the individual slices.
             # in the set_pred_labels method we also compute the uncertainties
-            self.test_set.set_pred_labels(mean_test_pred, referral_threshold=0., verbose=self.verbose,
+            self.test_set.set_pred_labels(mean_test_pred, verbose=self.verbose,
                                           do_filter=False)
 
             self.test_set.set_stddev_map(std_test_pred, u_threshold=self.u_threshold)
