@@ -5,8 +5,58 @@ from datetime import datetime
 import numpy as np
 
 import torch
-from tqdm import trange
 from pytz import timezone
+
+
+def to_rgb1a(im):
+
+    w, h = im.shape
+    ret = np.zeros((w, h, 3), dtype=np.uint8)
+
+    rgba = ((im - np.min(im)) / (np.max(im) - np.min(im))) * 255
+    ret[:, :, 2] = ret[:, :, 1] = ret[:, :, 0] = rgba
+    return ret
+
+
+def set_error_pixels(img_rgb, pred_labels, true_labels, cls_offset, stddev=None, std_threshold=0.):
+    """
+
+    :param img_rgb: The original MRI scan extended to three channels (RGB)
+    :param pred_labels: The predicted segmentation mask
+    :param true_labels: The GT segmentation mask
+    :param cls_offset:  0 or 4 depending on the phase ES resp. ED
+    :param stddev: Uncertainty map for the image
+    :param std_threshold: Threshold which can be used to simulate the "expert" mode. If uncertainty is higher
+    than threshold we assume the EXPERT would adjust the pixel to the correct seg-label.
+    :return:
+    """
+    #                       RV:RED           MYO:YELLOW    LV:GREEN
+    rgb_error_codes = [[], [255, 0, 0], [204, 204, 0], [0, 204, 0]]
+    num_of_errors = np.zeros(4).astype(np.int)
+
+    for cls in np.arange(pred_labels.shape[0] // 2):
+        error_idx = pred_labels[cls + cls_offset] != true_labels[cls + cls_offset]
+        errors_after = None
+        if std_threshold > 0.:
+            if cls == 1:
+                # filter for RV predictions with high stddev
+                # pred_cls_labels_filtered = np.copy(pred_labels[cls + cls_offset])
+                referral_idx = stddev[cls + cls_offset] > std_threshold
+                # IMPORTANT: HERE we set the pixels of high uncertainty to the EXPERT ground truth!!!
+                pred_labels[cls + cls_offset][referral_idx] = true_labels[cls + cls_offset][referral_idx]
+                errors_after = true_labels[cls + cls_offset] != pred_labels[cls + cls_offset]
+                print("WARNING - RV-errors using {:.2f} before/after {} / {}".format(std_threshold,
+                                                                                     np.count_nonzero(error_idx),
+                                                                                     np.count_nonzero(errors_after)))
+        if errors_after is not None:
+            if cls != 0:
+                img_rgb[errors_after, :] = rgb_error_codes[cls]
+            num_of_errors[cls] = np.count_nonzero(errors_after)
+        else:
+            if cls != 0:
+                img_rgb[error_idx, :] = rgb_error_codes[cls]
+            num_of_errors[cls] = np.count_nonzero(error_idx)
+    return img_rgb, num_of_errors
 
 
 def datestr(withyear=True):

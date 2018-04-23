@@ -28,6 +28,7 @@ class ExperimentHandler(object):
     def __init__(self, exper, logger=None, use_logfile=True):
 
         self.exper = exper
+        self.u_maps = None
         self.test_results = None
         self.logger = None
         self.num_val_runs = 0
@@ -190,7 +191,7 @@ class ExperimentHandler(object):
 
     def test(self, model, test_set, image_num=0, mc_samples=1, sample_weights=False, compute_hd=False,
              use_uncertainty=False, referral_threshold=None, use_seed=False, verbose=False, store_details=False,
-             do_filter=True, repeated_run=False, u_threshold=0.01):
+             do_filter=True, repeated_run=False, u_threshold=0.01, discard_outliers=False):
         """
 
         :param model:
@@ -199,10 +200,12 @@ class ExperimentHandler(object):
         :param mc_samples:
         :param sample_weights:
         :param compute_hd:
-        :param use_uncertainty: Boolean indicating whether we use uncertainties (bald/stddev) to set pixel labels
-        to most common value (binary) if uncertainty of pixel is above a certain threshold (parameter
-        referral_threshold)
+        :param use_uncertainty: Boolean indicating whether we use uncertainty maps (per pixel/class) in order to refer
+         pixels to an EXPERT (meaning setting the pixel to the true value) in case the uncertainty is above a certain
+         threshold (parameter referral_threshold). This is only done for RV at the moment.
         :param referral_threshold: see explanation "use_uncertainty". This is the threshold parameter.
+        :param discard_outliers: boolean indicating whether outliers (slice/class) should be discarded when
+        computing the dice coefficient
         :param u_threshold: Another threshold! used to compute the uncertainty statistics. We're currently using
         a default value of 0.01 to filter out very tiny values but could be used to investigate the effect of
         filtering out lower uncertainty values because may be this helps distinguishing levels of uncertainties in
@@ -269,8 +272,17 @@ class ExperimentHandler(object):
             setSeed(1234, self.exper.run_args.cuda)
         if self.test_results is None:
             self.test_results = TestResults(self.exper, use_dropout=sample_weights, mc_samples=mc_samples)
-        # if we're discarding outlier slices/classes we need to initialize a couple of things
+        # if we use referral then we need to load the u-maps
         if use_uncertainty:
+            # get uncertainty maps for this image [2, 4classes, width, height, #slices]
+            if self.u_maps is None:
+                self.get_u_maps()
+            patient_id = test_set.img_file_names[image_num]
+            u_maps_image = self.u_maps[patient_id]
+        else:
+            u_maps_image = None
+        # if we're discarding outlier slices/classes we need to initialize a couple of things
+        if discard_outliers:
             if not self.exper.outliers_per_epoch:
                 print("------>>>>> INFO - Loading outlier statistics from disk <<<<<-------")
                 self.get_outlier_stats()
@@ -325,20 +337,21 @@ class ExperimentHandler(object):
             # THIS IS A PIECE OF RESIDUAL CODING WHICH SHOULD BE NOT USED. THE FUNCTIONALITY IS STILL IN TACT
             # BUT WE ARE CURRENTLY USING THE Uncertainty MAPS which we generate to refer image slices-phase-class
             # to an UNKNOWN expert, we mark the dice values as OUTLIERS.
-            # if use_uncertainty:
-            #     test_set.set_pred_labels(mean_test_pred, pred_stddev=std_test_pred,
-            #                              referral_threshold=referral_threshold,
-            #                              verbose=verbose, do_filter=do_filter)
-            # else:
-            # NOTE: we set do_filter (connected components post-processing) to FALSE here because we will do
-            # this at the end for the complete 3D label object, but not for the individual slices
-            # NOTE: we set referral_threshold to 0. because we don't want to use uncertainties!
-            test_set.set_pred_labels(mean_test_pred, referral_threshold=0., verbose=verbose, do_filter=False)
+            if use_uncertainty:
+                # u_maps_image shape [2, 4classes, width, height, #slices]
+                test_set.set_pred_labels(mean_test_pred, pred_stddev=u_maps_image[:, :, :, :, test_set.slice_counter],
+                                         referral_threshold=referral_threshold,
+                                         verbose=False, do_filter=False)
+            else:
+                # NOTE: we set do_filter (connected components post-processing) to FALSE here because we will do
+                # this at the end for the complete 3D label object, but not for the individual slices
+                # NOTE: we set referral_threshold to 0. because we don't want to use uncertainties!
+                test_set.set_pred_labels(mean_test_pred, referral_threshold=0., verbose=verbose, do_filter=False)
 
             test_set.set_stddev_map(std_test_pred, u_threshold=u_threshold)
             test_set.set_bald_map(bald_values, u_threshold=u_threshold)
             slice_acc, slice_hd = test_set.compute_slice_accuracy(compute_hd=compute_hd)
-            if use_uncertainty:
+            if discard_outliers:
                 # add the current dice score to the referral arrays
                 for cls in np.arange(1, half_classes):
                     ref_dice_es[cls - 1].append(slice_acc[cls])
@@ -392,7 +405,7 @@ class ExperimentHandler(object):
                                                test_accuracy[1], test_accuracy[2],
                                                test_accuracy[3], test_accuracy[5],
                                                test_accuracy[6], test_accuracy[7]))
-        if use_uncertainty:
+        if discard_outliers:
             referral_dice_es, referral_dice_ed = np.zeros(3), np.zeros(3)
             np_dice_es = np.zeros(3)
             np_dice_ed = np.zeros(3)
@@ -438,6 +451,28 @@ class ExperimentHandler(object):
                                       test_hd_slices=test_set.b_hd_slices,
                                       image_name=test_set.b_image_name, repeated_run=repeated_run,
                                       referral_accuracy=referral_dice, non_referral_accuracy=non_referral_dice)
+
+    def create_u_maps(self, model=None, checkpoint=None, mc_samples=10, u_threshold=0.1, do_save_u_stats=False,
+                      save_actual_maps=False, test_set=None):
+
+        if model is None and checkpoint is None:
+            raise ValueError("When model parameter is None, you need to specify the checkpoint model "
+                             "that needs to be loaded.")
+
+        if save_actual_maps and not do_save_u_stats:
+            print("WARNING - Setting do_save_u_stats=True because you specifiedy that you want to "
+                  "save the actual uncertainty maps!")
+            do_save_u_stats = True
+
+        maps_generator = UncertaintyMapsGenerator(self, model=model, test_set=test_set, verbose=False,
+                                                  mc_samples=mc_samples, u_threshold=u_threshold,
+                                                  checkpoint=checkpoint, store_test_results=True)
+        maps_generator(do_save=do_save_u_stats, clean_up=True, save_actual_maps=save_actual_maps)
+
+    def get_u_maps(self):
+        # returns a dictionary key patientID with the uncertainty maps for each patient/image of shape
+        # [2, 4classes, width, height, #slices]
+        self.u_maps = ImageUncertainties.load_uncertainty_maps(self, u_maps_only=True)
 
     def create_outlier_dataset(self, dataset, model=None, checkpoint=None, mc_samples=10, u_threshold=0.1,
                                do_save_u_stats=False, use_high_threshold=False, use_train_set=True,
@@ -488,7 +523,7 @@ class ExperimentHandler(object):
         self.info("INFO - Successfully created outlier-dataset. Number of outlier slices {}. "
                   "Dataset contains {} slices in total "
                   "(referral {:.2f})%.".format(len(img_outliers.outlier_slices), len(img_outliers.images),
-                                             referral_perc))
+                                               referral_perc))
         if do_save_outlier_stats:
             save_output_dir = os.path.join(self.exper.config.root_dir,
                                            os.path.join(self.exper.output_dir, self.exper.config.stats_path))

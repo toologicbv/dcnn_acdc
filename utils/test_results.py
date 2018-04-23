@@ -13,49 +13,9 @@ if "/home/jogi/.local/lib/python2.7/site-packages" in sys.path:
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from common.common import datestr
+from common.common import datestr, to_rgb1a, set_error_pixels
 import copy
 from scipy.stats import wilcoxon, ttest_ind, mannwhitneyu
-
-
-def set_error_pixels(img_err, pred_labels, true_labels, cls_offset, stddev=None, std_threshold=0.):
-
-    #                       RV:RED           MYO:YELLOW    LV:GREEN
-    rgb_error_codes = [[], [255, 0, 0], [204, 204, 0], [0, 204, 0]]
-    num_of_errors = np.zeros(4).astype(np.int)
-
-    for cls in np.arange(pred_labels.shape[0] // 2):
-        error_idx = pred_labels[cls + cls_offset] != true_labels[cls + cls_offset]
-        errors_after = None
-        if std_threshold > 0.:
-            if cls == 1:
-                # filter for RV predictions with high stddev
-                # pred_cls_labels_filtered = np.copy(pred_labels[cls + cls_offset])
-                referral_idx = stddev[cls + cls_offset] > std_threshold
-                pred_labels[cls + cls_offset][referral_idx] = 0
-                errors_after = true_labels[cls + cls_offset] != pred_labels[cls + cls_offset]
-                print("WARNING - RV-errors using {:.2f} before/after {} / {}".format(std_threshold,
-                                                                                     np.count_nonzero(error_idx),
-                                                                                     np.count_nonzero(errors_after)))
-        if errors_after is not None:
-            if cls != 0:
-                img_err[errors_after, :] = rgb_error_codes[cls]
-            num_of_errors[cls] = np.count_nonzero(errors_after)
-        else:
-            if cls != 0:
-                img_err[error_idx, :] = rgb_error_codes[cls]
-            num_of_errors[cls] = np.count_nonzero(error_idx)
-    return img_err, num_of_errors
-
-
-def to_rgb1a(im):
-
-    w, h = im.shape
-    ret = np.zeros((w, h, 3), dtype=np.uint8)
-
-    rgba = ((im - np.min(im)) / (np.max(im) - np.min(im))) * 255
-    ret[:, :, 2] = ret[:, :, 1] = ret[:, :, 0] = rgba
-    return ret
 
 
 def get_accuracies_all(pred_labels, true_labels):
@@ -91,7 +51,8 @@ def compute_p_values(err_group, corr_group, phase, stats, uncertainty_type="std"
         # _, stats["ed_pvalue_wilc_" + u_type] = wilcoxon(err_group, corr_group)
 
 
-def get_mean_pred_per_slice(img_slice, img_probs, img_stds, img_balds, labels, pred_labels, half_classes, stats):
+def get_mean_pred_per_slice(img_slice, img_probs, img_stds, img_balds, labels, pred_labels, half_classes, stats,
+                            compute_p_values=False):
     """
 
     Note that for detecting the correct and incorrect classified pixels, we only need to look at the background
@@ -158,10 +119,11 @@ def get_mean_pred_per_slice(img_slice, img_probs, img_stds, img_balds, labels, p
         # compute hypothesis test p-values for group (1) correct classified versus (2) incorrect classified
         # using the uncertainty measures for both groups (TO DO: group (1) DOES NOT INCORPORATE "true negatives"
         # is that CORRECT?
-        # (1) for stddev
-        compute_p_values(err_std, pos_std, phase, stats, uncertainty_type="std")
-        # (2) BALD values
-        compute_p_values(err_bald, pos_bald, phase, stats, uncertainty_type="bald")
+        if compute_p_values:
+            # (1) for stddev
+            compute_p_values(err_std, pos_std, phase, stats, uncertainty_type="std")
+            # (2) BALD values
+            compute_p_values(err_bald, pos_bald, phase, stats, uncertainty_type="bald")
 
 
 def get_img_stats_per_slice_class(img_slice_probs, img_slice, phase, half_classes,
@@ -278,7 +240,7 @@ class TestResults(object):
         self.save_output_dir = os.path.join(exper.config.root_dir,
                                             os.path.join(exper.output_dir, exper.config.stats_path))
 
-    def add_results(self, batch_image, batch_labels, image_id, pred_labels, b_predictions, stddev_map,
+    def add_results(self, batch_image, batch_labels, image_id, pred_labels, mc_pred_probs, stddev_map,
                     test_accuracy, test_hd, seg_errors, store_all=False, bald_maps=None, uncertainty_stats=None,
                     test_hd_slices=None, test_accuracy_slices=None, image_name=None, referral_accuracy=None,
                     non_referral_accuracy=None, repeated_run=False):
@@ -287,7 +249,7 @@ class TestResults(object):
         :param batch_image: [2, width, height, slices]
         :param batch_labels:
         :param pred_labels:
-        :param b_predictions:
+        :param mc_pred_probs: the actual softmax probabilities [#samples, 8classes, width, height, #slices]
         :param seg_errors: [#slices, #classes(8)]
         :param stddev_map: [#classes (8), width, height, slices]
         :param bald_maps: [2, width, height, slices]
@@ -313,7 +275,7 @@ class TestResults(object):
                 self.labels.append(batch_labels)
         if store_all:
             self.pred_labels.append(pred_labels)
-            self.mc_pred_probs.append(b_predictions)
+            self.mc_pred_probs.append(mc_pred_probs)
             self.stddev_maps.append(stddev_map)
             self.bald_maps.append(bald_maps)
         # when using multiple models for evaluation during testing, we only want to store the image IDs and
@@ -321,7 +283,7 @@ class TestResults(object):
         if not repeated_run:
             self.image_ids.append(image_id)
             self.image_names.append(image_name)
-            self.num_of_samples.append(b_predictions.shape[0])
+            self.num_of_samples.append(mc_pred_probs.shape[0])
             self.trans_dict[image_name] = image_id
 
         self.test_accuracy.append(test_accuracy)
@@ -1045,19 +1007,21 @@ class TestResults(object):
                     if phase == 0:
                         bald_corr = img_slice_probs["es_cor_bald"]
                         bald_err = img_slice_probs["es_err_bald"]
-                        p_value_ttest = img_slice_probs["es_pvalue_ttest_bald"]
-                        p_value_mannwhitu = img_slice_probs["es_pvalue_mwhitu_bald"]
+                        # Currently disabled because we're not calculating any p-value statistics
+                        # p_value_ttest = img_slice_probs["es_pvalue_ttest_bald"]
+                        # p_value_mannwhitu = img_slice_probs["es_pvalue_mwhitu_bald"]
                     else:
                         bald_corr = img_slice_probs["ed_cor_bald"]
                         bald_err = img_slice_probs["ed_err_bald"]
-                        p_value_ttest = img_slice_probs["ed_pvalue_ttest_bald"]
-                        p_value_mannwhitu = img_slice_probs["ed_pvalue_mwhitu_bald"]
-                        print("p-values ttest/Mann-Withney-U {:.2E}/{:.2E} ".format(p_value_ttest, p_value_mannwhitu))
-                    if p_value_ttest >= 0.001 or p_value_mannwhitu >= 0.001:
+                        # Currently disabled because we're not calculating any p-value statistics
+                        # p_value_ttest = img_slice_probs["ed_pvalue_ttest_bald"]
+                        # p_value_mannwhitu = img_slice_probs["ed_pvalue_mwhitu_bald"]
+                        # print("p-values ttest/Mann-Withney-U {:.2E}/{:.2E} ".format(p_value_ttest, p_value_mannwhitu))
+                    # if p_value_ttest >= 0.001 or p_value_mannwhitu >= 0.001:
 
-                        str_p_value = "p={:.3f}/{:.3f}".format(p_value_ttest, p_value_mannwhitu)
-                    else:
-                        str_p_value = None
+                    #    str_p_value = "p={:.3f}/{:.3f}".format(p_value_ttest, p_value_mannwhitu)
+                    # else:
+                    #    str_p_value = None
 
                     xs = np.linspace(0, bald_max, 20)
                     ax5 = plt.subplot2grid((rows, columns), (row + 3, 0), rowspan=2, colspan=2)
@@ -1077,12 +1041,15 @@ class TestResults(object):
                         ax5b.legend(loc=2, prop={'size': 12})
                         ax5b.grid(False)
                     ax5.set_xlabel("BALD value", **config.axis_font)
-                    if str_p_value is not None:
-                        title_suffix = "(" + str_p_value + ")"
-                    else:
-                        title_suffix = ""
+                    # Currently disabled because we're not calculating any p-value statistics
+                    # if str_p_value is not None:
+                    #    title_suffix = "(" + str_p_value + ")"
+                    #else:
+                    #    title_suffix = ""
+                    # ax5.set_title("Slice {} {}: Distribution of BALD values ".format(img_slice + 1, str_phase)
+                    #              + title_suffix, ** config.title_font_medium)
                     ax5.set_title("Slice {} {}: Distribution of BALD values ".format(img_slice + 1, str_phase)
-                                  + title_suffix, ** config.title_font_medium)
+                                  , ** config.title_font_medium)
 
                 # In case we're only showing the error segmentation map we skip the next part (histgrams and
                 # stddev uncertainty maps per class

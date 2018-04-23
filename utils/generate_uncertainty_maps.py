@@ -427,7 +427,7 @@ class ImageUncertainties(object):
                                        self.outliers_per_img_class_es, self.outliers_per_img_class_ed)
 
     @staticmethod
-    def load_uncertainty_maps(exper_handler=None, full_path=None):
+    def load_uncertainty_maps(exper_handler=None, full_path=None, u_maps_only=False, verbose=False):
         """
         the numpy "stats" objects contain the following 4 values:
         (1) total_uncertainty (2) #num_pixel_uncertain (3) #num_pixel_uncertain_above_tre (4) num_of_objects
@@ -435,6 +435,8 @@ class ImageUncertainties(object):
 
         :param exper_handler:
         :param full_path:
+        :param u_maps_only: only load the "u_map" for all the patients/images, aka the uncertainty maps
+        of shape [2, 4classes, width, height, #slices]
         :return: An ImageUncertainties object with properties (IMPORTANT FOR THIS OBJECT WE ONLY CONSIDER THE
                  STDDEV uncerainty maps.
         (1) ImageUncertainties.raw_uncertainties:
@@ -464,15 +466,26 @@ class ImageUncertainties(object):
                 print("Unable to load uncertainty maps from {}".format(fname))
             image_umap_stats[patientID] = {"stddev_slice": data['stddev_slice'],
                                            "bald_slice": data['bald_slice'],
-                                           "u_thresold": data["u_threshold"]}
+                                           "u_thresold": data["u_threshold"],
+                                           "u_map": data["u_map"]}
             del data
             c += 1
-        print("INFO - Loaded {} U-maps from {}. Creating ImageUncertainties object.".format(c, search_path))
-        img_uncertainties = ImageUncertainties(image_umap_stats)
-        img_uncertainties.stats_per_phase, img_uncertainties.stats_per_cls = \
-            UncertaintyMapsGenerator.compute_mean_std_per_class(image_umap_stats)
-        img_uncertainties.gen_normalized_stats()
-        return img_uncertainties
+
+        if u_maps_only:
+            u_maps = OrderedDict()
+            for key, value in image_umap_stats.iteritems():
+                u_maps[key] = value["u_map"]
+            if verbose:
+                print("INFO - Loaded {} U-maps from {}.".format(c, search_path))
+            return u_maps
+
+        else:
+            print("INFO - Loaded {} U-maps from {}. Creating ImageUncertainties object.".format(c, search_path))
+            img_uncertainties = ImageUncertainties(image_umap_stats)
+            img_uncertainties.stats_per_phase, img_uncertainties.stats_per_cls = \
+                UncertaintyMapsGenerator.compute_mean_std_per_class(image_umap_stats)
+            img_uncertainties.gen_normalized_stats()
+            return img_uncertainties
 
 
 class UncertaintyMapsGenerator(object):
@@ -514,7 +527,7 @@ class UncertaintyMapsGenerator(object):
         else:
             self.test_results = None
 
-    def __call__(self, do_save=True, clean_up=True):
+    def __call__(self, do_save=True, clean_up=True, save_actual_maps=False):
 
         start_time = time.time()
         message = "INFO - Starting to generate uncertainty maps " \
@@ -530,7 +543,7 @@ class UncertaintyMapsGenerator(object):
             self._generate(image_num=image_num)
             if do_save:
                 saved += 1
-                self.save_maps()
+                self.save(save_actual_maps=save_actual_maps)
 
         duration = time.time() - start_time
         if do_save:
@@ -619,12 +632,15 @@ class UncertaintyMapsGenerator(object):
                                           test_hd_slices=self.test_set.b_hd_slices,
                                           image_name=self.test_set.b_image_name, repeated_run=False)
 
-    def save_maps(self):
+    def save(self, save_actual_maps=False):
         # NOTE: we're currently not saving the actual MAPS, only the uncertainty values per pixels and the stats
         # b_stddev_map: [8 classes, width, height, #slices]. we insert a new axis and split dim1 into 2 x 4
-        # new shape [2, 4 (measures), width, height, #slices]
-        # stddev_map = np.concatenate((self.test_set.b_stddev_map[np.newaxis, :4, :, :, :],
-        #                              self.test_set.b_stddev_map[np.newaxis, 4:, :, :, :]))
+        # new shape [2, 4 classes, width, height, #slices]
+        if save_actual_maps:
+            stddev_map = np.concatenate((self.test_set.b_stddev_map[np.newaxis, :4, :, :, :],
+                                         self.test_set.b_stddev_map[np.newaxis, 4:, :, :, :]))
+        else:
+            stddev_map = None
         # b_bald_map shape: [2, width, height, #slices]
         try:
             # the b_image_name contains the patientxxx ID! otherwise we have on identification
@@ -634,7 +650,8 @@ class UncertaintyMapsGenerator(object):
             # np.savez(filename, stddev_map=stddev_map, bald_map=self.test_set.b_bald_map,
             np.savez(filename, stddev_slice=self.test_set.b_uncertainty_stats["stddev"],
                      bald_slice=self.test_set.b_uncertainty_stats["bald"],
-                     u_threshold=np.array(self.test_set.b_uncertainty_stats["u_threshold"]))
+                     u_threshold=np.array(self.test_set.b_uncertainty_stats["u_threshold"]),
+                     u_map=stddev_map)
 
         except IOError:
             print("Unable to save uncertainty maps to {}".format(filename))

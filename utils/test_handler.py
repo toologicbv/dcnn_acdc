@@ -20,17 +20,18 @@ from scipy.ndimage.measurements import label
 from scipy.ndimage.morphology import generate_binary_structure
 
 
-def test_ensemble(test_set, exper_hdl, mc_samples=10, sample_weights=True, use_uncertainty=False,
+def test_ensemble(test_set, exper_hdl, mc_samples=10, sample_weights=True, discard_outliers=False,
                   referral_threshold=None, image_range=None, verbose=False, reset_results=False,
                   store_details=False, generate_stats=False, save_results=False, use_seed=False,
-                  do_filter=False, checkpoints=None, u_threshold=0.01):
+                  do_filter=False, checkpoints=None, use_uncertainty=False, u_threshold=0.01):
     """
 
     :param test_set:
     :param exper_hdl:
     :param mc_samples:
     :param sample_weights:
-    :param use_uncertainty:
+    :param discard_outliers:
+    :param use_uncertainty: refer pixels with uncertainty above referral threshold to expert
     :param referral_threshold:
     :param image_range:
     :param verbose:
@@ -56,7 +57,7 @@ def test_ensemble(test_set, exper_hdl, mc_samples=10, sample_weights=True, use_u
         checkpoints = [100000, 110000, 120000, 130000, 140000, 150000]
     if reset_results:
         exper_hdl.reset_results(mc_samples=mc_samples, use_dropout=sample_weights)
-    if use_uncertainty:
+    if discard_outliers:
         # print("INFO - Using {:.2f} as uncertainty threshold".format(referral_threshold))
         print("WARNING - Using outlier statistics.")
     repeated_run = True
@@ -74,10 +75,10 @@ def test_ensemble(test_set, exper_hdl, mc_samples=10, sample_weights=True, use_u
         print("INFO - Running test on {} images with model from checkpoint {}".format(num_of_images, checkpoint))
         for image_num in image_range:
             exper_hdl.test(dcnn_model, test_set, image_num=image_num, sample_weights=sample_weights,
-                           mc_samples=mc_samples, compute_hd=True, use_uncertainty=use_uncertainty,
+                           mc_samples=mc_samples, compute_hd=True, discard_outliers=discard_outliers,
                            referral_threshold=referral_threshold, verbose=verbose, store_details=store_details,
                            use_seed=use_seed, do_filter=do_filter, repeated_run=repeated_run,
-                           u_threshold=u_threshold)
+                           use_uncertainty=use_uncertainty, u_threshold=u_threshold)
         del dcnn_model
         # if we test multiple checkpoints we don't want to store the image details multiple times
         repeated_run = True
@@ -92,6 +93,13 @@ def test_ensemble(test_set, exper_hdl, mc_samples=10, sample_weights=True, use_u
             exper_hdl.test_results.generate_all_statistics()
     if save_results:
         exper_hdl.test_results.save_results(fold_ids=test_set.fold_ids)
+
+    try:
+        # clean up
+        del exper_hdl.exper.outliers_per_epoch
+        del exper_hdl.exper.u_maps
+    except:
+        pass
 
 
 class ACDC2017TestHandler(object):
@@ -341,11 +349,11 @@ class ACDC2017TestHandler(object):
             self.slice_counter += 1
             yield b_image, b_label
 
-    def set_pred_labels(self, pred_probs, pred_stddev=None, referral_threshold=0., verbose=False, do_filter=True):
+    def set_pred_labels(self, pred_probs, pred_stddev=None, referral_threshold=0., verbose=False, do_filter=False):
         """
 
         :param pred_probs: [1, num_of_classes(8), width, height]
-        :param pred_stddev: [num_of_classes(8), width, heigth]
+        :param pred_stddev: [2, 4 classes, width, height] uncertainty maps for this slice ES/ED
         :param referral_threshold: only used if pred_stddev object is non None. Used to filter prediction errors based
         on standard deviation (uncertainty) or BALD values. This is different than the u_threshold used in the
         uncertainty statistics in method compute_img_slice_uncertainty_stats
@@ -357,7 +365,7 @@ class ACDC2017TestHandler(object):
 
         :return:
         """
-
+        cls_lbl = ["BG", "RV", "MYO", "LV"]
         if not isinstance(pred_probs, np.ndarray):
             pred_probs = pred_probs.data.cpu().numpy()
         # remember dim0 of pred_probs is 1, so we squeeze it by taking index "0". Hence the argmax is over
@@ -365,7 +373,7 @@ class ACDC2017TestHandler(object):
         pred_labels_es = np.argmax(pred_probs[0, 0:self.num_of_classes, :, :], axis=0)
         pred_labels_ed = np.argmax(pred_probs[0, self.num_of_classes:self.num_of_classes+self.num_of_classes,
                                    :, :], axis=0)
-
+        total_num_pixels = pred_labels_es.shape[0] * pred_labels_es.shape[1]
         for cls in np.arange(self.num_of_classes):
             pred_labels_cls_es = (pred_labels_es == cls).astype(np.int)
             pred_labels_cls_ed = (pred_labels_ed == cls).astype(np.int)
@@ -380,22 +388,44 @@ class ACDC2017TestHandler(object):
             errors_es = pred_labels_cls_es != true_labels_cls_es
             errors_ed = pred_labels_cls_ed != true_labels_cls_ed
             # IMPORTANT. IF threshold above 0 -> we filter EVERYTHING! and SET PIXELS WITH HIGH UNCERTAINTY
-            #            ABOVE THRESHOLD, TO THE MOST COMMON (BINARY) LABEL VALUE!
-            if pred_stddev is not None and referral_threshold > 0.:
-                pixel_std_es = np.copy(pred_stddev[cls])
-                pixel_std_ed = np.copy(pred_stddev[cls + self.num_of_classes])
+            #            ABOVE THRESHOLD, TO THE MOST COMMON (BINARY) LABEL VALUE! pred_stddev [2, 4, width, height]
+            # ------->>> ONLY FOR RV CLASS CURRENTLY <<<-------------------
+            if pred_stddev is not None and referral_threshold > 0. and (cls == 1 or cls == 3):
+                pixel_std_es = np.copy(pred_stddev[0, cls])
+                pixel_std_ed = np.copy(pred_stddev[1, cls])
                 # IMPORTANT!!! - THE THRESHOLD MUST BE EQUAL TO 0, ONLY IF WE WANT TO USE THE THRESHOLD TO CORRECT
                 # LABELS WITH HIGH UNCERTAINTY, THE THRESOLD SHOULD BE ABOVE 0.
+                pred_labels_cls_es_pos_idx = pred_labels_cls_es == 1
                 error_es_idx = pixel_std_es > referral_threshold
+                num_pixel_above_threshold_es = np.count_nonzero(np.logical_and(pred_labels_cls_es_pos_idx,
+                                                                               error_es_idx))
+                pred_labels_cls_ed_pos_idx = pred_labels_cls_ed == 1
                 error_ed_idx = pixel_std_ed > referral_threshold
-
-                # little subtlety, if bg class, the most common class label is 1, for all other classes it's 0
-                if cls == 0:
-                    pred_labels_cls_es[error_es_idx] = 1
-                    pred_labels_cls_ed[error_ed_idx] = 1
-                else:
-                    pred_labels_cls_es[error_es_idx] = 0.
-                    pred_labels_cls_ed[error_ed_idx] = 0.
+                num_pixel_above_threshold_ed = np.count_nonzero(np.logical_and(pred_labels_cls_ed_pos_idx,
+                                                                               error_ed_idx))
+                abs_perc_es = num_pixel_above_threshold_es / float(total_num_pixels)
+                abs_perc_ed = num_pixel_above_threshold_ed / float(total_num_pixels)
+                num_pos_labels_es = np.count_nonzero(pred_labels_cls_es)
+                num_pos_labels_ed = np.count_nonzero(pred_labels_cls_ed)
+                try:
+                    rel_perc_es = num_pixel_above_threshold_es / float(num_pos_labels_es)
+                except ZeroDivisionError:
+                    rel_perc_es = 0.
+                try:
+                    rel_perc_ed = num_pixel_above_threshold_ed / float(num_pos_labels_ed)
+                except ZeroDivisionError:
+                    rel_perc_ed = 0.
+                print("Slice {}/{} - Referral ({}/{} of {}): Absolute/relative "
+                      "ES {:.2f} / {:.2f} ({}) - ED {:.2f} / {:.2f} ({})".format(self.slice_counter+1, cls_lbl[cls],
+                                                                       num_pixel_above_threshold_es,
+                                                                       num_pixel_above_threshold_ed,
+                                                                       total_num_pixels,
+                                                                       abs_perc_es, rel_perc_es, num_pos_labels_es,
+                                                                       abs_perc_ed, rel_perc_ed,
+                                                                       num_pos_labels_ed))
+                # IMPORTANT: this is the EXPERT, setting the high uncertainty pixels to the ground truth labels
+                pred_labels_cls_es[error_es_idx] = true_labels_cls_es[error_es_idx]
+                pred_labels_cls_ed[error_ed_idx] = true_labels_cls_ed[error_ed_idx]
                 errors_es_filtered = pred_labels_cls_es != true_labels_cls_es
                 errors_ed_filtered = pred_labels_cls_ed != true_labels_cls_ed
                 self.b_seg_errors[self.slice_counter, cls] = np.count_nonzero(errors_es_filtered)
