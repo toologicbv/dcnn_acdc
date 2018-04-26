@@ -191,7 +191,8 @@ class ExperimentHandler(object):
 
     def test(self, model, test_set, image_num=0, mc_samples=1, sample_weights=False, compute_hd=False,
              use_uncertainty=False, referral_threshold=None, use_seed=False, verbose=False, store_details=False,
-             do_filter=True, repeated_run=False, u_threshold=0.01, discard_outliers=False):
+             do_filter=True, repeated_run=False, u_threshold=0.01, discard_outliers=False,
+             ref_positives_only=False):
         """
 
         :param model:
@@ -204,6 +205,9 @@ class ExperimentHandler(object):
          pixels to an EXPERT (meaning setting the pixel to the true value) in case the uncertainty is above a certain
          threshold (parameter referral_threshold). This is only done for RV at the moment.
         :param referral_threshold: see explanation "use_uncertainty". This is the threshold parameter.
+        :param ref_positives_only: we only refer pixels with high uncertainties for which we predicted a positive
+        label (for a particular class). We're discarding all the negatives that we predicted because there're so
+        many of them due to the vast background
         :param discard_outliers: boolean indicating whether outliers (slice/class) should be discarded when
         computing the dice coefficient
         :param u_threshold: Another threshold! used to compute the uncertainty statistics. We're currently using
@@ -275,8 +279,9 @@ class ExperimentHandler(object):
         # if we use referral then we need to load the u-maps
         if use_uncertainty:
             # get uncertainty maps for this image [2, 4classes, width, height, #slices]
-            if self.u_maps is None:
+            if self.u_maps is None or len(self.u_maps.keys()) == 0:
                 self.get_u_maps()
+                print("INFO - Loading u-maps for experiment.")
             patient_id = test_set.img_file_names[image_num]
             u_maps_image = self.u_maps[patient_id]
             self.test_results.referral_threshold = referral_threshold
@@ -394,11 +399,11 @@ class ExperimentHandler(object):
                                                                    do_filter=do_filter)
         if use_uncertainty:
             # u_maps_image shape [2, 4classes, width, height, #slices]
-            test_set.filter_referrals(u_maps=u_maps_image,
+            test_set.filter_referrals(u_maps=u_maps_image, ref_positives_only=ref_positives_only,
                                       referral_threshold=referral_threshold, verbose=False)
             test_accuracy_ref, test_hd_ref, seg_errors_ref = test_set.get_accuracy(compute_hd=compute_hd,
                                                                                    compute_seg_errors=True,
-                                                                                   do_filter=do_filter)
+                                                                                   do_filter=False)
 
         print("Image {} - test loss {:.3f} "
               " dice(RV/Myo/LV):\tES {:.2f}/{:.2f}/{:.2f}\t"

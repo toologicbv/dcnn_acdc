@@ -335,14 +335,16 @@ class TestResults(object):
         columns_hd = self.test_hd[0].shape[0]
         mean_dice = np.empty((0, columns_dice))
         mean_hd = np.empty((0, columns_hd))
-        mean_ref_perc, mean_reduc_perc = [[], []], [[], []]
+        # We need 2 lists for each measure, one for ES and for ED
+        mean_ref_perc, mean_reduc_perc, mean_prec, mean_recall = [[], []], [[], []],  [[], []],  \
+                                                                 [[], []]
         # temporary for referral stuff
         if self.referral:
             mean_ref_dice = np.empty((0, columns_dice))
             mean_hd_ref = np.empty((0, columns_hd))
             # summarize the referral percentages, error reduction percentages for both phases ES/ED
             # we store mean, stddev and median for both measures (percentages)
-            self.referral_stats_results = np.zeros((2, 2, 3))
+            self.referral_stats_results = np.zeros((2, 4, 3))
 
         for img_idx in np.arange(N):
             # test_accuracy and test_hd are a vectors of 8 values, 0-3: ES, 4:7: ED
@@ -356,24 +358,52 @@ class TestResults(object):
                 mean_ref_dice = np.vstack((mean_ref_dice, ref_dice_img))
                 ref_hd_img = self.referral_hd[img_idx]
                 mean_hd_ref = np.vstack((mean_hd_ref, ref_hd_img))
-                # append the referral percentages for ES and ED for class 1 and 3 (2nd index). Do the same for the
-                # reduction percentages (last index 1 = reduction%)
-                mean_ref_perc[0].extend(list(ref_stats[0, 1, 0])), mean_ref_perc[0].extend(list(ref_stats[0, 3, 0]))
-                mean_ref_perc[1].extend(list(ref_stats[1, 1, 0])), mean_ref_perc[1].extend(list(ref_stats[1, 3, 0]))
-                mean_reduc_perc[0].extend(list(ref_stats[0, 1, 1])), mean_reduc_perc[0].extend(list(ref_stats[0, 3, 1]))
-                mean_reduc_perc[1].extend(list(ref_stats[1, 1, 1])), mean_reduc_perc[1].extend(list(ref_stats[1, 3, 1]))
-        # ES referral statistics
-        self.referral_stats_results[0, 0] = np.array([np.std(mean_ref_perc[0]), np.median(mean_ref_perc[0]),
-                                                      np.mean(mean_ref_perc[0])])
-        # ED referral statistics
-        self.referral_stats_results[1, 0] = np.array([np.std(mean_ref_perc[1]), np.median(mean_ref_perc[1]),
-                                                      np.mean(mean_ref_perc[1])])
-        # ES reduction percentages
-        self.referral_stats_results[0, 1] = np.array([np.std(mean_reduc_perc[0]), np.median(mean_reduc_perc[0]),
-                                                      np.mean(mean_reduc_perc[0])])
-        # ED reduction percentages
-        self.referral_stats_results[1, 1] = np.array([np.std(mean_reduc_perc[1]), np.median(mean_reduc_perc[1]),
-                                                      np.mean(mean_reduc_perc[1])])
+                # append the referral percentages for ES and ED for class 1, 2 and 3 (2nd index).
+                # Please REMEMBER that the referral_stats has only 3 dimensions for the classes (we omit BG),
+                # so 0=RV, 1=MYO, 2=LV
+                # Do the same for the reduction percentages (last index 1 = reduction%), precision=index7,
+                # recall=index=8
+                mean_ref_perc[0].extend(list(ref_stats[0, 0, 0])), mean_ref_perc[0].extend(list(ref_stats[0, 1, 0]))
+                mean_ref_perc[0].extend(list(ref_stats[0, 2, 0]))
+                mean_ref_perc[1].extend(list(ref_stats[1, 0, 0])), mean_ref_perc[1].extend(list(ref_stats[1, 1, 0]))
+                mean_ref_perc[1].extend(list(ref_stats[1, 2, 0]))
+                mean_reduc_perc[0].extend(list(ref_stats[0, 0, 1])), mean_reduc_perc[0].extend(list(ref_stats[0, 1, 1]))
+                mean_reduc_perc[0].extend(list(ref_stats[0, 2, 1]))
+                mean_reduc_perc[1].extend(list(ref_stats[1, 0, 1])), mean_reduc_perc[1].extend(list(ref_stats[1, 1, 1]))
+                mean_reduc_perc[1].extend(list(ref_stats[1, 2, 1]))
+                mean_prec[0].extend(list(ref_stats[0, 0, 7])), mean_prec[0].extend(list(ref_stats[0, 1, 7]))
+                mean_prec[0].extend(list(ref_stats[0, 2, 7]))
+                mean_prec[1].extend(list(ref_stats[1, 0, 7])), mean_prec[1].extend(list(ref_stats[1, 1, 7]))
+                mean_prec[1].extend(list(ref_stats[1, 2, 7]))
+                mean_recall[0].extend(list(ref_stats[0, 0, 8])), mean_recall[0].extend(list(ref_stats[0, 1, 8]))
+                mean_recall[0].extend(list(ref_stats[0, 2, 8]))
+                mean_recall[1].extend(list(ref_stats[1, 0, 8])), mean_recall[1].extend(list(ref_stats[1, 1, 8]))
+                mean_recall[1].extend(list(ref_stats[1, 2, 8]))
+        if self.referral:
+            # ES referral statistics
+            self.referral_stats_results[0, 0] = np.array([np.mean(mean_ref_perc[0]), np.std(mean_ref_perc[0]),
+                                                          np.median(mean_ref_perc[0])])
+            # ED referral statistics
+            self.referral_stats_results[1, 0] = np.array([np.mean(mean_ref_perc[1]), np.std(mean_ref_perc[1]),
+                                                          np.median(mean_ref_perc[1])])
+            # ES reduction percentages
+            self.referral_stats_results[0, 1] = np.array([np.mean(mean_reduc_perc[0]), np.std(mean_reduc_perc[0]),
+                                                          np.median(mean_reduc_perc[0])])
+            # ED reduction percentages
+            self.referral_stats_results[1, 1] = np.array([np.mean(mean_reduc_perc[1]), np.std(mean_reduc_perc[1]),
+                                                          np.median(mean_reduc_perc[1])])
+            # ES referral precision
+            self.referral_stats_results[0, 2] = np.array([np.mean(mean_prec[0]), np.std(mean_prec[0]),
+                                                          np.median(mean_prec[0])])
+            # ED referral precision
+            self.referral_stats_results[1, 2] = np.array([np.mean(mean_prec[1]), np.std(mean_prec[1]),
+                                                          np.median(mean_prec[1])])
+            # ES referral recall
+            self.referral_stats_results[0, 3] = np.array([np.mean(mean_recall[0]), np.std(mean_recall[0]),
+                                                          np.median(mean_recall[0])])
+            # ED referral recall
+            self.referral_stats_results[1, 3] = np.array([np.mean(mean_recall[1]), np.std(mean_recall[1]),
+                                                          np.median(mean_recall[1])])
 
         # so we stack the image results and should end up with a matrix [#images, 8] for dice and hd
 
@@ -868,7 +898,7 @@ class TestResults(object):
 
     def visualize_uncertainty_histograms(self, image_num=0, width=16, height=10, info_type="uncertainty",
                                          std_threshold=0., do_show=False, model_name="", use_bald=True,
-                                         do_save=False, fig_name=None, slice_range=None, errors_only=False):
+                                         do_save=False, slice_range=None, errors_only=False):
         """
 
         :param image_num:
@@ -918,7 +948,7 @@ class TestResults(object):
         num_of_classes = label.shape[0]
         half_classes = num_of_classes / 2
         mc_samples = self.mc_pred_probs[image_num].shape[0]
-        max_stdddev = 0.5  # the maximum stddev we're dealing with (used in colorbar) because probs are between [0,1]
+        # max_stdddev = np.max(uncertainty_map)
 
         image_name = self.image_names[image_num]
         if slice_range is None:
@@ -1018,10 +1048,11 @@ class TestResults(object):
                         mean_slice_stddev = np.mean(slice_stddev[:half_classes], axis=0)
                     else:
                         mean_slice_stddev = np.mean(slice_stddev[half_classes:], axis=0)
+                    max_mean_stddev = np.max(mean_slice_stddev)
                     # print("Phase {} row {} - MEAN STDDEV heatmap".format(phase, row))
                     ax4a = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
                     ax4aplot = ax4a.imshow(mean_slice_stddev, cmap=plt.get_cmap('jet'),
-                                           vmin=0., vmax=max_stdddev)
+                                           vmin=0., vmax=max_mean_stddev)
                     ax4a.set_aspect('auto')
                     fig.colorbar(ax4aplot, ax=ax4a, fraction=0.046, pad=0.04)
                     ax4a.set_title("Slice {} {}: MEAN stddev-values".format(img_slice + 1, str_phase),
@@ -1085,17 +1116,22 @@ class TestResults(object):
                     row_offset = 1
                     col_offset = 0
                     counter = 0
+                    max_stdddev_over_classes = np.max(slice_stddev)
                     for cls in np.arange(half_classes):
                         if phase == 0:
-                            p_err_prob = np.array(img_slice_probs["es_err_p"][cls])
-                            p_corr_prob = np.array(img_slice_probs["es_cor_p"][cls])
-                            p_err_std = np.array(img_slice_probs["es_err_std"][cls])
-                            p_corr_std = np.array(img_slice_probs["es_cor_std"][cls])
+                            if info_type == "uncertainty":
+                                p_err_std = np.array(img_slice_probs["es_err_std"][cls])
+                                p_corr_std = np.array(img_slice_probs["es_cor_std"][cls])
+                            else:
+                                p_err_std = np.array(img_slice_probs["es_err_p"][cls])
+                                p_corr_std = np.array(img_slice_probs["es_cor_p"][cls])
                         else:
-                            p_err_prob = np.array(img_slice_probs["ed_err_p"][cls])
-                            p_corr_prob = np.array(img_slice_probs["ed_cor_p"][cls])
-                            p_err_std = np.array(img_slice_probs["ed_err_std"][cls])
-                            p_corr_std = np.array(img_slice_probs["ed_cor_std"][cls])
+                            if info_type == "uncertainty":
+                                p_err_std = np.array(img_slice_probs["ed_err_std"][cls])
+                                p_corr_std = np.array(img_slice_probs["ed_cor_std"][cls])
+                            else:
+                                p_err_std = np.array(img_slice_probs["ed_err_p"][cls])
+                                p_corr_std = np.array(img_slice_probs["ed_cor_p"][cls])
 
                         # in the next subplot row we visualize the uncertainties per class
                         ax3 = plt.subplot2grid((rows, columns), (row, counter), colspan=1)
@@ -1103,7 +1139,8 @@ class TestResults(object):
                         cmap = plt.get_cmap('jet')
                         std_rgba_img = cmap(std_map_cls)
                         std_rgb_img = np.delete(std_rgba_img, 3, 2)
-                        ax3plot = ax3.imshow(std_rgb_img, vmin=0., vmax=max_stdddev)
+                        ax3plot = ax3.imshow(std_rgb_img, vmin=0., vmax=max_stdddev_over_classes,
+                                             cmap=plt.get_cmap('jet'))
                         ax3.set_aspect('auto')
                         if cls == half_classes - 1:
                             fig.colorbar(ax3plot, ax=ax3, fraction=0.046, pad=0.04)
@@ -1117,15 +1154,20 @@ class TestResults(object):
                         std_max = max(p_err_std.max() if p_err_std.shape[0] > 0 else 0,
                                       p_corr_std.max() if p_corr_std.shape[0] > 0 else 0.)
 
-                        xs = np.linspace(0, std_max, 20)
+                        if info_type == "uncertainty":
+                            xs = np.linspace(0, std_max, 20)
+                        else:
+                            xs = np.linspace(0, std_max, 10)
                         if p_err_std is not None:
                             ax2b = ax2.twinx()
+                            # p_err_std = p_err_std[np.where((p_err_std>0.1) & (p_err_std< 0.9) )]
                             ax2b.hist(p_err_std[p_err_std >= std_threshold], bins=xs,
                                      label=r"$\sigma_{{pred(fp+fn)}}({})$".format(cls_errors[cls])
                                      ,color="b", alpha=0.2)
                             ax2b.legend(loc=2, prop={'size': 9})
 
                         if p_corr_std is not None:
+                            # p_corr_std = p_corr_std[np.where((p_corr_std > 0.1) & (p_corr_std < 0.9))]
                             ax2.hist(p_corr_std[p_corr_std >= std_threshold], bins=xs,
                                      label=r"$\sigma_{{pred(tp)}}({})$".format(p_corr_std.shape[0]),
                                      color="g", alpha=0.4)
@@ -1200,7 +1242,7 @@ class TestResults(object):
                 outfile += str_epoch
 
             if self.referral_threshold > 0.:
-                u_thre = "_utr{.:2f}".format(self.referral_threshold).replace(".", "_")
+                u_thre = "_utr{:.2f}".format(self.referral_threshold).replace(".", "_")
                 outfile += u_thre
 
             if epoch_id is None:
@@ -1261,7 +1303,7 @@ class TestResults(object):
             if self.referral:
                 mean_dice = self.dice_referral_results[0]
                 stddev = self.dice_referral_results[1]
-                print("\t\t\t\t ES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})\t"
+                print("After referral:\t\t\t ES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})\t"
                       "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(mean_dice[1], stddev[1], mean_dice[2],
                                                                                   stddev[2], mean_dice[3], stddev[3],
                                                                                   mean_dice[5], stddev[5], mean_dice[6],
@@ -1286,18 +1328,28 @@ class TestResults(object):
         if self.referral:
             ref_perc_es = self.referral_stats_results[0, 0]
             ref_reduc_es = self.referral_stats_results[0, 1]
-            print("Referral ES %: {:.2f} (std={:.2f}, median={:.2f})\t"
-                  "Reduction %: {:.2f} (std={:.2f}, median={:.2f})".format(ref_perc_es[0], ref_perc_es[1],
+            ref_pc_es = self.referral_stats_results[0, 2]
+            ref_rc_es = self.referral_stats_results[0, 3]
+            # measure indices 0=mean; 1=std; 2=median
+            print("Ref ES %: {:.2f} (std={:.2f},med={:.2f})\t"
+                  "Red%: {:.2f} (std={:.2f},med={:.2f})\t"
+                  "PR/RC {:.2f} ({:.2f})/{:.2f} ({:.2f})".format(ref_perc_es[0], ref_perc_es[1],
                                                                            ref_perc_es[2], ref_reduc_es[0],
                                                                            ref_reduc_es[1],
-                                                                           ref_reduc_es[2]))
+                                                                           ref_reduc_es[2],
+                                               ref_pc_es[0], ref_pc_es[1], ref_rc_es[0], ref_rc_es[1]))
             ref_perc_ed = self.referral_stats_results[1, 0]
             ref_reduc_ed = self.referral_stats_results[1, 1]
-            print("Referral ED %: {:.2f} (std={:.2f}, median={:.2f})\t"
-                  "Reduction %: {:.2f} (std={:.2f}, median={:.2f})".format(ref_perc_ed[0], ref_perc_ed[1],
+            ref_pc_ed = self.referral_stats_results[1, 2]
+            ref_rc_ed = self.referral_stats_results[1, 3]
+            print("Ref ED %: {:.2f} (std={:.2f},med={:.2f})\t"
+                  "Red%: {:.2f} (std={:.2f},med={:.2f})\t"
+                  "PR/RC {:.2f} ({:.2f})/{:.2f} ({:.2f})".format(ref_perc_ed[0], ref_perc_ed[1],
                                                                            ref_perc_ed[2], ref_reduc_ed[0],
                                                                            ref_reduc_ed[1],
-                                                                           ref_reduc_ed[2]))
+                                                                           ref_reduc_ed[2],
+                                                                 ref_pc_ed[0], ref_pc_ed[1], ref_rc_ed[0],
+                                                                 ref_rc_ed[1]))
 
     def _create_figure_dir(self, image_num):
         image_name = self.image_names[image_num]

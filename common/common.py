@@ -98,8 +98,18 @@ def create_logger(exper=None, file_handler=False, output_dir=None):
 
 def create_exper_label(exper):
 
-    # retrain = "_retrain" if exper.args.retrain else ""
-    exper_label = exper.run_args.model + exper.run_args.version + "_" + str(exper.run_args.epochs) + "E"
+    # exper_label = exper.run_args.model + exper.run_args.version + "_" + str(exper.run_args.epochs) + "E"
+    if exper.run_args.model == "dcnn":
+        exper_label = exper.run_args.model + "_f" + str(exper.run_args.fold_ids[0]) + "_" + \
+                      str(exper.run_args.epochs / 1000) + "KE"
+    elif exper.run_args.model == "dcnn_mc":
+        prob = "p" + str(exper.run_args.drop_prob).replace(".", "")
+        if exper.run_args.loss_function == "brier":
+            prob += "_" + exper.run_args.loss_function
+        exper_label = exper.run_args.model + "_f" + str(exper.run_args.fold_ids[0]) + \
+                       prob + "_" + str(exper.run_args.epochs / 1000) + "KE"
+    else:
+        raise ValueError("ERROR - model name {} is not supported.".format(exper.run_args.model))
 
     return exper_label
 

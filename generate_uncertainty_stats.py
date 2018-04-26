@@ -63,6 +63,11 @@ def main():
     exper_handler.set_root_dir(ROOT_DIR)
     _print_flags(args)
 
+    exper_args = exper.run_args
+    info_str = "{} p={:.2f} fold={} loss={}".format(exper_args.model, exper_args.drop_prob, exper_args.fold_ids,
+                                                    exper_args.loss_function)
+    print("INFO - Experimental details extracted:: " + info_str)
+
     if args.run_mode == "outliers":
         # create dataset
         dataset = ACDC2017DataSet(exper_handler.exper.config, search_mask=config.dflt_image_name + ".mhd",
@@ -76,7 +81,7 @@ def main():
                                                  do_save_u_stats=True, use_high_threshold=True,
                                                  do_save_outlier_stats=True, use_existing_umaps=args.reuse_maps)
     else:
-        exper_handler.create_u_maps(model=None, checkpoint=args.checkpoint, mc_samples=10,
+        exper_handler.create_u_maps(model=None, checkpoint=args.checkpoint, mc_samples=args.mc_samples,
                                     u_threshold=args.u_threshold,
                                     do_save_u_stats=True,
                                     save_actual_maps=True, test_set=None)
