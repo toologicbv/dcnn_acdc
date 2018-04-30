@@ -26,6 +26,8 @@ def do_parse_args():
 
     parser.add_argument('--u_threshold', type=float, default=0.1, help="Threshold to filter initial u-values.")
     parser.add_argument('--verbose', action='store_true', default=False, help='show debug messages')
+    parser.add_argument('--generate_plots', action='store_true', default=False, help='generate plots for analysis')
+
     args = parser.parse_args()
 
     return args
@@ -79,13 +81,17 @@ def main():
                                                  checkpoint=args.checkpoint, mc_samples=args.mc_samples,
                                                  u_threshold=args.u_threshold, use_train_set=False,
                                                  do_save_u_stats=True, use_high_threshold=True,
-                                                 do_save_outlier_stats=True, use_existing_umaps=args.reuse_maps)
+                                                 do_save_outlier_stats=True, use_existing_umaps=args.reuse_maps,
+                                                 do_analyze_slices=args.generate_plots)
     else:
         exper_handler.create_u_maps(model=None, checkpoint=args.checkpoint, mc_samples=args.mc_samples,
                                     u_threshold=args.u_threshold,
                                     do_save_u_stats=True,
-                                    save_actual_maps=True, test_set=None)
+                                    save_actual_maps=True, test_set=None, do_analyze_slices=args.generate_plots)
 
 
 if __name__ == '__main__':
     main()
+
+
+python generate_uncertainty_stats.py --cuda --exper_id=20180426_14_47_23_dcnn_mc_f2p005_brier_150KE_lr2e02 --checkpoint=150000 --mc_samples=10  --u_threshold=0.1 --save_actual_maps --run_mode="u_maps_only" --generate_plots

@@ -19,6 +19,7 @@ from utils.generate_uncertainty_maps import ImageOutliers
 import models.dilated_cnn
 from utils.test_results import TestResults
 from common.acquisition_functions import bald_function
+from plotting.uncertainty_plots import analyze_slices
 
 
 class ExperimentHandler(object):
@@ -473,14 +474,14 @@ class ExperimentHandler(object):
                                       referral_stats=test_set.referral_stats)
 
     def create_u_maps(self, model=None, checkpoint=None, mc_samples=10, u_threshold=0.1, do_save_u_stats=False,
-                      save_actual_maps=False, test_set=None):
+                      save_actual_maps=False, test_set=None, do_analyze_slices=False):
 
         if model is None and checkpoint is None:
             raise ValueError("When model parameter is None, you need to specify the checkpoint model "
                              "that needs to be loaded.")
 
         if save_actual_maps and not do_save_u_stats:
-            print("WARNING - Setting do_save_u_stats=True because you specifiedy that you want to "
+            print("WARNING - Setting do_save_u_stats=True because you specified that you want to "
                   "save the actual uncertainty maps!")
             do_save_u_stats = True
 
@@ -489,6 +490,15 @@ class ExperimentHandler(object):
                                                   checkpoint=checkpoint, store_test_results=True)
         maps_generator(do_save=do_save_u_stats, clean_up=True, save_actual_maps=save_actual_maps)
 
+        if do_analyze_slices:
+            if self.test_results is None:
+                # if test_results object of experiment handler is None (because we generated u-maps) we point to the
+                # test_result object of the map generator. If we re-use maps we load the object, see above
+                self.test_results = maps_generator.test_results
+
+            analyze_slices(self, image_range=None, do_save=True, do_show=False, u_type="stddev",
+                           use_saved_umaps=False)
+
     def get_u_maps(self):
         # returns a dictionary key patientID with the uncertainty maps for each patient/image of shape
         # [2, 4classes, width, height, #slices]
@@ -496,7 +506,8 @@ class ExperimentHandler(object):
 
     def create_outlier_dataset(self, dataset, model=None, checkpoint=None, mc_samples=10, u_threshold=0.1,
                                do_save_u_stats=False, use_high_threshold=False, use_train_set=True,
-                               do_save_outlier_stats=False, test_set=None, use_existing_umaps=False):
+                               do_save_outlier_stats=False, test_set=None, use_existing_umaps=False,
+                               do_analyze_slices=False):
         """
 
         :param model: if not specified
@@ -516,6 +527,8 @@ class ExperimentHandler(object):
         :param test_set: the test_set we're operating on i.e. we're determining the outliers. If not specified
         UncertaintyMapsGenerator will load the test_set, assuming, we want to load the validation set of the FOLD
         we trained on (info comes from exper_handler.exper.run_args.fold_ids
+        :param do_analyze_slices: generate plots for each image, which can be used to visually inspect which of
+        the slices have "bizar" uncertainties.
         :return:
 
         Note: we don't specify the test_set. But, UncertaintyMapsGenerator will by default, load all training
@@ -534,15 +547,28 @@ class ExperimentHandler(object):
         else:
             # load existing u_maps from umaps directory of current experiment
             image_uncertainties = ImageUncertainties.load_uncertainty_maps(self)
+            fold_id = self.exper.run_args.fold_ids[0]
+            test_res_file = "test_results_25imgs_mc" + str(mc_samples) + "_fold" + str(fold_id) + "_ep150000.dll"
+            input_dir = os.path.join(self.exper.config.root_dir,
+                                     os.path.join(self.exper.output_dir,
+                                                  self.exper.config.stats_path))
+            search_path = os.path.join(input_dir, test_res_file)
+            filenames = glob.glob(search_path)
+            if len(filenames) != 1:
+                raise ValueError("ERROR - found no OR too many test result files with"
+                                 "search mask {}".format(search_path))
+            self.test_results = TestResults.load_results(filenames[0])
         # detect outliers and return object OutOfDistributionSlices
         img_outliers = image_uncertainties.get_outlier_obj(use_high_threshold)
         img_outliers.create_dataset(dataset, train=use_train_set)
 
         dta_set_num_of_slices = dataset.get_num_of_slices(train=use_train_set)
         referral_perc = len(img_outliers.images) / float(dta_set_num_of_slices) * 100
-        self.info("INFO - Successfully created outlier-dataset. Number of outlier slices {}. "
+        self.info("INFO - Successfully created outlier-dataset (use_train_set={}/use_high_threshold={}). "
+                  "Number of outlier slices {}. "
                   "Dataset contains {} slices in total "
-                  "(referral {:.2f})%.".format(len(img_outliers.outlier_slices), len(img_outliers.images),
+                  "(referral {:.2f})%.".format(use_train_set, use_high_threshold, len(img_outliers.outlier_slices),
+                                               len(img_outliers.images),
                                                referral_perc))
         if do_save_outlier_stats:
             save_output_dir = os.path.join(self.exper.config.root_dir,
@@ -552,6 +578,23 @@ class ExperimentHandler(object):
             out_filename = os.path.join(save_output_dir, "image_outliers_fold{}_".format(self.exper.run_args.fold_ids[0])
                                         + str(checkpoint) + ".dll")
             img_outliers.save(out_filename)
+
+        if do_analyze_slices:
+            if self.test_results is None:
+                # if test_results object of experiment handler is None (because we generated u-maps) we point to the
+                # test_result object of the map generator. If we re-use maps we load the object, see above
+                self.test_results = maps_generator.test_results
+
+            if len(self.test_results.images) == 0:
+                if use_train_set:
+                    self.test_results.images = dataset.train_images
+                    self.test_results.labels = dataset.train_labels
+                else:
+                    self.test_results.images = dataset.val_images
+                    self.test_results.labels = dataset.val_labels
+
+            analyze_slices(self, image_range=None, do_save=True, do_show=False, u_type="stddev",
+                           use_saved_umaps=False)
 
         try:
             del maps_generator

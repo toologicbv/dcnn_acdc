@@ -659,7 +659,8 @@ class TestResults(object):
             counter += 1
         # fig.tight_layout()
         if do_save:
-            fig_out_dir = self._create_figure_dir(image_num)
+            image_name = self.image_names[image_num]
+            fig_out_dir = self._create_figure_dir(image_name)
             if fig_name is None:
                 fig_name = info_type + "_densities_mc" + str(mc_samples) \
                            + "_" + str(use_class_stats)
@@ -896,9 +897,10 @@ class TestResults(object):
             plt.savefig(fig_name, bbox_inches='tight')
             print("INFO - Successfully saved fig %s" % fig_name)
 
-    def visualize_uncertainty_histograms(self, image_num=0, width=16, height=10, info_type="uncertainty",
+    def visualize_uncertainty_histograms(self, image_num=None, width=16, height=10, info_type="uncertainty",
                                          std_threshold=0., do_show=False, model_name="", use_bald=True,
-                                         do_save=False, slice_range=None, errors_only=False):
+                                         do_save=False, slice_range=None, errors_only=False,
+                                         plot_detailed_hists=False, image_data=None):
         """
 
         :param image_num:
@@ -913,6 +915,9 @@ class TestResults(object):
         :param fig_name:
         :param slice_range:
         :param errors_only:
+        :param plot_detailed_hists: if False then we plot only 5 rows: 1-2 images, 3-4 huge uncertainty maps,
+                                                                       5: uncertainty maps per class
+                                                                       NO HISTOGRAMS!
         :return:
         """
 
@@ -924,33 +929,42 @@ class TestResults(object):
         plt.rcParams['font.serif'] = 'Ubuntu'
         plt.rcParams['font.monospace'] = 'Ubuntu Mono'
         column_lbls = ["bg", "RV", "MYO", "LV"]
-        # image_num = self._translate_image_range(image_num)
-        try:
-            image_num = self.image_ids.index(image_num)
-        except ValueError:
-            print("WARNING - Can't find image with index {} in "
-                  "test_results.image_ids. Discarding!".format(image_num))
-        image = self.images[image_num]
-        if errors_only:
+        if image_num is not None:
+            try:
+                image_num = self.image_ids.index(image_num)
+            except ValueError:
+                print("WARNING - Can't find image with index {} in "
+                      "test_results.image_ids. Discarding!".format(image_num))
+            image = self.images[image_num]
+            pred_labels = self.pred_labels[image_num]
+            label = self.labels[image_num]
+            uncertainty_map = self.stddev_maps[image_num]
+            bald_map = self.bald_maps[image_num]
+            image_name = self.image_names[image_num]
+            mc_samples = self.mc_pred_probs[image_num].shape[0]
+        else:
+            image = image_data[0]
+            label = image_data[1]
+            pred_labels = image_data[2]
+            uncertainty_map = image_data[3]
+            bald_map = image_data[4]
+            image_name = image_data[5]
+            mc_samples = image_data[6]
+
+        if errors_only or not plot_detailed_hists:
             image_probs = None
         else:
             image_probs = self.image_probs_categorized[image_num]
 
-        pred_labels = self.pred_labels[image_num]
-        label = self.labels[image_num]
-        uncertainty_map = self.stddev_maps[image_num]
         if use_bald:
-            bald_map = self.bald_maps[image_num]  # shape [2, width, height, #slices] 0=ES balds, 1=ED balds so per phase
             bald_min, bald_max = np.min(bald_map), np.max(bald_map)
         else:
             bald_map = None
+            bald_min, bald_max = None, None
 
         num_of_classes = label.shape[0]
         half_classes = num_of_classes / 2
-        mc_samples = self.mc_pred_probs[image_num].shape[0]
-        # max_stdddev = np.max(uncertainty_map)
 
-        image_name = self.image_names[image_num]
         if slice_range is None:
             slice_range = np.arange(0, image.shape[3])
         num_of_slices = len(slice_range)
@@ -958,15 +972,19 @@ class TestResults(object):
         columns = half_classes
         if errors_only:
             rows = 4  # multiply with 4 because two rows ES, two rows ED for each slice
+        elif not plot_detailed_hists:
+            rows = 10
         elif not use_bald:
             rows = 8  # multiply with 8 because four rows ES, four rows ED for each slice
         else:
-            rows = 14  # multiply with 2 because five rows ES, five rows ED for each slice
+            rows = 14
         print("Rows/columns {}/{}".format(rows, columns))
 
         _ = rows * num_of_slices * columns
         if errors_only:
             height = 20
+        if not plot_detailed_hists:
+            height = 50
 
         for img_slice in slice_range:
 
@@ -981,7 +999,7 @@ class TestResults(object):
             row = 0
             # get the slice and then split ED and ES slices
             image_slice = image[:, :, :, img_slice]
-            if errors_only:
+            if errors_only or not plot_detailed_hists:
                 img_slice_probs = None
             else:
                 img_slice_probs = image_probs[img_slice]
@@ -1027,9 +1045,10 @@ class TestResults(object):
                     row += 2
                     # show image for BALD measure (1) BALD per pixel, on the left side
                     slice_bald = bald_map[phase, :, :, img_slice]
+                    bald_max = np.max(slice_bald)
                     # print("Phase {} row {} - BALD heatmap".format(phase, row))
                     ax4 = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
-                    ax4plot = ax4.imshow(slice_bald, cmap=plt.get_cmap('jet'), vmin=bald_min, vmax=bald_max)
+                    ax4plot = ax4.imshow(slice_bald, cmap=plt.get_cmap('jet'), vmin=0., vmax=bald_max)
                     # divider = make_axes_locatable(ax)
                     # cax = divider.append_axes("right", size="5%", pad=0.05)
                     # fig.colorbar(ax4plot, cax=cax)
@@ -1048,6 +1067,7 @@ class TestResults(object):
                         mean_slice_stddev = np.mean(slice_stddev[:half_classes], axis=0)
                     else:
                         mean_slice_stddev = np.mean(slice_stddev[half_classes:], axis=0)
+
                     max_mean_stddev = np.max(mean_slice_stddev)
                     # print("Phase {} row {} - MEAN STDDEV heatmap".format(phase, row))
                     ax4a = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
@@ -1059,8 +1079,9 @@ class TestResults(object):
                                    **config.title_font_medium)
                     plt.axis('off')
 
-                if use_bald:
-                    # NOTE: WE NEVER COME HERE IF errors_only=True
+                if use_bald and plot_detailed_hists:
+                    # last 2 rows: left-> histogram of bald uncertainties or softmax probabilities
+                    #              right-> 4 histograms for each class, showing stddev uncertainties or softmax-probs
                     # create histogram
                     if phase == 0:
                         bald_corr = img_slice_probs["es_cor_bald"]
@@ -1110,36 +1131,44 @@ class TestResults(object):
                                   , ** config.title_font_medium)
 
                 # In case we're only showing the error segmentation map we skip the next part (histgrams and
-                # stddev uncertainty maps per class
+                # stddev uncertainty maps per class. If we only skip the histograms, we visualize the uncertainty
+                # maps for each class (at least for the stddev maps.
                 if not errors_only:
                     row += 2
                     row_offset = 1
                     col_offset = 0
                     counter = 0
-                    max_stdddev_over_classes = np.max(slice_stddev)
+                    if phase == 0:
+                        max_stdddev_over_classes = np.max(slice_stddev[:half_classes])
+
+                    else:
+                        max_stdddev_over_classes = np.max(slice_stddev[half_classes:])
+
                     for cls in np.arange(half_classes):
-                        if phase == 0:
-                            if info_type == "uncertainty":
-                                p_err_std = np.array(img_slice_probs["es_err_std"][cls])
-                                p_corr_std = np.array(img_slice_probs["es_cor_std"][cls])
+                        if plot_detailed_hists:
+                            if phase == 0:
+                                if info_type == "uncertainty":
+                                    p_err_std = np.array(img_slice_probs["es_err_std"][cls])
+                                    p_corr_std = np.array(img_slice_probs["es_cor_std"][cls])
+                                else:
+                                    p_err_std = np.array(img_slice_probs["es_err_p"][cls])
+                                    p_corr_std = np.array(img_slice_probs["es_cor_p"][cls])
                             else:
-                                p_err_std = np.array(img_slice_probs["es_err_p"][cls])
-                                p_corr_std = np.array(img_slice_probs["es_cor_p"][cls])
-                        else:
-                            if info_type == "uncertainty":
-                                p_err_std = np.array(img_slice_probs["ed_err_std"][cls])
-                                p_corr_std = np.array(img_slice_probs["ed_cor_std"][cls])
-                            else:
-                                p_err_std = np.array(img_slice_probs["ed_err_p"][cls])
-                                p_corr_std = np.array(img_slice_probs["ed_cor_p"][cls])
+                                if info_type == "uncertainty":
+                                    p_err_std = np.array(img_slice_probs["ed_err_std"][cls])
+                                    p_corr_std = np.array(img_slice_probs["ed_cor_std"][cls])
+                                else:
+                                    p_err_std = np.array(img_slice_probs["ed_err_p"][cls])
+                                    p_corr_std = np.array(img_slice_probs["ed_cor_p"][cls])
 
                         # in the next subplot row we visualize the uncertainties per class
+                        # print("phase {} row {} counter {}".format(phase, row, counter))
                         ax3 = plt.subplot2grid((rows, columns), (row, counter), colspan=1)
                         std_map_cls = slice_stddev[cls + cls_offset]
-                        cmap = plt.get_cmap('jet')
-                        std_rgba_img = cmap(std_map_cls)
-                        std_rgb_img = np.delete(std_rgba_img, 3, 2)
-                        ax3plot = ax3.imshow(std_rgb_img, vmin=0., vmax=max_stdddev_over_classes,
+                        # cmap = plt.get_cmap('jet')
+                        # std_rgba_img = cmap(std_map_cls)
+                        # std_rgb_img = np.delete(std_rgba_img, 3, 2)
+                        ax3plot = ax3.imshow(std_map_cls, vmin=0., vmax=max_stdddev_over_classes,
                                              cmap=plt.get_cmap('jet'))
                         ax3.set_aspect('auto')
                         if cls == half_classes - 1:
@@ -1149,51 +1178,54 @@ class TestResults(object):
                         plt.axis("off")
                         # finally in the next row we plot the uncertainty densities per class
                         # print("cls {} col_offset {}".format(cls, col_offset))
-                        ax2 = plt.subplot2grid((rows, columns), (row + row_offset, 2 + col_offset), colspan=1)
-                        col_offset += 1
-                        std_max = max(p_err_std.max() if p_err_std.shape[0] > 0 else 0,
-                                      p_corr_std.max() if p_corr_std.shape[0] > 0 else 0.)
+                        if plot_detailed_hists:
+                            ax2 = plt.subplot2grid((rows, columns), (row + row_offset, 2 + col_offset), colspan=1)
+                            col_offset += 1
+                            std_max = max(p_err_std.max() if p_err_std.shape[0] > 0 else 0,
+                                          p_corr_std.max() if p_corr_std.shape[0] > 0 else 0.)
 
-                        if info_type == "uncertainty":
-                            xs = np.linspace(0, std_max, 20)
-                        else:
-                            xs = np.linspace(0, std_max, 10)
-                        if p_err_std is not None:
-                            ax2b = ax2.twinx()
-                            # p_err_std = p_err_std[np.where((p_err_std>0.1) & (p_err_std< 0.9) )]
-                            ax2b.hist(p_err_std[p_err_std >= std_threshold], bins=xs,
-                                     label=r"$\sigma_{{pred(fp+fn)}}({})$".format(cls_errors[cls])
-                                     ,color="b", alpha=0.2)
-                            ax2b.legend(loc=2, prop={'size': 9})
+                            if info_type == "uncertainty":
+                                xs = np.linspace(0, std_max, 20)
+                            else:
+                                xs = np.linspace(0, std_max, 10)
+                            if p_err_std is not None:
+                                ax2b = ax2.twinx()
+                                # p_err_std = p_err_std[np.where((p_err_std>0.1) & (p_err_std< 0.9) )]
+                                ax2b.hist(p_err_std[p_err_std >= std_threshold], bins=xs,
+                                         label=r"$\sigma_{{pred(fp+fn)}}({})$".format(cls_errors[cls])
+                                         ,color="b", alpha=0.2)
+                                ax2b.legend(loc=2, prop={'size': 9})
 
-                        if p_corr_std is not None:
-                            # p_corr_std = p_corr_std[np.where((p_corr_std > 0.1) & (p_corr_std < 0.9))]
-                            ax2.hist(p_corr_std[p_corr_std >= std_threshold], bins=xs,
-                                     label=r"$\sigma_{{pred(tp)}}({})$".format(p_corr_std.shape[0]),
-                                     color="g", alpha=0.4)
+                            if p_corr_std is not None:
+                                # p_corr_std = p_corr_std[np.where((p_corr_std > 0.1) & (p_corr_std < 0.9))]
+                                ax2.hist(p_corr_std[p_corr_std >= std_threshold], bins=xs,
+                                         label=r"$\sigma_{{pred(tp)}}({})$".format(p_corr_std.shape[0]),
+                                         color="g", alpha=0.4)
 
-                        if info_type == "uncertainty":
-                            ax2.set_xlabel("model uncertainty", **config.axis_font)
-                        else:
-                            ax2.set_xlabel(r"softmax $p(c|x)$", **config.axis_font)
-                        ax2.set_title("{} slice-{}: {}".format(str_phase, img_slice+1, column_lbls[cls]),
-                                      **config.title_font_medium)
-                        ax2.legend(loc="best", prop={'size': 9})
-                        # ax2.set_ylabel("density", **config.axis_font)
-                        if cls == 1:
-                            row_offset += 1
-                            col_offset = 0
+                            if info_type == "uncertainty":
+                                ax2.set_xlabel("model uncertainty", **config.axis_font)
+                            else:
+                                ax2.set_xlabel(r"softmax $p(c|x)$", **config.axis_font)
+                            ax2.set_title("{} slice-{}: {}".format(str_phase, img_slice+1, column_lbls[cls]),
+                                          **config.title_font_medium)
+                            ax2.legend(loc="best", prop={'size': 9})
+                            # ax2.set_ylabel("density", **config.axis_font)
+                            if cls == 1:
+                                row_offset += 1
+                                col_offset = 0
                         counter += 1
                 if errors_only:
                     row += 2
+                elif not plot_detailed_hists:
+                    row += 1
                 else:
                     row += 3
             # fig.tight_layout()
-            if not errors_only:
+            if not errors_only and plot_detailed_hists:
                 fig.tight_layout(rect=[0, 0.03, 1, 0.97])
             if do_save:
 
-                fig_img_dir = self._create_figure_dir(image_num)
+                fig_img_dir = self._create_figure_dir(image_name)
                 fig_name = "analysis_seg_err_slice{}".format(img_slice+1) \
                             + "_mc" + str(mc_samples)
                 if std_threshold > 0.:
@@ -1289,7 +1321,8 @@ class TestResults(object):
             print("INFO - Successfully loaded TestResult object.")
         return test_results
 
-    def show_results(self):
+    def show_results(self, overall_dice=None, overall_hd=None):
+
         if self.dice_results is not None:
             mean_dice = self.dice_results[0]
             stddev = self.dice_results[1]
@@ -1351,8 +1384,8 @@ class TestResults(object):
                                                                  ref_pc_ed[0], ref_pc_ed[1], ref_rc_ed[0],
                                                                  ref_rc_ed[1]))
 
-    def _create_figure_dir(self, image_num):
-        image_name = self.image_names[image_num]
+    def _create_figure_dir(self, image_name):
+
         fig_path = os.path.join(self.fig_output_dir, image_name)
         if not os.path.isdir(fig_path):
             os.makedirs(fig_path)

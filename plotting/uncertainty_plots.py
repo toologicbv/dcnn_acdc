@@ -2,8 +2,10 @@ from config.config import config
 import matplotlib.pyplot as plt
 import numpy as np
 import os
+import glob
 
 from utils.generate_uncertainty_maps import ImageOutliers, ImageUncertainties
+from utils.test_results import TestResults
 
 
 def create_figure_dir(fig_path):
@@ -64,12 +66,29 @@ def compute_mean_std_per_class(test_results, u_type, image_range):
 
 
 def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=False, image_range=None,
-                   u_type="bald", use_high_threshold=False, translate_img_range=False):
+                   u_type="bald", use_high_threshold=False, use_saved_umaps=False):
 
     # NOTE: translate_img_range can be used in case we have a test_set of 25 images but we only
     # tested on 3 images. Then it can be useful to use imageIDs (in the range) from the test set
     # [12, 14] and translate them back into the imageIDs of the test_result object. We could also
     # use the patientIDs, may be this is something for the future
+    # I WAS HERE: load outliers from file
+    if use_saved_umaps:
+        img_uncert_obj = ImageUncertainties.load_uncertainty_maps(exper_handler=exper_handler, u_maps_only=False)
+        img_outliers = img_uncert_obj.get_outlier_obj(use_high_threshold=use_high_threshold)
+        fold_id = exper_handler.exper.run_args.fold_ids[0]
+        test_res_file = "test_results_25imgs_mc*_fold" + str(fold_id) + "_ep150000.dll"
+        input_dir = os.path.join(exper_handler.exper.config.root_dir,
+                                 os.path.join(exper_handler.exper.output_dir, exper_handler.exper.config.stats_path))
+        search_path = os.path.join(input_dir, test_res_file)
+        filenames = glob.glob(search_path)
+        if len(filenames) != 1:
+            raise ValueError("ERROR - found no OR too many test result files in {}".format(input_dir))
+        exper_handler.test_results = TestResults.load_results(filenames[0])
+    else:
+        # we assume the test_results object contains image uncertainties
+        img_uncert_obj = ImageUncertainties.create_from_testresult(exper_handler.test_results)
+        img_outliers = img_uncert_obj.get_outlier_obj(use_high_threshold=use_high_threshold)
 
     model_name = exper_handler.exper.model_name
     fig_root_dir = os.path.join(exper_handler.exper.config.root_dir, exper_handler.exper.output_dir)
@@ -139,9 +158,6 @@ def analyze_slices(exper_handler, width=18, height=12, do_save=False, do_show=Fa
     # double height of figure because we're plotting 4 instead of 2 rows
     if u_type == "stddev":
         height *= 2.5
-    # I WAS HERE: load outliers from file
-    img_uncert_obj = ImageUncertainties.create_from_testresult(exper_handler.test_results)
-    img_outliers = img_uncert_obj.get_outlier_obj(use_high_threshold=use_high_threshold)
 
     for idx, img_idx in enumerate(image_range):
         # IMPORTANT: we filled the list patiendID_range successively with the patientIDs belonging to the

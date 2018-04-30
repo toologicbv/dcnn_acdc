@@ -155,8 +155,9 @@ class OutOfDistributionSlices(object):
             return outliers_per_img, outlier_slices, outliers_per_img_es, outliers_per_img_ed, \
                    outliers_per_img_class_es, outliers_per_img_class_ed
 
-    def create_dataset(self, dataset, train=True):
-
+    def create_dataset(self, dataset, train=True, verbose=False):
+        if verbose:
+            print("INFO - ")
         for img_slice_id in self.outlier_slices.keys():
             # img_slice_id is a tuple (patientID, sliceID)
             patientID = img_slice_id[0]
@@ -539,7 +540,8 @@ class UncertaintyMapsGenerator(object):
         if clean_up:
             self.info("NOTE: first cleaning up previous generated uncertainty maps!")
             self.clean_up_files()
-        for image_num in tqdm(np.arange(self.num_of_images)):
+        # for image_num in tqdm(np.arange(self.num_of_images)):
+        for image_num in tqdm(np.arange(2)):
             self._generate(image_num=image_num)
             if do_save:
                 saved += 1
@@ -551,6 +553,7 @@ class UncertaintyMapsGenerator(object):
         if self.store_test_results:
             self.test_results.save_results(fold_ids=self.exper_handler.exper.run_args.fold_ids,
                                            epoch_id=self.exper_handler.exper.epoch_id)
+
         self.info("INFO - Total duration of generation process {:.2f} secs".format(duration))
 
     def _generate(self, image_num):
@@ -625,12 +628,34 @@ class UncertaintyMapsGenerator(object):
             self.test_results.add_results(self.test_set.b_image, self.test_set.b_labels, self.test_set.b_image_id,
                                           self.test_set.b_pred_labels, b_predictions, self.test_set.b_stddev_map,
                                           test_accuracy, test_hd, seg_errors=self.test_set.b_seg_errors,
-                                          store_all=False,
+                                          store_all=True,
                                           bald_maps=self.test_set.b_bald_map,
                                           uncertainty_stats=self.test_set.b_uncertainty_stats,
                                           test_accuracy_slices=self.test_set.b_acc_slices,
                                           test_hd_slices=self.test_set.b_hd_slices,
                                           image_name=self.test_set.b_image_name, repeated_run=False)
+        if True:
+            args = self.exper_handler.exper.run_args
+            self.test_results.generate_slice_statistics(image_num=image_num)
+            model_name = args.model + " (p={:.2f})".format(args.drop_prob) + " - {}".format(args.loss_function)
+            batch_image = self.test_set.b_image[:, config.pad_size:-config.pad_size, config.pad_size:-config.pad_size, :]
+            image_data = tuple((batch_image, self.test_set.b_labels, self.test_set.b_pred_labels,
+                                self.test_set.b_stddev_map, self.test_set.b_bald_map, self.test_set.b_image_name,
+                                self.mc_samples))
+            self.test_results.visualize_uncertainty_histograms(image_num=image_num, width=20, height=60,
+                                                               info_type="uncertainty",
+                                                               do_save=True, slice_range=None,
+                                                               std_threshold=0., errors_only=False,
+                                                               do_show=False, use_bald=True,
+                                                               model_name=model_name,
+                                                               plot_detailed_hists=True)
+            self.test_results.pred_labels[image_num] = None
+            self.test_results.mc_pred_probs[image_num] = None
+            self.test_results.image_probs_categorized[image_num] = None
+            # self.test_results.images[image_num] = None
+            # self.test_results.labels[image_num] = None
+            self.test_results.stddev_maps[image_num] = None
+            self.test_results.bald_maps[image_num] = None
 
     def save(self, save_actual_maps=False):
         # NOTE: we're currently not saving the actual MAPS, only the uncertainty values per pixels and the stats
