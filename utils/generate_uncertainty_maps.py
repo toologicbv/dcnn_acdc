@@ -627,10 +627,14 @@ class UncertaintyMapsGenerator(object):
         test_accuracy, test_hd = self.test_set.get_accuracy(compute_hd=True, do_filter=False)
         # store test results if necessary
         if self.store_test_results:
+            if self.generate_figures:
+                store_all = True
+            else:
+                store_all = False
             self.test_results.add_results(self.test_set.b_image, self.test_set.b_labels, self.test_set.b_image_id,
                                           self.test_set.b_pred_labels, b_predictions, self.test_set.b_stddev_map,
                                           test_accuracy, test_hd, seg_errors=self.test_set.b_seg_errors,
-                                          store_all=True,
+                                          store_all=store_all,
                                           bald_maps=self.test_set.b_bald_map,
                                           uncertainty_stats=self.test_set.b_uncertainty_stats,
                                           test_accuracy_slices=self.test_set.b_acc_slices,
@@ -651,8 +655,8 @@ class UncertaintyMapsGenerator(object):
             self.test_results.pred_labels[image_num] = None
             self.test_results.mc_pred_probs[image_num] = None
             self.test_results.image_probs_categorized[image_num] = None
-            # self.test_results.images[image_num] = None
-            # self.test_results.labels[image_num] = None
+            self.test_results.images[image_num] = None
+            self.test_results.labels[image_num] = None
             self.test_results.stddev_maps[image_num] = None
             self.test_results.bald_maps[image_num] = None
 

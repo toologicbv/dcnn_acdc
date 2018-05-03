@@ -94,11 +94,15 @@ def test_ensemble(test_set, exper_hdl, mc_samples=10, sample_weights=True, disca
         checkpoints = [100000, 110000, 120000, 130000, 140000, 150000]
     if reset_results:
         exper_hdl.reset_results(mc_samples=mc_samples, use_dropout=sample_weights)
+    if use_uncertainty:
+        if referral_threshold is None:
+            raise ValueError("Error - you need to specify the referral threshold when using uncertainty.")
+        print("WARNING - Using uncertainty maps to refer pixels. Threshold {:.2f}".format(referral_threshold))
+        exper_hdl.get_referral_maps(u_threshold=referral_threshold)
     if discard_outliers:
         # print("INFO - Using {:.2f} as uncertainty threshold".format(referral_threshold))
         print("WARNING - Using outlier statistics.")
-    if use_uncertainty:
-        print("WARNING - Using uncertainty maps to refer pixels. Threshold {:.2f}".format(referral_threshold))
+
     repeated_run = True
     for run_id, checkpoint in enumerate(checkpoints):
         if run_id == 0:
@@ -518,7 +522,7 @@ class ACDC2017TestHandler(object):
         :return:
         """
         num_of_slices = self.b_labels.shape[3]  # [#classes, width, height, #slices]
-        num_of_pixels_per_slice = self.b_labels.shape[1] * self.b_labels.shape[2]
+
         # referral statistics: 1) relative percentage of referred pixels (number of referred / positive predicted pixels
         #                      2) error reduction (%) #reduced errors / #segmentation errors
         #                      3) Number of true, positive labels (ground truth)
@@ -547,17 +551,27 @@ class ACDC2017TestHandler(object):
                     total_pos_labels_slice_es += num_true_labels_es
                     total_pos_labels_slice_ed += num_true_labels_ed
 
-                    pixel_std_es = u_maps[cls, :, :, slice_id]
-                    pixel_std_ed = u_maps[cls + self.num_of_classes, :, :, slice_id]
+                    # pixel_std_es = u_maps[cls, :, :, slice_id]
+                    # pixel_std_ed = u_maps[cls + self.num_of_classes, :, :, slice_id]
+                    pixel_std_es = np.max(u_maps[:self.num_of_classes, :, :, slice_id], axis=0)
+                    pixel_std_ed = np.max(u_maps[self.num_of_classes:, :, :, slice_id], axis=0)
                     # get pixels we're uncertain about
                     uncertain_es_idx = pixel_std_es >= referral_threshold
                     # collect indices of pixels with high uncertainty AND for which we predicted a positive label
                     if ref_positives_only:
+
                         pred_labels_pos_idx_es = pred_labels_cls_es == 1
                         c = np.count_nonzero(pred_labels_pos_idx_es)
+
                         total_pixels_positive += c
                         slice_pixels_pos_es += c
+                        t_unc_total = np.count_nonzero(uncertain_es_idx)
                         uncertain_es_idx = np.logical_and(uncertain_es_idx, pred_labels_pos_idx_es)
+                        t_unc_pos = np.count_nonzero(uncertain_es_idx)
+                        if slice_id == 4 and (cls == 3 or cls == 2):
+                            print("Slice {} Class {}: errors {} #true_pos {} #pos_labels {} "
+                                  "#u-pixels {} #pos+unc-pixels {}".format(slice_id+1, cls, errors_es, num_true_labels_es,
+                                                                                          c, t_unc_total, t_unc_pos))
                     else:
                         pass
                     # which of the uncertain pixels belong to the ones we misclassified? True positives ES
@@ -826,11 +840,12 @@ class ACDC2017TestHandler(object):
         except IOError:
             print("ERROR - Unable to save filtered umaps file {}".format(file_name))
 
-    def save_pred_labels(self, output_dir, u_threshold=0.):
+    def save_pred_labels(self, output_dir, u_threshold=0., ref_positives_only=False):
         """
 
         :param output_dir: is actually the exper_id e.g. 20180503_13_22_18_dcnn_mc_f2p005....
         :param u_threshold: indicating whether we store a filtered label mask...if <> 0
+        :param ref_positives_only: we referred only positive labels (=1) and skipped the uncertain 0-labels
         :return: saves the predicted label maps for an image. shape [8classes, width, height, #slices]
         """
         pred_lbl_output_dir = os.path.join(self.config.root_dir, os.path.join(output_dir, config.pred_lbl_dir))
@@ -838,14 +853,18 @@ class ACDC2017TestHandler(object):
             os.makedirs(pred_lbl_output_dir)
         if u_threshold != 0:
             u_threshold = str(u_threshold).replace(".", "_")
+            if ref_positives_only:
+                u_threshold += "_pos_only"
             file_name = self.b_image_name + "_filtered_pred_labels" + u_threshold + ".npz"
         else:
             file_name = self.b_image_name + "_pred_labels.npz"
         file_name = os.path.join(pred_lbl_output_dir, file_name)
-        try:
-            np.savez(file_name, filtered_pred_label=self.b_pred_labels)
-        except IOError:
-            print("ERROR - Unable to save predicted labels file {}".format(file_name))
+        # we don't overwrite existing predictions we obtained with the base model, so the non-referral predictions!
+        if not os.path.isfile(file_name) or u_threshold != 0:
+            try:
+                np.savez(file_name, filtered_pred_label=self.b_pred_labels)
+            except IOError:
+                print("ERROR - Unable to save predicted labels file {}".format(file_name))
 
     def save_batch_img_to_files(self, slice_range=None, save_dir=None, wo_padding=True):
 

@@ -18,7 +18,7 @@ from skimage import exposure
 from utils.post_processing import filter_connected_components
 
 
-def load_referral_umap(search_path):
+def load_referral_umap(search_path, per_class=True):
 
     files = glob.glob(search_path)
     if len(files) == 0:
@@ -29,7 +29,10 @@ def load_referral_umap(search_path):
         data = np.load(fname)
     except IOError:
         print("Unable to load uncertainty map from {}".format(fname))
-    return data["filtered_umap"]
+    if per_class:
+        return data["filtered_cls_umap"]
+    else:
+        return data["filtered_umap"]
 
 
 def load_referral_pred_labels(search_path):
@@ -43,6 +46,7 @@ def load_referral_pred_labels(search_path):
         data = np.load(fname)
     except IOError:
         print("Unable to load referral pred-labels from {}".format(fname))
+        return None
     return data["filtered_pred_label"]
 
 
@@ -986,38 +990,42 @@ class TestResults(object):
         plt.rcParams['font.serif'] = 'Ubuntu'
         plt.rcParams['font.monospace'] = 'Ubuntu Mono'
         column_lbls = ["bg", "RV", "MYO", "LV"]
-        if image_num is not None:
-            try:
-                image_num = self.image_ids.index(image_num)
-            except ValueError:
-                print("WARNING - Can't find image with index {} in "
-                      "test_results.image_ids. Discarding!".format(image_num))
-            image = self.images[image_num]
-            pred_labels = self.pred_labels[image_num]
-            label = self.labels[image_num]
-            uncertainty_map = self.stddev_maps[image_num]
-            bald_map = self.bald_maps[image_num]
-            image_name = self.image_names[image_num]
-            mc_samples = self.mc_pred_probs[image_num].shape[0]
-        else:
-            image = image_data[0]
-            label = image_data[1]
-            pred_labels = image_data[2]
-            uncertainty_map = image_data[3]
-            bald_map = image_data[4]
-            image_name = image_data[5]
-            mc_samples = image_data[6]
+
+        try:
+            image_num = self.image_ids.index(image_num)
+        except ValueError:
+            print("WARNING - Can't find image with index {} in "
+                  "test_results.image_ids. Discarding!".format(image_num))
+        image = self.images[image_num]
+        pred_labels = self.pred_labels[image_num]
+        label = self.labels[image_num]
+        uncertainty_map = self.stddev_maps[image_num]
+        bald_map = self.bald_maps[image_num]
+        image_name = self.image_names[image_num]
+        mc_samples = self.mc_pred_probs[image_num].shape[0]
 
         num_of_classes = label.shape[0]
         if std_threshold != 0.:
+            # REFERRAL functionality.
             if load_referral:
                 referral_threshold = str(std_threshold).replace(".", "_")
                 search_path = os.path.join(self.umap_dir,
+                                           image_name + "*" + "_filtered_cls_umaps" + referral_threshold + ".npz")
+                filtered_cls_std_map = load_referral_umap(search_path, per_class=True)
+                filtered_add_std_map_es = np.max(filtered_cls_std_map[:4], axis=0)
+                filtered_add_std_map_ed = np.max(filtered_cls_std_map[4:], axis=0)
+
+                search_path = os.path.join(self.umap_dir,
                                            image_name + "*" + "_filtered_umaps" + referral_threshold + ".npz")
-                filtered_std_map = load_referral_umap(search_path)
+                filtered_std_map = load_referral_umap(search_path, per_class=False)
+                if ref_positives_only:
+                    referral_threshold += "_pos_only"
+                # predicted labels we obtained after referral with this threshold
                 search_path = os.path.join(self.pred_labels_input_dir,
-                                           image_name + "*" + "_filtered_pred_labels" + referral_threshold + ".npz")
+                                           image_name + "_filtered_pred_labels" + referral_threshold + ".npz")
+                print("Found label file {}".format(search_path))
                 referral_pred_labels = load_referral_pred_labels(search_path)
+
             else:
                 filtered_std_map = copy.deepcopy(uncertainty_map)
                 for cls in np.arange(0, num_of_classes):
@@ -1025,14 +1033,37 @@ class TestResults(object):
                         u_3dmaps_cls = filtered_std_map[cls]
                         u_3dmaps_cls[u_3dmaps_cls < std_threshold] = 0
                         filtered_std_map[cls] = filter_connected_components(u_3dmaps_cls, threshold=std_threshold)
-            if ref_positives_only:
-                mask = pred_labels == 0
-                filtered_std_map[mask] = 0.
-
 
         else:
+            # Normal non-referral functionality
             filtered_std_map = None
             referral_pred_labels = None
+        search_path = os.path.join(self.pred_labels_input_dir, image_name + "_pred_labels.npz")
+        # the predicted labels we obtained with the MC model when NOT using dropout during inference!
+        pred_labels_wo_sampling = load_referral_pred_labels(search_path)
+        if ref_positives_only and std_threshold != 0.:
+            if pred_labels_wo_sampling is not None:
+                print("---- pred_labels_wo_sampling is not none ------")
+                mask = pred_labels_wo_sampling == 0
+                bg1 = pred_labels_wo_sampling[0] == 1
+                bg0 = pred_labels_wo_sampling[0] == 0
+                pred_labels_wo_sampling[0][bg1] = 0
+                pred_labels_wo_sampling[0][bg0] = 1
+                bg1 = pred_labels_wo_sampling[4] == 1
+                bg0 = pred_labels_wo_sampling[4] == 0
+                pred_labels_wo_sampling[4][bg1] = 0
+                pred_labels_wo_sampling[4][bg0] = 1
+                overall_mask_es = np.sum(pred_labels_wo_sampling[:4], axis=0) == 0
+                overall_mask_ed = np.sum(pred_labels_wo_sampling[4:], axis=0) == 0
+
+            else:
+                mask = pred_labels == 0
+
+            filtered_std_map[0][overall_mask_es] = 0.
+            filtered_std_map[1][overall_mask_ed] = 0.
+            filtered_add_std_map_es[overall_mask_es] = 0.
+            filtered_add_std_map_ed[overall_mask_ed] = 0.
+            filtered_cls_std_map[mask] = 0
         if errors_only or not plot_detailed_hists:
             image_probs = None
         else:
@@ -1053,13 +1084,22 @@ class TestResults(object):
         columns = half_classes
         if errors_only:
             rows = 4  # multiply with 4 because two rows ES, two rows ED for each slice
+            height = 20
         elif not plot_detailed_hists:
             rows = 10
+            height = 50
         elif not use_bald:
             rows = 8  # multiply with 8 because four rows ES, four rows ED for each slice
+            height = 50
         else:
-            rows = 14
-        print("Rows/columns {}/{}".format(rows, columns))
+            # we show all plots! 14 rows for ES and ED figures
+            if pred_labels_wo_sampling is None:
+                rows = 14
+                height = 65
+            else:
+                rows = 18
+                height = 80
+        print("Rows/columns/height {}/{}/{}".format(rows, columns, height))
 
         _ = rows * num_of_slices * columns
         if errors_only:
@@ -1093,7 +1133,7 @@ class TestResults(object):
                 slice_true_labels = label[:, :, :, img_slice]
                 slice_stddev = uncertainty_map[:, :, :, img_slice]
                 if std_threshold != 0.:
-                    filtered_slice_stddev = filtered_std_map[:, :, :, img_slice]
+                    filtered_slice_stddev = filtered_cls_std_map[:, :, :, img_slice]
 
                 # ax1 = plt.subplot(num_of_subplots, columns, counter)
 
@@ -1116,21 +1156,58 @@ class TestResults(object):
                 rgb_img = to_rgb1a(img)
                 # IMPORTANT: we disables filtering of RV pixels based on high uncertainties, hence we set
                 # std_threshold to zero! We use the threshold only to filter the uncertainty maps!
-                rgb_img, cls_errors = set_error_pixels(rgb_img, slice_pred_labels, slice_true_labels,
-                                                       cls_offset, slice_stddev, std_threshold=0.)
-                ax1b.imshow(rgb_img, interpolation='nearest')
+                rgb_img_w_pred, cls_errors = set_error_pixels(rgb_img, slice_pred_labels, slice_true_labels,
+                                                              cls_offset, slice_stddev, std_threshold=0.)
+                ax1b.imshow(rgb_img_w_pred, interpolation='nearest')
                 ax1b.set_aspect('auto')
                 ax1b.text(20, 20, 'red: RV ({}), yellow: Myo ({}), green: LV ({})'.format(cls_errors[1],
                                                                                           cls_errors[2],
                                                                                           cls_errors[3]),
                           bbox={'facecolor': 'white', 'pad': 18})
-                ax1b.set_title("Prediction errors", **config.title_font_medium)
+                ax1b.set_title("Prediction errors with sampling", **config.title_font_medium)
                 plt.axis('off')
+                if pred_labels_wo_sampling is not None:
+                    slice_pred_labels_wo_sampling = pred_labels_wo_sampling[:, :, :, img_slice]
+                    row += 2
+                    rgb_img = to_rgb1a(img)
+                    ax_pred = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
+                    rgb_img_w_pred, cls_errors = set_error_pixels(rgb_img, slice_pred_labels_wo_sampling,
+                                                                  slice_true_labels, cls_offset,
+                                                                  slice_stddev, std_threshold=0.)
+                    ax_pred.text(20, 20, 'red: RV ({}), yellow: Myo ({}), '
+                                                'green: LV ({})'.format(cls_errors[1], cls_errors[2], cls_errors[3]),
+                                                bbox={'facecolor': 'white', 'pad': 18})
+                    ax_pred.imshow(rgb_img_w_pred, interpolation='nearest')
+                    ax_pred.set_aspect('auto')
+                    ax_pred.set_title("Prediction errors wo sampling", **config.title_font_medium)
+                    plt.axis('off')
+                if referral_pred_labels is not None:
+                    rgb_img = to_rgb1a(img)
+                    slice_pred_labels_referred = referral_pred_labels[:, :, :, img_slice]
+                    if pred_labels_wo_sampling is None:
+                        row += 2
+                    ax_pred_ref = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
+                    rgb_img_ref_pred, cls_errors = set_error_pixels(rgb_img, slice_pred_labels_referred,
+                                                                    slice_true_labels, cls_offset,
+                                                                    slice_stddev, std_threshold=0.)
+                    if phase == 0:
+                        unc_pixels = filtered_add_std_map_es[:, :, img_slice] != 0
+                    else:
+                        unc_pixels = filtered_add_std_map_ed[:, :, img_slice] != 0
+                    rgb_img_ref_pred[unc_pixels, :] = [0, 0, 204]
+                    ax_pred_ref.text(20, 20, 'red: RV ({}), yellow: Myo ({}), '
+                                         'green: LV ({})'.format(cls_errors[1], cls_errors[2], cls_errors[3]),
+                                 bbox={'facecolor': 'white', 'pad': 18})
+                    ax_pred_ref.imshow(rgb_img_ref_pred, interpolation='nearest')
+                    ax_pred_ref.set_aspect('auto')
+                    ax_pred_ref.set_title("Prediction errors after referral", **config.title_font_medium)
+                    plt.axis('off')
                 # ARE WE SHOWING THE BALD value heatmap?
                 if use_bald:
                     row += 2
-                    # show image for BALD measure (1) BALD per pixel, on the left side
-                    slice_bald = bald_map[phase, :, :, img_slice]
+                    # CONFUSING!!! not using BALD here anymore (dead code) using it now for u-map where we
+                    # add all uncertainties from the separate STDDEV maps per class
+                    slice_bald = filtered_std_map[phase, :, :, img_slice]
                     bald_max = np.max(slice_bald)
                     # print("Phase {} row {} - BALD heatmap".format(phase, row))
                     ax4 = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
@@ -1142,7 +1219,7 @@ class TestResults(object):
                     fig.colorbar(ax4plot, ax=ax4, fraction=0.046, pad=0.04)
                     # cb = Colorbar(ax=ax4, mappable=ax4plot, orientation='vertical', ticklocation='right')
                     # cb.set_label(r'Colorbar !', labelpad=10)
-                    ax4.set_title("Slice {} {}: BALD-values".format(img_slice+1, str_phase),
+                    ax4.set_title("Slice {} {}: Additive STDDEV u-map".format(img_slice+1, str_phase),
                                   **config.title_font_medium)
                     plt.axis('off')
 
@@ -1151,9 +1228,12 @@ class TestResults(object):
                     # get the stddev value for the first 4 or last 4 classes (ES/ED) and average over classes (dim0)
                     if phase == 0:
                         mean_slice_stddev = np.mean(slice_stddev[:half_classes], axis=0)
+                        mean_slice_stddev = filtered_add_std_map_es[:, :, img_slice]
                     else:
                         mean_slice_stddev = np.mean(slice_stddev[half_classes:], axis=0)
+                        mean_slice_stddev = filtered_add_std_map_ed[:, :, img_slice]
 
+                    num_uncertain_pixels = np.count_nonzero(mean_slice_stddev)
                     max_mean_stddev = np.max(mean_slice_stddev)
                     # print("Phase {} row {} - MEAN STDDEV heatmap".format(phase, row))
                     ax4a = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
@@ -1161,7 +1241,8 @@ class TestResults(object):
                                            vmin=0., vmax=max_mean_stddev)
                     ax4a.set_aspect('auto')
                     fig.colorbar(ax4aplot, ax=ax4a, fraction=0.046, pad=0.04)
-                    ax4a.set_title("Slice {} {}: MEAN stddev-values".format(img_slice + 1, str_phase),
+                    ax4a.set_title("Slice {} {}: MEAN stddev-values (#u={})".format(img_slice + 1, str_phase,
+                                                                                    num_uncertain_pixels),
                                    **config.title_font_medium)
                     plt.axis('off')
 
@@ -1326,6 +1407,8 @@ class TestResults(object):
                 if std_threshold > 0.:
                     tr_string = "_tr" + str(std_threshold).replace(".", "_")
                     fig_name += tr_string
+                    if ref_positives_only:
+                        fig_name += "_pos_only"
                 if errors_only:
                     fig_name = fig_name + "_w_uncrty"
                 fig_name = os.path.join(fig_img_dir, fig_name + ".pdf")
@@ -1349,10 +1432,16 @@ class TestResults(object):
         images = self.images
         labels = self.labels
         pred_labels = self.pred_labels
+        stddev_maps = self.stddev_maps
+        bald_maps = self.bald_maps
+        mc_pred_probs = self.mc_pred_probs
         self.images = []
         self.labels = []
         self.pred_labels = []
         self.image_probs_categorized = []
+        self.stddev_maps = []
+        self.bald_maps = []
+        self.mc_pred_probs = []
 
         if outfile is None:
             num_of_images = len(self.image_names)
@@ -1390,6 +1479,9 @@ class TestResults(object):
         self.labels = labels
         self.pred_labels = pred_labels
         self.image_probs_categorized = image_probs_categorized
+        self.stddev_maps = stddev_maps
+        self.bald_maps = bald_maps
+        self.mc_pred_probs = mc_pred_probs
         del images
         del labels
         del pred_labels

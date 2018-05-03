@@ -24,7 +24,7 @@ def do_parse_args():
     parser.add_argument('--reuse_maps', action='store_true', default=False, help='use existing U-maps')
     parser.add_argument('--save_actual_maps', action='store_true', default=False, help='save detailed u-maps')
 
-    parser.add_argument('--u_threshold', type=float, default=0.1, help="Threshold to filter initial u-values.")
+    parser.add_argument('--u_threshold', type=float, default=0.05, help="Threshold to filter initial u-values.")
     parser.add_argument('--verbose', action='store_true', default=False, help='show debug messages')
     parser.add_argument('--generate_plots', action='store_true', default=False, help='generate plots for analysis')
 

@@ -16,6 +16,7 @@ from config.config import config, DEFAULT_DCNN_MC_2D, DEFAULT_DCNN_2D
 from utils.batch_handlers import TwoDimBatchHandler, BatchStatistics
 from utils.generate_uncertainty_maps import UncertaintyMapsGenerator, ImageUncertainties, OutOfDistributionSlices
 from utils.generate_uncertainty_maps import ImageOutliers
+from utils.post_processing import filter_connected_components
 import models.dilated_cnn
 from utils.test_results import TestResults
 from common.acquisition_functions import bald_function
@@ -281,9 +282,6 @@ class ExperimentHandler(object):
         # if we use referral then we need to load the u-maps
         if use_uncertainty:
             # get uncertainty maps for this image [2, 4classes, width, height, #slices]
-            if self.referral_umaps is None or len(self.referral_umaps.keys()) == 0:
-                self.get_referral_maps(u_threshold=referral_threshold)
-                print("INFO - Loading referral u-maps for experiment.")
             patient_id = test_set.img_file_names[image_num]
             u_maps_image = self.referral_umaps[patient_id]
             self.test_results.referral_threshold = referral_threshold
@@ -402,20 +400,23 @@ class ExperimentHandler(object):
         # we only want to save predicted labels when we're not SAMPLING weights
         if save_pred_labels and not sample_weights:
             test_set.save_pred_labels(self.exper.output_dir, u_threshold=0.)
-        if sample_weights and save_filtered_umaps:
-            if not test_set.b_filtered_umap:
-                test_set.filter_u_maps(u_threshold=referral_threshold)
-            test_set.save_filtered_u_maps(self.exper.output_dir, u_threshold=referral_threshold)
+
         if use_uncertainty:
             # u_maps_image shape [8classes, width, height, #slices]
-            test_set.filter_referrals(u_maps=u_maps_image, ref_positives_only=ref_positives_only,
-                                      referral_threshold=referral_threshold, verbose=False)
+            if u_maps_image.shape[0] == 8:
+                # referral with u-maps for each class
+                test_set.filter_referrals(u_maps=u_maps_image, ref_positives_only=ref_positives_only,
+                                          referral_threshold=referral_threshold, verbose=False)
+            else:
+                # referral with one u-map per phase ES/ED
+                pass
             test_accuracy_ref, test_hd_ref, seg_errors_ref = test_set.get_accuracy(compute_hd=compute_hd,
                                                                                    compute_seg_errors=True,
                                                                                    do_filter=False)
             # save the referred labels
             if save_pred_labels:
-                test_set.save_pred_labels(self.exper.output_dir, u_threshold=referral_threshold)
+                test_set.save_pred_labels(self.exper.output_dir, u_threshold=referral_threshold,
+                                          ref_positives_only=ref_positives_only)
 
         print("Image {} - test loss {:.3f} "
               " dice(RV/Myo/LV):\tES {:.2f}/{:.2f}/{:.2f}\t"
@@ -654,11 +655,14 @@ class ExperimentHandler(object):
                   " (property=outliers_per_epoch, dictionary (key=epoch) with tuple (6 elements)"
                   " and property=test_results_per_epoch, dict (key=epoch) with tuple (4))".format(c))
 
-    def get_referral_maps(self, u_threshold):
+    def get_referral_maps(self, u_threshold, per_class=True):
         input_dir = os.path.join(self.exper.config.root_dir,
                                            os.path.join(self.exper.output_dir, config.u_map_dir))
         u_threshold = str(u_threshold).replace(".", "_")
-        search_path = os.path.join(input_dir, "*" + "_filtered_umaps" + u_threshold + ".npz")
+        if per_class:
+            search_path = os.path.join(input_dir, "*" + "_filtered_cls_umaps" + u_threshold + ".npz")
+        else:
+            search_path = os.path.join(input_dir, "*" + "_filtered_umaps" + u_threshold + ".npz")
         files = glob.glob(search_path)
         if len(files) == 0:
             raise ImportError("ERROR - no referral u-maps found in {}".format(search_path))
@@ -670,7 +674,62 @@ class ExperimentHandler(object):
                 data = np.load(fname)
             except IOError:
                 print("Unable to load uncertainty maps from {}".format(fname))
-            self.referral_umaps[patientID] = data["filtered_umap"]
+            if per_class:
+                self.referral_umaps[patientID] = data["filtered_cls_umap"]
+            else:
+                self.referral_umaps[patientID] = data["filtered_umap"]
+
+    def create_filtered_umaps(self, u_threshold, verbose=False):
+        if u_threshold < 0.:
+            raise ValueError("ERROR - u_threshold must be greater than zero. ({:.2f})".format(u_threshold))
+        # returns an OrderedDict with key "patient_id" and value=tensor of shape [2, 4classes, width, height, #slices]
+        # which is stored in self.u_maps
+        self.get_u_maps()
+        for patient_id, raw_u_map in self.u_maps.iteritems():
+            num_of_phases = raw_u_map.shape[0]
+            num_of_classes = raw_u_map.shape[1]
+            if verbose:
+                print("INFO - Creating filtered u-map-{:.2f} for {}".format(u_threshold, patient_id))
+            # Yes I know, completely inconsistent the output is [8classes, width, height, #slices] instead of [2, 4...]
+            filtered_cls_stddev_map = np.zeros((num_of_phases * num_of_classes, raw_u_map.shape[2], raw_u_map.shape[3],
+                                                raw_u_map.shape[4]))
+            # here we store the maps per phase ES/ED. We just add all values per class, for now
+            filtered_stddev_map = np.zeros((num_of_phases, raw_u_map.shape[2], raw_u_map.shape[3], raw_u_map.shape[4]))
+            for phase in np.arange(num_of_phases):
+                cls_offset = phase * num_of_classes
+                for cls in np.arange(0, num_of_classes):
+                    # if cls != 0 and cls != 4:
+                    u_3dmaps_cls = raw_u_map[phase, cls]
+                    # set all uncertainties below threshold to zero
+                    u_3dmaps_cls[u_3dmaps_cls < u_threshold] = 0
+                    filtered_cls_stddev_map[cls + cls_offset] = filter_connected_components(u_3dmaps_cls,
+                                                                                                threshold=u_threshold)
+                    filtered_stddev_map[phase] += raw_u_map[phase, cls]
+                filtered_stddev_map[phase] = filter_connected_components(filtered_stddev_map[phase],
+                                                                         threshold=u_threshold)
+
+            # save map
+            umap_output_dir = os.path.join(self.exper.config.root_dir, os.path.join(self.exper.output_dir,
+                                                                                    config.u_map_dir))
+            if not os.path.isdir(umap_output_dir):
+                os.makedirs(umap_output_dir)
+            str_u_threshold = str(u_threshold).replace(".", "_")
+            file_name_cls = patient_id + "_filtered_cls_umaps" + str_u_threshold + ".npz"
+            file_name_cls = os.path.join(umap_output_dir, file_name_cls)
+            file_name = patient_id + "_filtered_umaps" + str_u_threshold + ".npz"
+            file_name = os.path.join(umap_output_dir, file_name)
+            try:
+                np.savez(file_name_cls, filtered_cls_umap=filtered_cls_stddev_map)
+            except IOError:
+                print("ERROR - Unable to save filtered cls-umaps file {}".format(file_name_cls))
+            try:
+                np.savez(file_name, filtered_umap=filtered_stddev_map)
+            except IOError:
+                print("ERROR - Unable to save filtered umaps file {}".format(file_name))
+        # we don't need this object, to big to keep
+        self.u_maps = None
+        del filtered_cls_stddev_map
+        del filtered_stddev_map
 
     def info(self, message):
         if self.logger is None:
