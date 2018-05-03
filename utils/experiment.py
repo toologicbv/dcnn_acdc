@@ -30,6 +30,7 @@ class ExperimentHandler(object):
 
         self.exper = exper
         self.u_maps = None
+        self.referral_umaps = None
         self.test_results = None
         self.logger = None
         self.num_val_runs = 0
@@ -192,8 +193,8 @@ class ExperimentHandler(object):
 
     def test(self, model, test_set, image_num=0, mc_samples=1, sample_weights=False, compute_hd=False,
              use_uncertainty=False, referral_threshold=None, use_seed=False, verbose=False, store_details=False,
-             do_filter=True, repeated_run=False, u_threshold=0.01, discard_outliers=False,
-             ref_positives_only=False):
+             do_filter=True, repeated_run=False, u_threshold=0.01, discard_outliers=False, save_pred_labels=False,
+             ref_positives_only=False, save_filtered_umaps=False):
         """
 
         :param model:
@@ -280,11 +281,11 @@ class ExperimentHandler(object):
         # if we use referral then we need to load the u-maps
         if use_uncertainty:
             # get uncertainty maps for this image [2, 4classes, width, height, #slices]
-            if self.u_maps is None or len(self.u_maps.keys()) == 0:
-                self.get_u_maps()
-                print("INFO - Loading u-maps for experiment.")
+            if self.referral_umaps is None or len(self.referral_umaps.keys()) == 0:
+                self.get_referral_maps(u_threshold=referral_threshold)
+                print("INFO - Loading referral u-maps for experiment.")
             patient_id = test_set.img_file_names[image_num]
-            u_maps_image = self.u_maps[patient_id]
+            u_maps_image = self.referral_umaps[patient_id]
             self.test_results.referral_threshold = referral_threshold
         else:
             u_maps_image = None
@@ -398,13 +399,23 @@ class ExperimentHandler(object):
 
         test_accuracy, test_hd, seg_errors = test_set.get_accuracy(compute_hd=compute_hd, compute_seg_errors=True,
                                                                    do_filter=do_filter)
+        # we only want to save predicted labels when we're not SAMPLING weights
+        if save_pred_labels and not sample_weights:
+            test_set.save_pred_labels(self.exper.output_dir, u_threshold=0.)
+        if sample_weights and save_filtered_umaps:
+            if not test_set.b_filtered_umap:
+                test_set.filter_u_maps(u_threshold=referral_threshold)
+            test_set.save_filtered_u_maps(self.exper.output_dir, u_threshold=referral_threshold)
         if use_uncertainty:
-            # u_maps_image shape [2, 4classes, width, height, #slices]
+            # u_maps_image shape [8classes, width, height, #slices]
             test_set.filter_referrals(u_maps=u_maps_image, ref_positives_only=ref_positives_only,
                                       referral_threshold=referral_threshold, verbose=False)
             test_accuracy_ref, test_hd_ref, seg_errors_ref = test_set.get_accuracy(compute_hd=compute_hd,
                                                                                    compute_seg_errors=True,
                                                                                    do_filter=False)
+            # save the referred labels
+            if save_pred_labels:
+                test_set.save_pred_labels(self.exper.output_dir, u_threshold=referral_threshold)
 
         print("Image {} - test loss {:.3f} "
               " dice(RV/Myo/LV):\tES {:.2f}/{:.2f}/{:.2f}\t"
@@ -474,7 +485,7 @@ class ExperimentHandler(object):
                                       referral_stats=test_set.referral_stats)
 
     def create_u_maps(self, model=None, checkpoint=None, mc_samples=10, u_threshold=0.1, do_save_u_stats=False,
-                      save_actual_maps=False, test_set=None, do_analyze_slices=False):
+                      save_actual_maps=False, test_set=None, generate_figures=False):
 
         if model is None and checkpoint is None:
             raise ValueError("When model parameter is None, you need to specify the checkpoint model "
@@ -490,7 +501,7 @@ class ExperimentHandler(object):
                                                   checkpoint=checkpoint, store_test_results=True)
         maps_generator(do_save=do_save_u_stats, clean_up=True, save_actual_maps=save_actual_maps)
 
-        if do_analyze_slices:
+        if generate_figures:
             if self.test_results is None:
                 # if test_results object of experiment handler is None (because we generated u-maps) we point to the
                 # test_result object of the map generator. If we re-use maps we load the object, see above
@@ -642,6 +653,24 @@ class ExperimentHandler(object):
             print("Loaded outlier stats for {} training epochs"
                   " (property=outliers_per_epoch, dictionary (key=epoch) with tuple (6 elements)"
                   " and property=test_results_per_epoch, dict (key=epoch) with tuple (4))".format(c))
+
+    def get_referral_maps(self, u_threshold):
+        input_dir = os.path.join(self.exper.config.root_dir,
+                                           os.path.join(self.exper.output_dir, config.u_map_dir))
+        u_threshold = str(u_threshold).replace(".", "_")
+        search_path = os.path.join(input_dir, "*" + "_filtered_umaps" + u_threshold + ".npz")
+        files = glob.glob(search_path)
+        if len(files) == 0:
+            raise ImportError("ERROR - no referral u-maps found in {}".format(search_path))
+        self.referral_umaps = OrderedDict()
+        for fname in glob.glob(search_path):
+            file_basename = os.path.splitext(os.path.basename(fname))[0]
+            patientID = file_basename[:file_basename.find("_")]
+            try:
+                data = np.load(fname)
+            except IOError:
+                print("Unable to load uncertainty maps from {}".format(fname))
+            self.referral_umaps[patientID] = data["filtered_umap"]
 
     def info(self, message):
         if self.logger is None:

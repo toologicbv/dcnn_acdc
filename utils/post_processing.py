@@ -2,7 +2,14 @@ import scipy.ndimage as scnd
 import numpy as np
 
 
-def filter_connected_components(pred_labels, cls=None, verbose=False):
+def filter_connected_components(pred_labels, cls=None, verbose=False, threshold=0.):
+    """
+
+    :param pred_labels:
+    :param cls: currently not in use, only for debug purposes
+    :param verbose:
+    :return:
+    """
 
     rank = pred_labels.ndim
 
@@ -17,7 +24,10 @@ def filter_connected_components(pred_labels, cls=None, verbose=False):
     else:
         raise ValueError("Input has more than 3 dimensions which is not supported by this function")
 
-    mask = pred_labels == 1
+    if threshold != 0:
+        mask = pred_labels >= threshold
+    else:
+        mask = pred_labels == 1
 
     cc_labels, n_comps = scnd.measurements.label(mask, structure=structure)
     if verbose:

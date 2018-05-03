@@ -2,20 +2,48 @@ import numpy as np
 from scipy.stats import gaussian_kde
 import os
 import dill
-import sys
+import glob
 from tqdm import tqdm
 from collections import OrderedDict
 from config.config import config
 from utils.dice_metric import dice_coefficient
 from utils.medpy_metrics import hd
-if "/home/jogi/.local/lib/python2.7/site-packages" in sys.path:
-    sys.path.remove("/home/jogi/.local/lib/python2.7/site-packages")
 import matplotlib.pyplot as plt
 from matplotlib import cm
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 from common.common import datestr, to_rgb1a, set_error_pixels
 import copy
 from scipy.stats import wilcoxon, ttest_ind, mannwhitneyu
+from skimage import segmentation
+from skimage import exposure
+from utils.post_processing import filter_connected_components
+
+
+def load_referral_umap(search_path):
+
+    files = glob.glob(search_path)
+    if len(files) == 0:
+        raise ImportError("ERROR - no referral u-map found in {}".format(search_path))
+    fname = files[0]
+
+    try:
+        data = np.load(fname)
+    except IOError:
+        print("Unable to load uncertainty map from {}".format(fname))
+    return data["filtered_umap"]
+
+
+def load_referral_pred_labels(search_path):
+
+    files = glob.glob(search_path)
+    if len(files) == 0:
+        raise ImportError("ERROR - no referral pred labels found in {}".format(search_path))
+    fname = files[0]
+
+    try:
+        data = np.load(fname)
+    except IOError:
+        print("Unable to load referral pred-labels from {}".format(fname))
+    return data["filtered_pred_label"]
 
 
 def get_accuracies_all(pred_labels, true_labels):
@@ -242,6 +270,11 @@ class TestResults(object):
                                            os.path.join(exper.output_dir, exper.config.figure_path))
         self.save_output_dir = os.path.join(exper.config.root_dir,
                                             os.path.join(exper.output_dir, exper.config.stats_path))
+        self.umap_dir = os.path.join(exper.config.root_dir,
+                                                  os.path.join(exper.output_dir, config.u_map_dir))
+
+        self.pred_labels_input_dir = os.path.join(exper.config.root_dir,
+                                                  os.path.join(exper.output_dir, config.pred_lbl_dir))
 
     def add_results(self, batch_image, batch_labels, image_id, pred_labels, mc_pred_probs, stddev_map,
                     test_accuracy, test_hd, seg_errors, store_all=False, bald_maps=None, uncertainty_stats=None,
@@ -900,7 +933,8 @@ class TestResults(object):
     def visualize_uncertainty_histograms(self, image_num=None, width=16, height=10, info_type="uncertainty",
                                          std_threshold=0., do_show=False, model_name="", use_bald=True,
                                          do_save=False, slice_range=None, errors_only=False,
-                                         plot_detailed_hists=False, image_data=None):
+                                         plot_detailed_hists=False, image_data=None, load_referral=False,
+                                         ref_positives_only=False):
         """
 
         :param image_num:
@@ -915,11 +949,34 @@ class TestResults(object):
         :param fig_name:
         :param slice_range:
         :param errors_only:
+        :param ref_positives_only: only consider voxels with high uncertainties that we predicted as positive (1)
+        and ignore the ones we predicted as non-member of the specific class (mostly background).
+        This reduces the number of voxels to be referred without hopefully impairing the referral results
+        significantly. We can then probably lower the referral threshold.
+        :param image_data: tuple containing the tensors we need to construct the figures. We use this in case
+        we don't want to "store" all the large test_result objects (e.g. images, labels, pred_labels etc) but
+        nevertheless want to construct these images (e.g. we call this method in "generate_uncertainty_maps.py")
         :param plot_detailed_hists: if False then we plot only 5 rows: 1-2 images, 3-4 huge uncertainty maps,
                                                                        5: uncertainty maps per class
                                                                        NO HISTOGRAMS!
         :return:
         """
+
+        def detect_seg_contours(img, lbls, cls_offset):
+
+            mask = np.zeros_like(img)
+            rv_lbls = lbls[1 + cls_offset]
+            mask[rv_lbls == 1] = 1
+            myo_lbls = lbls[2 + cls_offset]
+            mask[myo_lbls == 1] = 2
+            lv_lbls = lbls[3 + cls_offset]
+            mask[lv_lbls == 1] = 3
+            img_es = exposure.rescale_intensity(img)
+            clean_border = segmentation.clear_border(mask).astype(np.int)
+            img_lbl = segmentation.mark_boundaries(img_es, clean_border, mode="outer", color=(0, 1, 0),
+                                                   background_label=0)
+            img_lbl = exposure.rescale_intensity(img_lbl, out_range=(0, 1))
+            return img_lbl
 
         if errors_only and use_bald:
             # need to set BALD to False as well
@@ -951,6 +1008,31 @@ class TestResults(object):
             image_name = image_data[5]
             mc_samples = image_data[6]
 
+        num_of_classes = label.shape[0]
+        if std_threshold != 0.:
+            if load_referral:
+                referral_threshold = str(std_threshold).replace(".", "_")
+                search_path = os.path.join(self.umap_dir,
+                                           image_name + "*" + "_filtered_umaps" + referral_threshold + ".npz")
+                filtered_std_map = load_referral_umap(search_path)
+                search_path = os.path.join(self.pred_labels_input_dir,
+                                           image_name + "*" + "_filtered_pred_labels" + referral_threshold + ".npz")
+                referral_pred_labels = load_referral_pred_labels(search_path)
+            else:
+                filtered_std_map = copy.deepcopy(uncertainty_map)
+                for cls in np.arange(0, num_of_classes):
+                    if cls != 0 and cls != 4:
+                        u_3dmaps_cls = filtered_std_map[cls]
+                        u_3dmaps_cls[u_3dmaps_cls < std_threshold] = 0
+                        filtered_std_map[cls] = filter_connected_components(u_3dmaps_cls, threshold=std_threshold)
+            if ref_positives_only:
+                mask = pred_labels == 0
+                filtered_std_map[mask] = 0.
+
+
+        else:
+            filtered_std_map = None
+            referral_pred_labels = None
         if errors_only or not plot_detailed_hists:
             image_probs = None
         else:
@@ -962,7 +1044,6 @@ class TestResults(object):
             bald_map = None
             bald_min, bald_max = None, None
 
-        num_of_classes = label.shape[0]
         half_classes = num_of_classes / 2
 
         if slice_range is None:
@@ -990,7 +1071,7 @@ class TestResults(object):
 
             if std_threshold > 0.:
                 main_title = r"Model {} - Test image: {} - slice: {}" \
-                             r" - ($\sigma_{{Tr}}={:.2f}$) \n".format(model_name, image_name, img_slice+1, std_threshold)
+                             r" - ($\sigma_{{Tr}}={:.2f}$)".format(model_name, image_name, img_slice+1, std_threshold)
             else:
                 main_title = "Model {} - Test image: {} - slice: {} \n".format(model_name, image_name, img_slice+1)
             fig = plt.figure(figsize=(width, height))
@@ -1011,6 +1092,9 @@ class TestResults(object):
                 slice_pred_labels = copy.deepcopy(pred_labels[:, :, :, img_slice])
                 slice_true_labels = label[:, :, :, img_slice]
                 slice_stddev = uncertainty_map[:, :, :, img_slice]
+                if std_threshold != 0.:
+                    filtered_slice_stddev = filtered_std_map[:, :, :, img_slice]
+
                 # ax1 = plt.subplot(num_of_subplots, columns, counter)
 
                 # print("INFO-1 - row/counter {} / {}".format(row, counter))
@@ -1022,16 +1106,18 @@ class TestResults(object):
                     ax1.set_title("Slice {}: End-diastole".format(img_slice+1), **config.title_font_large)
                     str_phase = "ED"
                 # the original image we are segmenting
-                ax1.imshow(img, cmap=cm.gray)
+                img_with_contours = detect_seg_contours(img, slice_true_labels, cls_offset)
+                ax1.imshow(img_with_contours, cmap=cm.gray)
                 ax1.set_aspect('auto')
                 plt.axis('off')
                 # -------------------------- Plot segmentation ERRORS per class on original image -----------
                 # we also construct an image with the segmentation errors, placing it next to the original img
                 ax1b = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
                 rgb_img = to_rgb1a(img)
+                # IMPORTANT: we disables filtering of RV pixels based on high uncertainties, hence we set
+                # std_threshold to zero! We use the threshold only to filter the uncertainty maps!
                 rgb_img, cls_errors = set_error_pixels(rgb_img, slice_pred_labels, slice_true_labels,
-                                                                          cls_offset,
-                                                                          slice_stddev, std_threshold=std_threshold)
+                                                       cls_offset, slice_stddev, std_threshold=0.)
                 ax1b.imshow(rgb_img, interpolation='nearest')
                 ax1b.set_aspect('auto')
                 ax1b.text(20, 20, 'red: RV ({}), yellow: Myo ({}), green: LV ({})'.format(cls_errors[1],
@@ -1115,8 +1201,8 @@ class TestResults(object):
                     if bald_corr is not None:
                         ax5b = ax5.twinx()
                         ax5b.hist(bald_corr[bald_corr >= std_threshold], bins=xs,
-                                 label=r"$bald_{{pred(tp)}}({})$".format(bald_corr.shape[0]),
-                                 color='g', alpha=0.4, histtype='stepfilled')
+                                  label=r"$bald_{{pred(tp)}}({})$".format(bald_corr.shape[0]),
+                                  color='g', alpha=0.4, histtype='stepfilled')
                         ax5b.legend(loc=2, prop={'size': 12})
                         ax5b.grid(False)
                     ax5.set_xlabel("BALD value", **config.axis_font)
@@ -1164,12 +1250,16 @@ class TestResults(object):
                         # in the next subplot row we visualize the uncertainties per class
                         # print("phase {} row {} counter {}".format(phase, row, counter))
                         ax3 = plt.subplot2grid((rows, columns), (row, counter), colspan=1)
-                        std_map_cls = slice_stddev[cls + cls_offset]
+                        if std_threshold != 0.:
+                            std_map_cls = filtered_slice_stddev[cls + cls_offset]
+                        else:
+                            std_map_cls = slice_stddev[cls + cls_offset]
                         # cmap = plt.get_cmap('jet')
                         # std_rgba_img = cmap(std_map_cls)
                         # std_rgb_img = np.delete(std_rgba_img, 3, 2)
-                        ax3plot = ax3.imshow(std_map_cls, vmin=0., vmax=max_stdddev_over_classes,
-                                             cmap=plt.get_cmap('jet'))
+                        # std_map_cls[std_map_cls < std_threshold] = 0
+                        ax3plot = ax3.imshow(std_map_cls, vmin=0.,
+                                             vmax=max_stdddev_over_classes, cmap=plt.get_cmap('jet'))
                         ax3.set_aspect('auto')
                         if cls == half_classes - 1:
                             fig.colorbar(ax3plot, ax=ax3, fraction=0.046, pad=0.04)
@@ -1191,14 +1281,19 @@ class TestResults(object):
                             if p_err_std is not None:
                                 ax2b = ax2.twinx()
                                 # p_err_std = p_err_std[np.where((p_err_std>0.1) & (p_err_std< 0.9) )]
-                                ax2b.hist(p_err_std[p_err_std >= std_threshold], bins=xs,
+                                if info_type == "uncertainty":
+                                    p_err_std = p_err_std[p_err_std >= std_threshold]
+
+                                ax2b.hist(p_err_std, bins=xs,
                                          label=r"$\sigma_{{pred(fp+fn)}}({})$".format(cls_errors[cls])
                                          ,color="b", alpha=0.2)
                                 ax2b.legend(loc=2, prop={'size': 9})
 
                             if p_corr_std is not None:
+                                if info_type == "uncertainty":
+                                    p_corr_std = p_corr_std[p_corr_std >= std_threshold]
                                 # p_corr_std = p_corr_std[np.where((p_corr_std > 0.1) & (p_corr_std < 0.9))]
-                                ax2.hist(p_corr_std[p_corr_std >= std_threshold], bins=xs,
+                                ax2.hist(p_corr_std, bins=xs,
                                          label=r"$\sigma_{{pred(tp)}}({})$".format(p_corr_std.shape[0]),
                                          color="g", alpha=0.4)
 
@@ -1401,3 +1496,48 @@ class TestResults(object):
                   "test_results.image_ids. Discarding!".format(image_num))
         return idx
 
+
+def load_all_results(exper_dict, search_prefix="test_results_25imgs*"):
+    # LOG_DIR is global variable from outside scope
+    overall_dice, std_dice = np.zeros(8), np.zeros(8)
+    overall_hd, std_hd = np.zeros(8), np.zeros(8)
+    results = []
+    for fold_id, exper_id in exper_dict.iteritems():
+        input_dir = os.path.join(LOG_DIR, os.path.join(exper_id, config.stats_path))
+        search_path = os.path.join(input_dir, search_prefix + ".dll")
+        filenames = glob.glob(search_path)
+        if len(filenames) != 1:
+            raise ValueError("ERROR - Found {} result files for this experiment."
+                             "Must be 1.".format(len(filenames)))
+        results.append(TestResults.load_results(filenames[0], verbose=False))
+
+    if len(results) != 4:
+        raise ValueError("ERROR - Loaded {} instead of 4 result files.".format(len(results)))
+    for res in results:
+        overall_dice += res.dice_results[0]
+        std_dice += res.dice_results[1]
+        overall_hd += res.hd_results[0]
+        std_hd += res.hd_results[1]
+    overall_dice *= 1. / 4
+    std_dice *= 1. / 4
+    overall_hd *= 1. / 4
+    std_hd *= 1. / 4
+
+    print("Overall:\t"
+          "dice(RV/Myo/LV): ES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})\t"
+          "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(overall_dice[1], std_dice[1], overall_dice[2],
+                                                                      std_dice[2], overall_dice[3], std_dice[3],
+                                                                      overall_dice[5], std_dice[5], overall_dice[6],
+                                                                      std_dice[6], overall_dice[7], std_dice[7]))
+    print("Hausdorff(RV/Myo/LV):\tES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})\t"
+          "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(overall_hd[1], std_hd[1], overall_hd[2],
+                                                                      std_hd[2], overall_hd[3], std_hd[3],
+                                                                      overall_hd[5], std_hd[5], overall_hd[6],
+                                                                      std_hd[6], overall_hd[7], std_hd[7]))
+
+    return np.array([overall_dice, std_dice]), np.array([overall_hd, std_hd])
+
+
+ROOT_DIR = "/home/jorg/repository/dcnn_acdc"
+LOG_DIR = os.path.join(ROOT_DIR, "logs")
+# overall_dice, overall_hd = load_all_results(exp_mc01_brier)

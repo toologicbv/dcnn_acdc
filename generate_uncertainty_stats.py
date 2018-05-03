@@ -87,11 +87,14 @@ def main():
         exper_handler.create_u_maps(model=None, checkpoint=args.checkpoint, mc_samples=args.mc_samples,
                                     u_threshold=args.u_threshold,
                                     do_save_u_stats=True,
-                                    save_actual_maps=True, test_set=None, do_analyze_slices=args.generate_plots)
+                                    save_actual_maps=True, test_set=None, generate_figures=args.generate_plots)
 
 
 if __name__ == '__main__':
     main()
 
 
-python generate_uncertainty_stats.py --cuda --exper_id=20180426_14_47_23_dcnn_mc_f2p005_brier_150KE_lr2e02 --checkpoint=150000 --mc_samples=10  --u_threshold=0.1 --save_actual_maps --run_mode="u_maps_only" --generate_plots
+"""
+python generate_uncertainty_stats.py --cuda --exper_id=20180426_14_47_23_dcnn_mc_f2p005_brier_150KE_lr2e02 
+--checkpoint=150000 --mc_samples=10  --u_threshold=0.1 --save_actual_maps --run_mode="u_maps_only" --generate_plots
+"""

@@ -467,7 +467,7 @@ class ImageUncertainties(object):
                 print("Unable to load uncertainty maps from {}".format(fname))
             image_umap_stats[patientID] = {"stddev_slice": data['stddev_slice'],
                                            "bald_slice": data['bald_slice'],
-                                           "u_thresold": data["u_threshold"],
+                                           "u_threshold": data["u_threshold"],
                                            "u_map": data["u_map"]}
             del data
             c += 1
@@ -491,7 +491,7 @@ class ImageUncertainties(object):
 
 class UncertaintyMapsGenerator(object):
 
-    file_suffix = "_umaps.npz"
+    file_suffix = "_raw_umaps.npz"
 
     def __init__(self, exper_handler, test_set=None, mc_samples=10, model=None, checkpoint=None, verbose=False,
                  use_logger=False, u_threshold=0., store_test_results=False):
@@ -502,6 +502,7 @@ class UncertaintyMapsGenerator(object):
         self.mc_samples = mc_samples
         self.checkpoint = checkpoint
         self.exper_handler = exper_handler
+        self.generate_figures = False
         if use_logger and self.exper_handler.logger is None:
             self.exper_handler.logger = create_logger(self.exper_handler.exper, file_handler=True)
         # looks kind of awkward, but originally wanted to use an array of folds, but finally we only process 1
@@ -528,20 +529,21 @@ class UncertaintyMapsGenerator(object):
         else:
             self.test_results = None
 
-    def __call__(self, do_save=True, clean_up=True, save_actual_maps=False):
+    def __call__(self, do_save=True, clean_up=True, save_actual_maps=False, generate_figures=False):
 
         start_time = time.time()
         message = "INFO - Starting to generate uncertainty maps " \
                   "for {} images using {} samples and u-threshold {:.2f}".format(self.num_of_images, self.mc_samples,
                                                                                  self.u_threshold)
         saved = 0
+        self.generate_figures = generate_figures
         self.info(message)
         # first delete all old files in the u_map directory
         if clean_up:
             self.info("NOTE: first cleaning up previous generated uncertainty maps!")
             self.clean_up_files()
-        # for image_num in tqdm(np.arange(self.num_of_images)):
-        for image_num in tqdm(np.arange(2)):
+        for image_num in tqdm(np.arange(self.num_of_images)):
+        # for image_num in tqdm(np.arange(2)):
             self._generate(image_num=image_num)
             if do_save:
                 saved += 1
@@ -634,14 +636,11 @@ class UncertaintyMapsGenerator(object):
                                           test_accuracy_slices=self.test_set.b_acc_slices,
                                           test_hd_slices=self.test_set.b_hd_slices,
                                           image_name=self.test_set.b_image_name, repeated_run=False)
-        if True:
+        if self.generate_figures:
             args = self.exper_handler.exper.run_args
             self.test_results.generate_slice_statistics(image_num=image_num)
             model_name = args.model + " (p={:.2f})".format(args.drop_prob) + " - {}".format(args.loss_function)
-            batch_image = self.test_set.b_image[:, config.pad_size:-config.pad_size, config.pad_size:-config.pad_size, :]
-            image_data = tuple((batch_image, self.test_set.b_labels, self.test_set.b_pred_labels,
-                                self.test_set.b_stddev_map, self.test_set.b_bald_map, self.test_set.b_image_name,
-                                self.mc_samples))
+
             self.test_results.visualize_uncertainty_histograms(image_num=image_num, width=20, height=60,
                                                                info_type="uncertainty",
                                                                do_save=True, slice_range=None,
@@ -672,7 +671,6 @@ class UncertaintyMapsGenerator(object):
             filename = self.test_set.b_image_name + UncertaintyMapsGenerator.file_suffix
             filename = os.path.join(self.umap_output_dir, filename)
 
-            # np.savez(filename, stddev_map=stddev_map, bald_map=self.test_set.b_bald_map,
             np.savez(filename, stddev_slice=self.test_set.b_uncertainty_stats["stddev"],
                      bald_slice=self.test_set.b_uncertainty_stats["bald"],
                      u_threshold=np.array(self.test_set.b_uncertainty_stats["u_threshold"]),

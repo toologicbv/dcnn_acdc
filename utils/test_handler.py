@@ -3,6 +3,7 @@ import numpy as np
 from config.config import config
 import os
 import glob
+import copy
 from collections import OrderedDict
 from tqdm import tqdm
 from in_out.read_save_images import load_mhd_to_numpy, write_numpy_to_image
@@ -54,7 +55,7 @@ def eval_referral(errors_idx, uncertain_idx):
 
 def test_ensemble(test_set, exper_hdl, mc_samples=10, sample_weights=True, discard_outliers=False,
                   referral_threshold=None, ref_positives_only=False, image_range=None, verbose=False,
-                  reset_results=False,
+                  reset_results=False, save_filtered_umaps=False, save_pred_labels=False,
                   store_details=False, generate_stats=False, save_results=False, use_seed=False,
                   do_filter=False, checkpoints=None, use_uncertainty=False, u_threshold=0.01):
     """
@@ -72,6 +73,8 @@ def test_ensemble(test_set, exper_hdl, mc_samples=10, sample_weights=True, disca
     :param store_details:
     :param generate_stats:
     :param save_results:
+    :param save_filtered_umaps
+    :param save_pred_labels
     :param use_seed:
     :param do_filter:
     :param checkpoints:
@@ -115,7 +118,8 @@ def test_ensemble(test_set, exper_hdl, mc_samples=10, sample_weights=True, disca
                            referral_threshold=referral_threshold, verbose=verbose, store_details=store_details,
                            use_seed=use_seed, do_filter=do_filter, repeated_run=repeated_run,
                            use_uncertainty=use_uncertainty, u_threshold=u_threshold,
-                           ref_positives_only=ref_positives_only)
+                           ref_positives_only=ref_positives_only, save_pred_labels=save_pred_labels,
+                           save_filtered_umaps=save_filtered_umaps)
         del dcnn_model
         # if we test multiple checkpoints we don't want to store the image details multiple times
         repeated_run = True
@@ -164,6 +168,7 @@ class ACDC2017TestHandler(object):
             raise ValueError("You have to load at least train or validation files for this fold.")
         self.config = exper_config
         self.data_dir = os.path.join(self.config.root_dir, exper_config.data_dir)
+        self.filtered_umaps_dir = os.path.join(self.config.root_dir, exper_config.u_map_dir)
         self.search_mask = search_mask
         self.num_of_classes = nclass
         self.fold_ids = fold_ids
@@ -176,6 +181,7 @@ class ACDC2017TestHandler(object):
         self.labels = []
         self.spacings = []
         self.b_pred_labels = None
+        self.b_filtered_pred_labels = None
         self.b_pred_probs = None
         self.b_stddev_map = None
         self.b_bald_map = None  # [2, width, height, #slices] one map for each heart phase ES/ED
@@ -187,6 +193,8 @@ class ACDC2017TestHandler(object):
         self.b_orig_spacing = None
         self.b_seg_errors = None
         self.b_uncertainty_stats = None
+        self.b_filtered_stddev_map = None
+        self.b_filtered_umap = False
         self.referral_stats = None
         # accuracy and hausdorff measure for slices (per image)
         self.b_hd_slices = None
@@ -345,6 +353,7 @@ class ACDC2017TestHandler(object):
 
         """
         self.b_image_id = image_num
+        self.b_filtered_umap = False
         b_label = None
         self.slice_counter = -1
         self.b_image = self.images[image_num]
@@ -508,7 +517,6 @@ class ACDC2017TestHandler(object):
         :param verbose:
         :return:
         """
-        cls_lbl = ["BG", "RV", "MYO", "LV"]
         num_of_slices = self.b_labels.shape[3]  # [#classes, width, height, #slices]
         num_of_pixels_per_slice = self.b_labels.shape[1] * self.b_labels.shape[2]
         # referral statistics: 1) relative percentage of referred pixels (number of referred / positive predicted pixels
@@ -521,7 +529,8 @@ class ACDC2017TestHandler(object):
             slice_pixels_pos_es, slice_pixels_pos_ed = 0, 0
             slice_total_pixels_ref_es, slice_total_pixels_ref_ed = 0, 0
             total_pos_labels_slice_es, total_pos_labels_slice_ed = 0, 0
-            for cls in np.arange(self.num_of_classes):
+            # NOTE: we start with class 1, and skip the background class
+            for cls in np.arange(1, self.num_of_classes):
                 pred_labels_cls_es = self.b_pred_labels[cls, :, :, slice_id]
                 pred_labels_cls_ed = self.b_pred_labels[cls + self.num_of_classes, :, :, slice_id]
                 true_labels_cls_es = self.b_labels[cls, :, :, slice_id]
@@ -534,13 +543,12 @@ class ACDC2017TestHandler(object):
                 # number of errors before referral
                 errors_es = np.count_nonzero(errors_es_idx)
                 errors_ed = np.count_nonzero(errors_ed_idx)
-                # CURRENTLY ONLY FOR RV AND LV CLASS
                 if cls in apply_to_cls:
                     total_pos_labels_slice_es += num_true_labels_es
                     total_pos_labels_slice_ed += num_true_labels_ed
-                    # self.b_stddev_map [8classes, width, height, #slices]
-                    pixel_std_es = u_maps[0, cls, :, :, slice_id]
-                    pixel_std_ed = u_maps[1, cls, :, :, slice_id]
+
+                    pixel_std_es = u_maps[cls, :, :, slice_id]
+                    pixel_std_ed = u_maps[cls + self.num_of_classes, :, :, slice_id]
                     # get pixels we're uncertain about
                     uncertain_es_idx = pixel_std_es >= referral_threshold
                     # collect indices of pixels with high uncertainty AND for which we predicted a positive label
@@ -643,15 +651,16 @@ class ACDC2017TestHandler(object):
         errors_es_after = np.sum(self.referral_stats[0, :, 5, :])
         errors_ed = np.sum(self.referral_stats[1, :, 4, :])
         errors_ed_after = np.sum(self.referral_stats[1, :, 5, :])
-        abs_reduc_es = errors_es - errors_es_after
-        abs_reduc_ed = errors_ed - errors_ed_after
+        # abs_reduc_es = errors_es - errors_es_after
+        # abs_reduc_ed = errors_ed - errors_ed_after
 
         # average over classes and slices
         rel_perc_es = np.mean(self.referral_stats[0, :, 0, :])
         rel_perc_ed = np.mean(self.referral_stats[1, :, 0, :])
 
-        print("Ref% ES/ED {:.2f}/{:.2f} - Absolute error reduction "
-              "{:.2f}/{:.2f} ".format(rel_perc_es, rel_perc_ed, abs_reduc_es, abs_reduc_ed))
+        print("Ref% ES/ED {:.2f}/{:.2f} - #Errors before/after reduction "
+              "ES: {}/{} ED: {}/{}".format(rel_perc_es, rel_perc_ed, errors_es, errors_es_after,
+                                           errors_ed, errors_ed_after))
 
     def set_stddev_map(self, slice_std, u_threshold=0.01):
         """
@@ -785,146 +794,58 @@ class ACDC2017TestHandler(object):
 
         return dices, hausdff
 
-    def visualize_test_slices(self, width=8, height=6, slice_range=None):
+    def filter_u_maps(self, u_threshold=0.):
+
+        self.b_filtered_stddev_map = copy.deepcopy(self.b_stddev_map)
+        for cls in np.arange(0, self.num_of_classes * 2):
+            if cls != 0 and cls != 4:
+                u_3dmaps_cls = self.b_filtered_stddev_map[cls]
+                # set all uncertainties below threshold to zero
+                u_3dmaps_cls[u_3dmaps_cls < u_threshold] = 0
+                self.b_filtered_stddev_map[cls] = filter_connected_components(u_3dmaps_cls, threshold=u_threshold)
+
+        self.b_filtered_umap = True
+
+    def save_filtered_u_maps(self, output_dir, u_threshold):
         """
 
-        Remember that self.image is a list, containing images with shape [2, height, width, depth]
-        NOTE: self.b_pred_labels only contains the image that we just processed and NOT the complete list
-        of images as in self.images and self.labels!!!
-
-        NOTE: we only visualize 1 image (given by image_idx)
-
+        :param output_dir: is actually the exper_id e.g. 20180503_13_22_18_dcnn_mc_f2p005....
+        :param u_threshold:
+        :return:
         """
-        column_lbls = ["bg", "RV", "MYO", "LV"]
+        if u_threshold <= 0.:
+            raise ValueError("ERROR - u_threshold must be greater than zero. ({:.2f})".format(u_threshold))
+        umap_output_dir = os.path.join(self.config.root_dir, os.path.join(output_dir, config.u_map_dir))
+        if not os.path.isdir(umap_output_dir):
+            os.makedirs(umap_output_dir)
+        u_threshold = str(u_threshold).replace(".", "_")
+        file_name = self.b_image_name + "_filtered_umaps" + u_threshold + ".npz"
+        file_name = os.path.join(umap_output_dir, file_name)
+        try:
+            np.savez(file_name, filtered_umap=self.b_filtered_stddev_map)
+        except IOError:
+            print("ERROR - Unable to save filtered umaps file {}".format(file_name))
 
-        if slice_range is None:
-            slice_range = np.arange(0, self.b_image.shape[3] // 2)
+    def save_pred_labels(self, output_dir, u_threshold=0.):
+        """
 
-        _ = plt.figure(figsize=(width, height))
-        counter = 1
-        columns = self.num_of_classes + 1
-        if self.b_pred_labels is not None:
-            rows = 4
-            plot_preds = True
+        :param output_dir: is actually the exper_id e.g. 20180503_13_22_18_dcnn_mc_f2p005....
+        :param u_threshold: indicating whether we store a filtered label mask...if <> 0
+        :return: saves the predicted label maps for an image. shape [8classes, width, height, #slices]
+        """
+        pred_lbl_output_dir = os.path.join(self.config.root_dir, os.path.join(output_dir, config.pred_lbl_dir))
+        if not os.path.isdir(pred_lbl_output_dir):
+            os.makedirs(pred_lbl_output_dir)
+        if u_threshold != 0:
+            u_threshold = str(u_threshold).replace(".", "_")
+            file_name = self.b_image_name + "_filtered_pred_labels" + u_threshold + ".npz"
         else:
-            rows = 2
-            plot_preds = False
-
-        num_of_subplots = rows * 1 * columns  # +1 because the original image is included
-        if len(slice_range) * num_of_subplots > 100:
-            print("WARNING: need to limit number of subplots")
-            slice_range = slice_range[:5]
-        str_slice_range = [str(i) for i in slice_range]
-        print("Number of subplots {} columns {} rows {} slices {}".format(num_of_subplots, columns, rows,
-                                                                          ",".join(str_slice_range)))
-        for idx in slice_range:
-            # get the slice and then split ED and ES slices
-            img = self.b_image[:, :, :, idx]
-            labels = self.b_labels[:, :, :, idx]
-
-            if plot_preds:
-                pred_labels = self.b_pred_labels[:, :, :, idx]
-            img_ed = img[0]  # INDEX 0 = end-diastole image
-            img_es = img[1]  # INDEX 1 = end-systole image
-
-            ax1 = plt.subplot(num_of_subplots, columns, counter)
-            ax1.set_title("End-systole image", **config.title_font_medium)
-            offx = self.config.pad_size
-            offy = self.config.pad_size
-            # get rid of the padding that we needed for the image processing
-            img_ed = img_ed[offx:-offx, offy:-offy]
-            plt.imshow(img_ed, cmap=cm.gray)
-            plt.axis('off')
-            counter += 1
-            for cls1 in np.arange(self.num_of_classes):
-                ax2 = plt.subplot(num_of_subplots, columns, counter)
-                plt.imshow(labels[cls1], cmap=cm.gray)
-                ax2.set_title(column_lbls[cls1] + " (true labels)", **config.title_font_medium)
-                plt.axis('off')
-                if plot_preds:
-                    ax3 = plt.subplot(num_of_subplots, columns, counter + columns)
-                    plt.imshow(pred_labels[cls1], cmap=cm.gray)
-                    plt.axis('off')
-                    ax3.set_title(column_lbls[cls1] + " (pred labels)", **config.title_font_medium)
-                counter += 1
-
-            cls1 += 1
-            counter += columns
-            ax2 = plt.subplot(num_of_subplots, columns, counter)
-            ax2.set_title("End-diastole image", **config.title_font_medium)
-            img_es = img_es[offx:-offx, offy:-offy]
-            plt.imshow(img_es, cmap=cm.gray)
-            plt.axis('off')
-            counter += 1
-            for cls2 in np.arange(self.num_of_classes):
-                ax4 = plt.subplot(num_of_subplots, columns, counter)
-                plt.imshow(labels[cls1 + cls2], cmap=cm.gray)
-                ax4.set_title(column_lbls[cls2] + " (true labels)", **config.title_font_medium)
-                plt.axis('off')
-                if plot_preds:
-                    ax5 = plt.subplot(num_of_subplots, columns, counter + columns)
-                    plt.imshow(pred_labels[cls1 + cls2], cmap=cm.gray)
-                    ax5.set_title(column_lbls[cls2] + " (pred labels)", **config.title_font_medium)
-                    plt.axis('off')
-                counter += 1
-
-            counter += columns
-        plt.show()
-
-    def visualize_uncertainty(self, width=12, height=12, slice_range=None):
-
-        column_lbls = ["bg", "RV", "MYO", "LV"]
-        if slice_range is None:
-            slice_range = np.arange(0, self.b_image.shape[3] // 2)
-
-        fig = plt.figure(figsize=(width, height))
-        counter = 1
-        columns = self.num_of_classes + 1  # currently only original image and uncertainty map
-        rows = 2
-        num_of_slices = len(slice_range)
-        num_of_subplots = rows * num_of_slices * columns  # +1 because the original image is included
-        str_slice_range = [str(i) for i in slice_range]
-        print("Number of subplots {} columns {} rows {} slices {}".format(num_of_subplots, columns, rows,
-                                                                          ",".join(str_slice_range)))
-        for idx in slice_range:
-            # get the slice and then split ED and ES slices
-            image = self.b_image[:, :, :, idx]
-            true_labels = self.b_labels[:, :, :, idx]
-            pred_labels = self.b_pred_labels[:, :, :, idx]
-            pred_probs = self.b_pred_probs[:, :, :, idx]
-            uncertainty = self.b_stddev_map[:, :, :, idx]
-            for phase in np.arange(2):
-                
-                img = image[phase]  # INDEX 0 = end-systole image
-                ax1 = plt.subplot(num_of_subplots, columns, counter)
-                if phase == 0:
-                    ax1.set_title("End-systole image", **config.title_font_medium)
-                else:
-                    ax1.set_title("End-diastole image", **config.title_font_medium)
-                offx = self.config.pad_size
-                offy = self.config.pad_size
-                # get rid of the padding that we needed for the image processing
-                img = img[offx:-offx, offy:-offy]
-                plt.imshow(img, cmap=cm.gray)
-                plt.axis('off')
-                counter += 1
-                # we use the cls_offset to plot ES and ED images in one loop (phase variable)
-                cls_offset = phase * self.num_of_classes
-                for cls in np.arange(self.num_of_classes):
-                    std = uncertainty[cls + cls_offset]
-                    ax2 = plt.subplot(num_of_subplots, columns, counter)
-                    plt.imshow(std, cmap=cm.coolwarm)
-                    ax2.set_title(r"$\sigma_{{pred}}$ {}".format(column_lbls[cls]), **config.title_font_medium)
-                    plt.axis('off')
-                    counter += 1
-                    true_cls_labels = true_labels[cls + cls_offset]
-                    pred_cls_labels = pred_labels[cls + cls_offset]
-                    errors = true_cls_labels != pred_cls_labels
-                    ax3 = plt.subplot(num_of_subplots, columns, counter + self.num_of_classes)
-                    ax3.set_title("Errors {}".format(column_lbls[cls]), **config.title_font_medium)
-                    plt.imshow(errors, cmap=cm.gray)
-                    plt.axis('off')
-                counter += self.num_of_classes + 1  # move counter forward in subplot
+            file_name = self.b_image_name + "_pred_labels.npz"
+        file_name = os.path.join(pred_lbl_output_dir, file_name)
+        try:
+            np.savez(file_name, filtered_pred_label=self.b_pred_labels)
+        except IOError:
+            print("ERROR - Unable to save predicted labels file {}".format(file_name))
 
     def save_batch_img_to_files(self, slice_range=None, save_dir=None, wo_padding=True):
 
