@@ -99,6 +99,7 @@ def do_parse_args():
     parser.add_argument('--chkpnt', action='store_true')
     parser.add_argument('--guided_train', action="store_true", help="train extra on slice outliers.")
     parser.add_argument('--quick_run', action='store_true')
+    parser.add_argument('--incomplete_slices', action='store_true')
     parser.add_argument('--chkpnt_freq', type=int, default=100, metavar='N',
                         help='Checkpoint frequency (saving model state) (default: 100)')
 

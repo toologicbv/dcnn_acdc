@@ -50,6 +50,59 @@ def normalize_image(img, axis=None):
     return img
 
 
+def detect_incomplete_slices(labels_es, labels_ed):
+    es_rv_count, es_myo_count, es_lv_count = np.count_nonzero(labels_es == config.class_lbl_RV), \
+                                             np.count_nonzero(labels_es == config.class_lbl_myo), \
+                                             np.count_nonzero(labels_es == config.class_lbl_LV)
+    ed_rv_count, ed_myo_count, ed_lv_count = np.count_nonzero(labels_ed == config.class_lbl_RV), \
+                                             np.count_nonzero(labels_ed == config.class_lbl_myo), \
+                                             np.count_nonzero(labels_ed == config.class_lbl_LV)
+    high_incompleteness_es = False
+    incomplete_es = False
+    high_incompleteness_ed = False
+    incomplete_ed = False
+    if es_rv_count == 0 or es_myo_count == 0 or es_lv_count == 0:
+        incomplete_es = True
+        if (es_rv_count == 0 and es_myo_count == 0) or (es_rv_count == 0 and es_lv_count == 0):
+            high_incompleteness_es = True
+
+    if ed_rv_count == 0 or ed_myo_count == 0 or ed_lv_count == 0:
+        incomplete_ed = True
+        if (ed_rv_count == 0 and ed_myo_count == 0) or (ed_rv_count == 0 and ed_lv_count == 0):
+            high_incompleteness_ed = True
+
+    return incomplete_es, high_incompleteness_es, incomplete_ed, high_incompleteness_ed
+
+
+def compute_missing_stats(labels_es, labels_ed, image_stats, add_c=1):
+    es_rv_count, es_myo_count, es_lv_count = np.count_nonzero(labels_es == config.class_lbl_RV), \
+                                             np.count_nonzero(labels_es == config.class_lbl_myo), \
+                                             np.count_nonzero(labels_es == config.class_lbl_LV)
+    ed_rv_count, ed_myo_count, ed_lv_count = np.count_nonzero(labels_ed == config.class_lbl_RV), \
+                                             np.count_nonzero(labels_ed == config.class_lbl_myo), \
+                                             np.count_nonzero(labels_ed == config.class_lbl_LV)
+    if es_rv_count == 0:
+        image_stats["es_wo_rv"] += add_c
+    if es_myo_count == 0:
+        image_stats["es_wo_myo"] += add_c
+    if es_lv_count == 0:
+        image_stats["es_wo_lv"] += add_c
+    if es_rv_count != 0 and es_myo_count != 0 and es_lv_count != 0:
+        image_stats["es_all"] += add_c
+    if es_rv_count == 0 and es_myo_count == 0 and es_lv_count == 0:
+        image_stats["es_wo_all"] += add_c
+    if ed_rv_count == 0:
+        image_stats["ed_wo_rv"] += add_c
+    if ed_myo_count == 0:
+        image_stats["ed_wo_myo"] += add_c
+    if ed_lv_count == 0:
+        image_stats["ed_wo_lv"] += add_c
+    if ed_rv_count != 0 and ed_myo_count != 0 and ed_lv_count != 0:
+        image_stats["ed_all"] += add_c
+    if ed_rv_count == 0 and ed_myo_count == 0 and ed_lv_count == 0:
+        image_stats["ed_wo_all"] += add_c
+
+
 class BaseImageDataSet(Dataset):
 
     def __init__(self):
@@ -101,11 +154,12 @@ class ACDC2017DataSet(BaseImageDataSet):
     new_voxel_spacing = 1.4
 
     def __init__(self, exper_config, search_mask=None, nclass=4, load_func=load_mhd_to_numpy,
-                 fold_ids=[0], preprocess=False, debug=False, do_augment=True):
+                 fold_ids=[0], preprocess=False, debug=False, do_augment=True, incomplete_only=False):
         super(BaseImageDataSet, self).__init__()
         self.data_dir = os.path.join(exper_config.root_dir, exper_config.data_dir)
         self.rel_image_path = None
         self.rel_label_path = None
+        self.incomplete_only = incomplete_only
         self.search_mask = search_mask
         self.num_of_classes = nclass
         self.fold_ids = fold_ids
@@ -115,6 +169,8 @@ class ACDC2017DataSet(BaseImageDataSet):
         self.do_augment = do_augment
         self.num_of_augmentations = 3  # four rotations 90, 180, 270 degrees of rotations
         self.image_names = []
+        self.incomplete_stats = {"es_wo_rv": 0, "es_wo_myo": 0, "es_wo_lv": 0, "es_wo_all": 0, "es_all": 0,
+                                 "ed_wo_rv": 0, "ed_wo_myo": 0, "ed_wo_lv": 0, "ed_wo_all": 0, "ed_all": 0}
         # IMPORTANT: this is NOT the total number of slices in train_images or val_images, but in fact the number
         # of patients or files loaded from disk (where ES/ED files (2) count as 1)!
         self.num_of_images = 0
@@ -254,10 +310,13 @@ class ACDC2017DataSet(BaseImageDataSet):
         self.val_num_slices = len(self.val_images)
         self.img_stats *= 1./self.num_of_images
         self.img_stats = self.img_stats.astype(np.int16)
+        if self.incomplete_only:
+            print("WARNING - Loading only images WITH INCOMPLETE slices (missing RV/MYO or LV)")
         print("INFO - Using folds {} - loaded {} files: {} slices in train set, {} slices in validation set".format(
             self.fold_ids, files_loaded, self.train_num_slices, self.val_num_slices))
         print("INFO - Mean width/height/#slices per image {}/{}/{}".format(self.img_stats[0], self.img_stats[1],
                                                                            self.img_stats[2]))
+        self.show_image_stats()
 
     def _augment_data(self, image_ed, label_ed, image_es, label_es, is_train=False, img_id=None):
         """
@@ -299,15 +358,36 @@ class ACDC2017DataSet(BaseImageDataSet):
                 lbl_es_slice = np.rot90(lbl_es_slice)
 
         # for each image-slice rotate the img four times. We're doing that for all three orientations
+
         for z in range(image_ed.shape[2]):
             image_ed_slice = image_ed[:, :, z]
             label_ed_slice = label_ed[:, :, z]
             image_es_slice = image_es[:, :, z]
             label_es_slice = label_es[:, :, z]
+
             # Note: z is the sliceID. PLEASE also note that we're constructing a tuple of imgID and sliceID
             # that we'll store for each image patch
-            rotate_slice(image_ed_slice, label_ed_slice, image_es_slice, label_es_slice, is_train,
-                         img_slice_id=tuple((img_id, z)))
+            if self.incomplete_only:
+                incomplete_es, high_incomplete_es, incomplete_ed, high_incomplete_ed = \
+                    detect_incomplete_slices(label_es_slice, label_ed_slice)
+                if incomplete_es or high_incomplete_es or incomplete_ed or high_incomplete_ed:
+                    if high_incomplete_es:
+                        num_augs = 8
+                    elif incomplete_es:
+                        num_augs = 4
+                    elif high_incomplete_ed:
+                        num_augs = 3
+                    else:
+                        num_augs = 1
+                    for _ in range(num_augs):
+                        rotate_slice(image_ed_slice, label_ed_slice, image_es_slice, label_es_slice, is_train,
+                                     img_slice_id=tuple((img_id, z)))
+                    compute_missing_stats(label_es_slice, label_ed_slice, self.incomplete_stats, add_c=num_augs)
+
+            else:
+                compute_missing_stats(label_es_slice, label_ed_slice, self.incomplete_stats)
+                rotate_slice(image_ed_slice, label_ed_slice, image_es_slice, label_es_slice, is_train,
+                             img_slice_id=tuple((img_id, z)))
 
     def _resample_images(self, file_list):
         files_loaded = 0
@@ -363,6 +443,25 @@ class ACDC2017DataSet(BaseImageDataSet):
         else:
             return self.val_labels
 
+    def show_image_stats(self):
+        total_num_of_slices = (self.get_num_of_slices(train=True) + self.get_num_of_slices(train=False)) / 4.
+        print("---------------------- Image incompleteness statistics -------------------------")
+        print("ES: slices missing RV/MYO/LV {}/{}/{} ({:.2f}/{:.2f}/{:.2f}) "
+              "/ complete {} wo-all {}".format(self.incomplete_stats["es_wo_rv"], self.incomplete_stats["es_wo_myo"],
+                                               self.incomplete_stats["es_wo_lv"],
+                                               self.incomplete_stats["es_wo_rv"]/total_num_of_slices,
+                                               self.incomplete_stats["es_wo_myo"]/total_num_of_slices,
+                                               self.incomplete_stats["es_wo_lv"]/total_num_of_slices,
+                                               self.incomplete_stats["es_all"],
+                                               self.incomplete_stats["es_wo_all"]))
+        print("ED: slices missing RV/MYO/LV {}/{}/{} ({:.2f}/{:.2f}/{:.2f}) "
+              "/ complete {} wo-all {}".format(self.incomplete_stats["ed_wo_rv"], self.incomplete_stats["ed_wo_myo"],
+                                               self.incomplete_stats["ed_wo_lv"],
+                                               self.incomplete_stats["ed_wo_rv"] / total_num_of_slices,
+                                               self.incomplete_stats["ed_wo_myo"] / total_num_of_slices,
+                                               self.incomplete_stats["ed_wo_lv"] / total_num_of_slices,
+                                               self.incomplete_stats["ed_all"],
+                                               self.incomplete_stats["ed_wo_all"]))
 
 # dataset = ACDC2017DataSet(exper_config=config, search_mask=config.dflt_image_name + ".mhd", fold_ids=[0],
 #                          preprocess=False, debug=True)

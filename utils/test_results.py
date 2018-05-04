@@ -10,7 +10,7 @@ from utils.dice_metric import dice_coefficient
 from utils.medpy_metrics import hd
 import matplotlib.pyplot as plt
 from matplotlib import cm
-from common.common import datestr, to_rgb1a, set_error_pixels
+from common.common import datestr, to_rgb1a, set_error_pixels, create_mask_uncertainties
 import copy
 from scipy.stats import wilcoxon, ttest_ind, mannwhitneyu
 from skimage import segmentation
@@ -1012,8 +1012,8 @@ class TestResults(object):
                 search_path = os.path.join(self.umap_dir,
                                            image_name + "*" + "_filtered_cls_umaps" + referral_threshold + ".npz")
                 filtered_cls_std_map = load_referral_umap(search_path, per_class=True)
-                filtered_add_std_map_es = np.max(filtered_cls_std_map[:4], axis=0)
-                filtered_add_std_map_ed = np.max(filtered_cls_std_map[4:], axis=0)
+                # filtered_add_std_map_es = np.max(filtered_cls_std_map[:4], axis=0)
+                # filtered_add_std_map_ed = np.max(filtered_cls_std_map[4:], axis=0)
 
                 search_path = os.path.join(self.umap_dir,
                                            image_name + "*" + "_filtered_umaps" + referral_threshold + ".npz")
@@ -1045,25 +1045,26 @@ class TestResults(object):
             if pred_labels_wo_sampling is not None:
                 print("---- pred_labels_wo_sampling is not none ------")
                 mask = pred_labels_wo_sampling == 0
-                bg1 = pred_labels_wo_sampling[0] == 1
-                bg0 = pred_labels_wo_sampling[0] == 0
-                pred_labels_wo_sampling[0][bg1] = 0
-                pred_labels_wo_sampling[0][bg0] = 1
-                bg1 = pred_labels_wo_sampling[4] == 1
-                bg0 = pred_labels_wo_sampling[4] == 0
-                pred_labels_wo_sampling[4][bg1] = 0
-                pred_labels_wo_sampling[4][bg0] = 1
-                overall_mask_es = np.sum(pred_labels_wo_sampling[:4], axis=0) == 0
-                overall_mask_ed = np.sum(pred_labels_wo_sampling[4:], axis=0) == 0
-
+                overall_mask = create_mask_uncertainties(pred_labels_wo_sampling)
+                overall_mask_es = overall_mask[0]
+                overall_mask_ed = overall_mask[1]
             else:
                 mask = pred_labels == 0
+                overall_mask = create_mask_uncertainties(pred_labels)
+                overall_mask_es = overall_mask[0]
+                overall_mask_ed = overall_mask[1]
 
             filtered_std_map[0][overall_mask_es] = 0.
             filtered_std_map[1][overall_mask_ed] = 0.
-            filtered_add_std_map_es[overall_mask_es] = 0.
-            filtered_add_std_map_ed[overall_mask_ed] = 0.
+
+            # filtered_add_std_map_es[overall_mask_es] = 0.
+            # filtered_add_std_map_ed[overall_mask_ed] = 0.
             filtered_cls_std_map[mask] = 0
+
+        es_count_nonzero = np.count_nonzero(filtered_std_map[0], axis=(0, 1))
+        ed_count_nonzero = np.count_nonzero(filtered_std_map[1], axis=(0, 1))
+        total_uncertainty_per_slice = es_count_nonzero + ed_count_nonzero
+        print(total_uncertainty_per_slice)
         if errors_only or not plot_detailed_hists:
             image_probs = None
         else:
@@ -1191,10 +1192,10 @@ class TestResults(object):
                                                                     slice_true_labels, cls_offset,
                                                                     slice_stddev, std_threshold=0.)
                     if phase == 0:
-                        unc_pixels = filtered_add_std_map_es[:, :, img_slice] != 0
+                        unc_pixels = filtered_std_map[0, :, :, img_slice] != 0
                     else:
-                        unc_pixels = filtered_add_std_map_ed[:, :, img_slice] != 0
-                    rgb_img_ref_pred[unc_pixels, :] = [0, 0, 204]
+                        unc_pixels = filtered_std_map[1, :, :, img_slice] != 0
+                    # rgb_img_ref_pred[unc_pixels, :] = [0, 0, 204]
                     ax_pred_ref.text(20, 20, 'red: RV ({}), yellow: Myo ({}), '
                                          'green: LV ({})'.format(cls_errors[1], cls_errors[2], cls_errors[3]),
                                  bbox={'facecolor': 'white', 'pad': 18})
@@ -1219,7 +1220,9 @@ class TestResults(object):
                     fig.colorbar(ax4plot, ax=ax4, fraction=0.046, pad=0.04)
                     # cb = Colorbar(ax=ax4, mappable=ax4plot, orientation='vertical', ticklocation='right')
                     # cb.set_label(r'Colorbar !', labelpad=10)
-                    ax4.set_title("Slice {} {}: Additive STDDEV u-map".format(img_slice+1, str_phase),
+                    total_uncertainty = np.count_nonzero(slice_bald)
+                    ax4.set_title("Slice {} {}: Max STDDEV u-map (#u={})".format(img_slice+1, str_phase,
+                                                                                                 total_uncertainty),
                                   **config.title_font_medium)
                     plt.axis('off')
 
@@ -1228,12 +1231,12 @@ class TestResults(object):
                     # get the stddev value for the first 4 or last 4 classes (ES/ED) and average over classes (dim0)
                     if phase == 0:
                         mean_slice_stddev = np.mean(slice_stddev[:half_classes], axis=0)
-                        mean_slice_stddev = filtered_add_std_map_es[:, :, img_slice]
+                        # mean_slice_stddev = filtered_add_std_map_es[:, :, img_slice]
                     else:
                         mean_slice_stddev = np.mean(slice_stddev[half_classes:], axis=0)
-                        mean_slice_stddev = filtered_add_std_map_ed[:, :, img_slice]
+                        # mean_slice_stddev = filtered_add_std_map_ed[:, :, img_slice]
 
-                    num_uncertain_pixels = np.count_nonzero(mean_slice_stddev)
+                    total_uncertainty = np.count_nonzero(mean_slice_stddev)
                     max_mean_stddev = np.max(mean_slice_stddev)
                     # print("Phase {} row {} - MEAN STDDEV heatmap".format(phase, row))
                     ax4a = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
@@ -1242,7 +1245,7 @@ class TestResults(object):
                     ax4a.set_aspect('auto')
                     fig.colorbar(ax4aplot, ax=ax4a, fraction=0.046, pad=0.04)
                     ax4a.set_title("Slice {} {}: MEAN stddev-values (#u={})".format(img_slice + 1, str_phase,
-                                                                                    num_uncertain_pixels),
+                                                                                    total_uncertainty),
                                    **config.title_font_medium)
                     plt.axis('off')
 

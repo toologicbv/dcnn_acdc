@@ -1,11 +1,45 @@
 from config.config import config
 import logging
 import os
+import copy
 from datetime import datetime
 import numpy as np
 
 import torch
 from pytz import timezone
+
+
+def create_mask_uncertainties(labels):
+    """
+    We need a mask to filter out all uncertainties for which we don't predict a positive label.
+    This makes referral more sparse.
+    But the background class has a vast amount of true positives, hence we switch for this class the labels
+    from 0 to 1 and vice versa so that the objects (LV, RV, myo) get the positive labels instead of the real bg.
+
+    :param labels: contains predicted labels, shape can be 3 or 4 dim:
+            [8classes, width, height] or with additional last dim of #slices. both should work
+    :return: return a mask for ES and ED [2, width, height] plus optional #slices in last dim
+    """
+    # assuming labels has shape [8classes, width, height, with or without slices]
+    num_of_classes = labels.shape[0] / 2
+    mask_es, mask_ed = None, None
+    # first flip background labels
+    cp_labels = copy.deepcopy(labels)
+    for phase in range(2):
+        cls_offset = phase * num_of_classes
+        # switch labels for bg class only
+        # bg0 = cp_labels[0 + cls_offset] == 0
+        # bg1 = cp_labels[0 + cls_offset] == 1
+        # cp_labels[0 + cls_offset][bg0] = 1
+        # cp_labels[0 + cls_offset][bg1] = 0
+
+        if phase == 0:
+            mask_es = np.sum(cp_labels[1:num_of_classes], axis=0) == 0
+        else:
+            mask_ed = np.sum(cp_labels[num_of_classes+1:], axis=0) == 0
+
+    del cp_labels
+    return np.concatenate((np.expand_dims(mask_es, axis=0), np.expand_dims(mask_ed, axis=0))).astype(np.bool)
 
 
 def to_rgb1a(im):

@@ -403,13 +403,9 @@ class ExperimentHandler(object):
 
         if use_uncertainty:
             # u_maps_image shape [8classes, width, height, #slices]
-            if u_maps_image.shape[0] == 8:
-                # referral with u-maps for each class
-                test_set.filter_referrals(u_maps=u_maps_image, ref_positives_only=ref_positives_only,
-                                          referral_threshold=referral_threshold, verbose=False)
-            else:
-                # referral with one u-map per phase ES/ED
-                pass
+            # referral with u-maps for each class
+            test_set.filter_referrals(u_maps=u_maps_image, ref_positives_only=ref_positives_only,
+                                      referral_threshold=referral_threshold)
             test_accuracy_ref, test_hd_ref, seg_errors_ref = test_set.get_accuracy(compute_hd=compute_hd,
                                                                                    compute_seg_errors=True,
                                                                                    do_filter=False)
@@ -688,12 +684,11 @@ class ExperimentHandler(object):
         for patient_id, raw_u_map in self.u_maps.iteritems():
             num_of_phases = raw_u_map.shape[0]
             num_of_classes = raw_u_map.shape[1]
-            if verbose:
-                print("INFO - Creating filtered u-map-{:.2f} for {}".format(u_threshold, patient_id))
             # Yes I know, completely inconsistent the output is [8classes, width, height, #slices] instead of [2, 4...]
             filtered_cls_stddev_map = np.zeros((num_of_phases * num_of_classes, raw_u_map.shape[2], raw_u_map.shape[3],
                                                 raw_u_map.shape[4]))
-            # here we store the maps per phase ES/ED. We just add all values per class, for now
+            # here we store the maps per phase ES/ED taking the max uncertainty over 4 classes after we've filtered
+            # the u-maps per class by means of 6 connectivity components.
             filtered_stddev_map = np.zeros((num_of_phases, raw_u_map.shape[2], raw_u_map.shape[3], raw_u_map.shape[4]))
             for phase in np.arange(num_of_phases):
                 cls_offset = phase * num_of_classes
@@ -704,11 +699,16 @@ class ExperimentHandler(object):
                     u_3dmaps_cls[u_3dmaps_cls < u_threshold] = 0
                     filtered_cls_stddev_map[cls + cls_offset] = filter_connected_components(u_3dmaps_cls,
                                                                                                 threshold=u_threshold)
-                    filtered_stddev_map[phase] += raw_u_map[phase, cls]
-                filtered_stddev_map[phase] = filter_connected_components(filtered_stddev_map[phase],
-                                                                         threshold=u_threshold)
+                    # filtered_stddev_map[phase] += raw_u_map[phase, cls]
+                # filtered_stddev_map[phase] = filter_connected_components(filtered_stddev_map[phase],
+                #                                                         threshold=u_threshold)
+                # Taking the maximum uncertainty per pixel over the 4 classes (for ES and ED)
+                if phase == 0:
+                    filtered_stddev_map[phase] = np.max(filtered_cls_stddev_map[:num_of_classes], axis=0)
+                else:
+                    filtered_stddev_map[phase] = np.max(filtered_cls_stddev_map[num_of_classes:], axis=0)
 
-            # save map
+                # save map
             umap_output_dir = os.path.join(self.exper.config.root_dir, os.path.join(self.exper.output_dir,
                                                                                     config.u_map_dir))
             if not os.path.isdir(umap_output_dir):
@@ -726,6 +726,9 @@ class ExperimentHandler(object):
                 np.savez(file_name, filtered_umap=filtered_stddev_map)
             except IOError:
                 print("ERROR - Unable to save filtered umaps file {}".format(file_name))
+        if verbose:
+            print("INFO - Creating {} filtered u-map-{:.2f} in {}".format(len(self.u_maps.keys()),
+                                                                          u_threshold, umap_output_dir))
         # we don't need this object, to big to keep
         self.u_maps = None
         del filtered_cls_stddev_map

@@ -12,11 +12,8 @@ from utils.img_sampling import resample_image_scipy
 from torch.autograd import Variable
 from utils.medpy_metrics import hd
 from utils.post_processing import filter_connected_components
+from common.common import create_mask_uncertainties
 import torch
-if "/home/jogi/.local/lib/python2.7/site-packages" in sys.path:
-    sys.path.remove("/home/jogi/.local/lib/python2.7/site-packages")
-import matplotlib.pyplot as plt
-from matplotlib import cm
 from scipy.ndimage.measurements import label
 from scipy.ndimage.morphology import generate_binary_structure
 
@@ -98,7 +95,7 @@ def test_ensemble(test_set, exper_hdl, mc_samples=10, sample_weights=True, disca
         if referral_threshold is None:
             raise ValueError("Error - you need to specify the referral threshold when using uncertainty.")
         print("WARNING - Using uncertainty maps to refer pixels. Threshold {:.2f}".format(referral_threshold))
-        exper_hdl.get_referral_maps(u_threshold=referral_threshold)
+        exper_hdl.get_referral_maps(u_threshold=referral_threshold, per_class=False)
     if discard_outliers:
         # print("INFO - Using {:.2f} as uncertainty threshold".format(referral_threshold))
         print("WARNING - Using outlier statistics.")
@@ -506,7 +503,7 @@ class ACDC2017TestHandler(object):
                         np.array([total_uncertainty, t_num_pixel_uncertain, t_num_pixel_uncertain_above_tre,
                                   num_of_objects])
 
-    def filter_referrals(self, u_maps, referral_threshold=0., verbose=True, ref_positives_only=False,
+    def filter_referrals(self, u_maps, referral_threshold=0., ref_positives_only=False,
                          apply_to_cls=[1, 2, 3]):
         """
         Based on the uncertainty maps (probably produced before inference time) we "refer" pixels with
@@ -527,6 +524,14 @@ class ACDC2017TestHandler(object):
         #                      2) error reduction (%) #reduced errors / #segmentation errors
         #                      3) Number of true, positive labels (ground truth)
         self.referral_stats = np.zeros((2, self.num_of_classes - 1,  12, num_of_slices))
+        # this version assumes that u_maps has shape [2, width, height, #slices]
+        if ref_positives_only:
+            # returns mask for ES and ED [2, width, height, #slices]
+            ref_positive_mask = create_mask_uncertainties(self.b_pred_labels)
+            # set all uncertainties (pixels) to zero where we didn't predict a positive label
+            u_maps[0][ref_positive_mask[0]] = 0
+            u_maps[1][ref_positive_mask[1]] = 0
+
         total_pixels_positive, total_pixels_referred = 0, 0
         for slice_id in np.arange(num_of_slices):
             slice_uncertainty_idx_es, slice_uncertainty_idx_ed = None, None
@@ -551,29 +556,24 @@ class ACDC2017TestHandler(object):
                     total_pos_labels_slice_es += num_true_labels_es
                     total_pos_labels_slice_ed += num_true_labels_ed
 
-                    # pixel_std_es = u_maps[cls, :, :, slice_id]
-                    # pixel_std_ed = u_maps[cls + self.num_of_classes, :, :, slice_id]
-                    pixel_std_es = np.max(u_maps[:self.num_of_classes, :, :, slice_id], axis=0)
-                    pixel_std_ed = np.max(u_maps[self.num_of_classes:, :, :, slice_id], axis=0)
+                    pixel_std_es = u_maps[0, :, :, slice_id]
+                    pixel_std_ed = u_maps[1, :, :, slice_id]
                     # get pixels we're uncertain about
                     uncertain_es_idx = pixel_std_es >= referral_threshold
                     # collect indices of pixels with high uncertainty AND for which we predicted a positive label
                     if ref_positives_only:
-
                         pred_labels_pos_idx_es = pred_labels_cls_es == 1
                         c = np.count_nonzero(pred_labels_pos_idx_es)
-
+                        uncertain_es_idx = np.logical_and(uncertain_es_idx, pred_labels_pos_idx_es)
                         total_pixels_positive += c
                         slice_pixels_pos_es += c
                         t_unc_total = np.count_nonzero(uncertain_es_idx)
-                        uncertain_es_idx = np.logical_and(uncertain_es_idx, pred_labels_pos_idx_es)
                         t_unc_pos = np.count_nonzero(uncertain_es_idx)
-                        if slice_id == 4 and (cls == 3 or cls == 2):
-                            print("Slice {} Class {}: errors {} #true_pos {} #pos_labels {} "
-                                  "#u-pixels {} #pos+unc-pixels {}".format(slice_id+1, cls, errors_es, num_true_labels_es,
-                                                                                          c, t_unc_total, t_unc_pos))
-                    else:
-                        pass
+                        # if slice_id == 4 and (cls == 3 or cls == 2):
+                        # if slice_id == 0 and (cls == 1 or cls == 1):
+                        #    print("Slice {} ES Class {}: errors {} #true_pos {} #pos_labels {} "
+                        #          "#u-pixels {} #pos+unc-pixels {}".format(slice_id+1, cls, errors_es, num_true_labels_es,
+                        #                                                                  c, t_unc_total, t_unc_pos))
                     # which of the uncertain pixels belong to the ones we misclassified? True positives ES
                     f1_es, pr_es, rc_es, true_pos_es, false_pos_es, false_neg_es = eval_referral(errors_es_idx,
                                                                                                  uncertain_es_idx)
@@ -586,9 +586,15 @@ class ACDC2017TestHandler(object):
                     if ref_positives_only:
                         pred_labels_pos_idx_ed = pred_labels_cls_ed == 1
                         c = np.count_nonzero(pred_labels_pos_idx_ed)
+                        uncertain_ed_idx = np.logical_and(uncertain_ed_idx, pred_labels_pos_idx_ed)
                         total_pixels_positive += c
                         slice_pixels_pos_ed += c
-                        uncertain_ed_idx = np.logical_and(uncertain_ed_idx, pred_labels_pos_idx_ed)
+                        t_unc_total = np.count_nonzero(uncertain_ed_idx)
+                        t_unc_pos = np.count_nonzero(uncertain_ed_idx)
+                        # if slice_id == 0 and (cls == 1 or cls == 1):
+                        #    print("Slice {} ED Class {}: errors {} #true_pos {} #pos_labels {} "
+                        #          "#u-pixels {} #pos+unc-pixels {}".format(slice_id+1, cls, errors_ed, num_true_labels_ed,
+                        #                                                                  c, t_unc_total, t_unc_pos))
                     f1_ed, pr_ed, rc_ed, true_pos_ed, false_pos_ed, false_neg_ed = eval_referral(errors_ed_idx,
                                                                                                  uncertain_ed_idx)
                     num_pixel_above_threshold_ed = np.count_nonzero(uncertain_ed_idx)
