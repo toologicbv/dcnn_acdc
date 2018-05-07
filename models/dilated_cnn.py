@@ -16,7 +16,8 @@ from common.losses import compute_brier_score
 class BaseDilated2DCNN(nn.Module):
 
     def __init__(self, architecture, optimizer=torch.optim.Adam, lr=1e-4, weight_decay=0.,
-                 use_cuda=False, verbose=True, cycle_length=0, loss_function="softdice"):
+                 use_cuda=False, verbose=True, cycle_length=0, loss_function="softdice",
+                 use_reg_loss=False):
         super(BaseDilated2DCNN, self).__init__()
         self.architecture = architecture
         self.use_cuda = use_cuda
@@ -34,8 +35,10 @@ class BaseDilated2DCNN(nn.Module):
 
         self.np_dice_losses = None
         self.np_dice_coeffs = None
+        self.np_reg_loss = None
         self.hausdorff_list = None
         self.loss_function = loss_function
+        self.use_regression_loss = use_reg_loss
 
         if self.use_cuda:
             self.cuda()
@@ -99,27 +102,37 @@ class BaseDilated2DCNN(nn.Module):
 
         return out
 
-    def get_loss(self, predictions, labels, zooms=None, compute_hd=False):
+    def get_loss(self, predictions, labels, zooms=None, compute_hd=False, num_of_labels_per_class=None):
         """
             we need to reshape the tensors because CrossEntropy expects 2D tensor (N, C) where C is num of classes
             the input tensor is in our case [batch_size, 2 * num_of_classes, height, width]
             the labels are                  [batch_size, 2 * num_of_classes, height, width]
 
+            When computing a kind of regression loss for the pixels we use objects:
+            num_of_labels_per_class: [batch_size, 8classes]
+            object contains the number of pixels for the specific slice per class
+
             loss_func is: (1) softdice=soft_dice_score or (2) brier=compute_brier_score
         """
+        batch_size = labels.size(0)
         num_of_classes = labels.size(1)
         half_classes = int(num_of_classes / 2)
         losses = Variable(torch.FloatTensor(num_of_classes))
         dices = Variable(torch.FloatTensor(num_of_classes))
+        pixel_reg_loss = Variable(torch.FloatTensor(batch_size, num_of_classes))
         # brier_score = Variable(torch.FloatTensor(num_of_classes))
         self.hausdorff_list = []
+        pred_num_of_labels = Variable(torch.zeros((batch_size, num_of_classes)))
         if self.use_cuda:
             losses = losses.cuda()
+            pred_num_of_labels = pred_num_of_labels.cuda()
+            pixel_reg_loss = pixel_reg_loss.cuda()
 
         # determine the predicted labels. IMPORTANT do this separately for each ES and ED which means
         # we have to split the network output on dim1 in to parts of size 4
         _, pred_labels_es = torch.max(predictions[:, 0:num_of_classes / 2, :, :], dim=1)
         _, pred_labels_ed = torch.max(predictions[:, num_of_classes / 2:num_of_classes, :, :], dim=1)
+
         for cls in np.arange(labels.size(1)):
             if self.loss_function == "softdice":
                 losses[cls] = soft_dice_score(predictions[:, cls, :, :], labels[:, cls, :, :])
@@ -135,11 +148,23 @@ class BaseDilated2DCNN(nn.Module):
             else:
                 # it looks kind of awkward but, cls stays in the range [0-7] but the two tensors pred_labels_es
                 # and pred_labels_ed contain class values each from [0-3] and not from [0-7]. Hence for the ED
-                # labels (which are situated in the second part of tensor "label" which acually has size 8 in dim1)
+                # labels (which are situated in the second part of tensor "label" which actually has size 8 in dim1)
                 # we make sure the comparison accounts for this (cls - num_of_classes / 2)
                 pred_labels = pred_labels_ed == (cls - half_classes)
 
             dices[cls] = dice_coefficient(pred_labels, labels[:, cls, :, :])
+            # Compute an adhoc regression loss for the num of pixels belonging to a certain seg-class
+            if self.use_regression_loss:
+                if cls != config.class_lbl_background and cls != half_classes:
+                    # computing the number of predicted pixels per class. pred_labels should have shape
+                    # [batch_size, width, height] with True values containing. we first need to flatten the
+                    # tensor to [batch_size, rest] and then sum over the columns (so we get #nonzeros per row/batch)
+                    pred_num_of_labels[:, cls] = torch.sum(pred_labels.view(batch_size, -1), dim=1)
+                    pixel_reg_loss[:, cls] = (pred_num_of_labels[:, cls] - num_of_labels_per_class[:, cls])**2
+                else:
+                    pixel_reg_loss[:, cls] = 0
+            else:
+                pixel_reg_loss[:, cls] = 0
             # IMPORTANT: we DON't compute the HD for the background class
             if cls != config.class_lbl_background and cls != half_classes:
                 if compute_hd:
@@ -159,18 +184,22 @@ class BaseDilated2DCNN(nn.Module):
 
         self.np_dice_losses = losses.data.cpu().numpy()
         self.np_dice_coeffs = dices.data.cpu().numpy()
+        if self.use_regression_loss:
+            self.np_reg_loss = 0.0001 * (np.mean(pixel_reg_loss[:, 1].data.cpu().numpy()) +
+                                      np.mean(pixel_reg_loss[:, 4].data.cpu().numpy()))
         # NOTE: we want to minimize the loss, but the soft-dice-loss is actually increasing when our predictions
         # get better. HENCE, we need to multiply by minus one here.
         if self.loss_function == "softdice":
             return (-1.) * torch.sum(losses)
         else:
-            losses = torch.mean(losses[0:half_classes]) + torch.mean(losses[half_classes:])
+            reg_loss = 0.0001 * (torch.mean(pixel_reg_loss[:, 1]) + torch.mean(pixel_reg_loss[:, 4]))
+            losses = torch.mean(losses[0:half_classes]) + torch.mean(losses[half_classes:]) + reg_loss
             return losses
 
     def do_train(self, batch):
         self.zero_grad()
         b_out = self(batch.get_images())
-        b_loss = self.get_loss(b_out, batch.get_labels())
+        b_loss = self.get_loss(b_out, batch.get_labels(), num_of_labels_per_class=batch.get_num_labels_per_class())
         # compute gradients w.r.t. model parameters
         b_loss.backward(retain_graph=False)
         if self.use_scheduler:
@@ -179,7 +208,8 @@ class BaseDilated2DCNN(nn.Module):
         self.optimizer.step()
         return b_loss
 
-    def do_test(self, images, labels, voxel_spacing=None, compute_hd=False, test_mode=True):
+    def do_test(self, images, labels, voxel_spacing=None, compute_hd=False, test_mode=True,
+                pred_num_lbls_per_class=None):
         """
         voxel_spacing: we assume the image slices are 2D and have isotropic spacing. Hence voxel_spacing is a scaler
                        and for AC-DC equal to 1.4
@@ -190,7 +220,8 @@ class BaseDilated2DCNN(nn.Module):
         if test_mode:
             self.eval()
         b_predictions = self(images)
-        test_loss = self.get_loss(b_predictions, labels, zooms=voxel_spacing, compute_hd=compute_hd)
+        test_loss = self.get_loss(b_predictions, labels, zooms=voxel_spacing, compute_hd=compute_hd,
+                                  num_of_labels_per_class=pred_num_lbls_per_class)
         if test_mode:
             self.train()
         return test_loss, b_predictions
@@ -204,6 +235,9 @@ class BaseDilated2DCNN(nn.Module):
             # NOTE: returns two scalar values, one for ES one for ED
             split = int(self.np_dice_losses.shape[0] * 0.5)
             return np.mean(self.np_dice_losses[0:split]), np.mean(self.np_dice_losses[split:])
+
+    def get_reg_loss(self):
+        return self.np_reg_loss
 
     def get_accuracy(self):
         # returns numpy array of shape [6], 3 for ES and 3 for ED

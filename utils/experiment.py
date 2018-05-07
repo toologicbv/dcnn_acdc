@@ -124,7 +124,7 @@ class ExperimentHandler(object):
                           weight_decay=self.exper.run_args.weight_decay,
                           use_cuda=self.exper.run_args.cuda,
                           cycle_length=self.exper.run_args.cycle_length,
-                          verbose=verbose)
+                          verbose=verbose, use_reg_loss=self.exper.run_args.use_reg_loss)
         abs_checkpoint_dir = os.path.join(chkpnt_dir, checkpoint_file)
         if os.path.exists(abs_checkpoint_dir):
             checkpoint = torch.load(abs_checkpoint_dir)
@@ -170,7 +170,8 @@ class ExperimentHandler(object):
                                            test_run=True)
             val_batch.generate_batch_2d(dataset.images(train=False), dataset.labels(train=False),
                                         slice_range=slice_range)
-            val_loss, _ = model.do_test(val_batch.get_images(), val_batch.get_labels())
+            val_loss, _ = model.do_test(val_batch.get_images(), val_batch.get_labels(),
+                                        pred_num_lbls_per_class=val_batch.get_num_labels_per_class())
             arr_val_loss[chunk] = val_loss.data.cpu().numpy()[0]
             # returns array of 6 values
             arr_val_acc += model.get_accuracy()
@@ -743,7 +744,7 @@ class ExperimentHandler(object):
     def set_lr(self, lr):
         self.exper.epoch_stats["lr"][self.exper.epoch_id - 1] = lr
 
-    def set_batch_loss(self, loss, used_outliers=False):
+    def set_batch_loss(self, loss, used_outliers=False, reg_loss=None):
         if isinstance(loss, Variable) or isinstance(loss, torch.FloatTensor):
             loss = loss.data.cpu().squeeze().numpy()
         if not used_outliers:
@@ -751,6 +752,9 @@ class ExperimentHandler(object):
         else:
             self.exper.epoch_stats["mean_loss_outliers"][self.exper.epoch_id - 1] = loss
             self.exper.epoch_stats["num_of_outlier_batches"] += 1
+
+        if reg_loss is not None:
+            self.exper.epoch_stats["mean_reg_loss"][self.exper.epoch_id - 1] = reg_loss
 
     def set_dice_losses(self, dice_losses, val_run_id=None):
 
@@ -857,6 +861,7 @@ class Experiment(object):
                 self.num_val_runs += 1
         self.epoch_stats = {'lr': np.zeros(self.run_args.epochs),
                             'mean_loss': np.zeros(self.run_args.epochs),
+                            'mean_reg_loss': np.zeros(self.run_args.epochs),
                             'mean_loss_outliers': np.zeros(self.run_args.epochs),
                             'num_of_outlier_batches': 0,
                             # storing the mean dice loss for ES and ED separately
@@ -866,6 +871,7 @@ class Experiment(object):
                             'dice_coeff_outliers': np.zeros((self.run_args.epochs, 6))}
         self.val_stats = {'epoch_ids': np.zeros(self.num_val_runs),
                           'mean_loss': np.zeros(self.num_val_runs),
+                          'mean_reg_loss': np.zeros(self.run_args.epochs),
                           'soft_dice_loss': np.zeros((self.num_val_runs, 2)),
                           'dice_coeff': np.zeros((self.num_val_runs, 6))}
 
@@ -875,6 +881,12 @@ class Experiment(object):
             return self.epoch_stats["mean_loss"]
         else:
             return self.val_stats["mean_loss"]
+
+    def get_reg_loss(self, validation=False):
+        if not validation:
+            return self.epoch_stats["mean_reg_loss"]
+        else:
+            return self.val_stats["mean_reg_loss"]
 
     @property
     def validation_epoch_ids(self):

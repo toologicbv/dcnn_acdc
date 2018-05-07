@@ -97,4 +97,7 @@ if __name__ == '__main__':
 """
 python generate_uncertainty_stats.py --cuda --exper_id=20180426_14_47_23_dcnn_mc_f2p005_brier_150KE_lr2e02 
 --checkpoint=150000 --mc_samples=10  --u_threshold=0.1 --save_actual_maps --run_mode="u_maps_only" --generate_plots
+
+python generate_uncertainty_stats.py --cuda --exper_id=20180426_14_13_46_dcnn_mc_f1p01_brier_150KE_lr2e02 
+--checkpoint=150000 --mc_samples=10  --u_threshold=0.05 --save_actual_maps --run_mode="u_maps_only"
 """

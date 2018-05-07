@@ -967,18 +967,21 @@ class TestResults(object):
         """
 
         def detect_seg_contours(img, lbls, cls_offset):
-
-            mask = np.zeros_like(img)
+            #                 YELLOW        BLUE            RED
+            gb_error_codes = [(1, 1, 0.), (0., 0.3, 0.7), (1, 0, 0)]
             rv_lbls = lbls[1 + cls_offset]
-            mask[rv_lbls == 1] = 1
             myo_lbls = lbls[2 + cls_offset]
-            mask[myo_lbls == 1] = 2
             lv_lbls = lbls[3 + cls_offset]
-            mask[lv_lbls == 1] = 3
-            img_es = exposure.rescale_intensity(img)
-            clean_border = segmentation.clear_border(mask).astype(np.int)
-            img_lbl = segmentation.mark_boundaries(img_es, clean_border, mode="outer", color=(0, 1, 0),
-                                                   background_label=0)
+            img_rescaled = exposure.rescale_intensity(img)
+            clean_border_rv = segmentation.clear_border(rv_lbls).astype(np.int)
+            img_lbl = segmentation.mark_boundaries(img_rescaled, clean_border_rv, mode="outer",
+                                                   color=gb_error_codes[0], background_label=0)
+            clean_border_myo = segmentation.clear_border(myo_lbls).astype(np.int)
+            img_lbl = segmentation.mark_boundaries(img_lbl, clean_border_myo, mode="inner",
+                                                   color=gb_error_codes[1], background_label=0)
+            clean_border_lv = segmentation.clear_border(lv_lbls).astype(np.int)
+            img_lbl = segmentation.mark_boundaries(img_lbl, clean_border_lv, mode="inner",
+                                                   color=gb_error_codes[2], background_label=0)
             img_lbl = exposure.rescale_intensity(img_lbl, out_range=(0, 1))
             return img_lbl
 
@@ -997,6 +1000,7 @@ class TestResults(object):
             print("WARNING - Can't find image with index {} in "
                   "test_results.image_ids. Discarding!".format(image_num))
         image = self.images[image_num]
+        num_of_slices_img = image.shape[3]
         pred_labels = self.pred_labels[image_num]
         label = self.labels[image_num]
         uncertainty_map = self.stddev_maps[image_num]
@@ -1060,11 +1064,15 @@ class TestResults(object):
             # filtered_add_std_map_es[overall_mask_es] = 0.
             # filtered_add_std_map_ed[overall_mask_ed] = 0.
             filtered_cls_std_map[mask] = 0
-
+        # sum uncertainties over slice-pixels, to give us an indication about the amount of uncertainty
+        # and whether we can visually inspect why tht model is uncertain
         es_count_nonzero = np.count_nonzero(filtered_std_map[0], axis=(0, 1))
         ed_count_nonzero = np.count_nonzero(filtered_std_map[1], axis=(0, 1))
         total_uncertainty_per_slice = es_count_nonzero + ed_count_nonzero
         print(total_uncertainty_per_slice)
+        max_u_value = np.max(total_uncertainty_per_slice)
+        sorted_u_value_list = np.sort(total_uncertainty_per_slice)[::-1]
+
         if errors_only or not plot_detailed_hists:
             image_probs = None
         else:
@@ -1111,13 +1119,18 @@ class TestResults(object):
         for img_slice in slice_range:
 
             if std_threshold > 0.:
-                main_title = r"Model {} - Test image: {} - slice: {}" \
-                             r" - ($\sigma_{{Tr}}={:.2f}$)".format(model_name, image_name, img_slice+1, std_threshold)
+                rank = np.where(sorted_u_value_list == total_uncertainty_per_slice[img_slice])[0][0]
+                main_title = r"Model {} - Test image: {} - slice: {}" "\n" \
+                             r"$\sigma_{{Tr}}={:.2f}$; u-value={}/{}; " \
+                             r"rank={}".format(model_name, image_name, img_slice+1, std_threshold,
+                                               total_uncertainty_per_slice[img_slice], max_u_value,
+                                               rank + 1)
             else:
                 main_title = "Model {} - Test image: {} - slice: {} \n".format(model_name, image_name, img_slice+1)
+
             fig = plt.figure(figsize=(width, height))
             ax = fig.gca()
-            fig.suptitle(main_title, **config.title_font_large)
+            fig.suptitle(main_title, **config.title_font_medium)
             row = 0
             # get the slice and then split ED and ES slices
             image_slice = image[:, :, :, img_slice]
@@ -1141,10 +1154,12 @@ class TestResults(object):
                 # print("INFO-1 - row/counter {} / {}".format(row, counter))
                 ax1 = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
                 if phase == 0:
-                    ax1.set_title("Slice {}: End-systole".format(img_slice+1), **config.title_font_large)
+                    ax1.set_title("Slice {}/{}: End-systole".format(img_slice+1, num_of_slices_img),
+                                  **config.title_font_medium)
                     str_phase = "ES"
                 else:
-                    ax1.set_title("Slice {}: End-diastole".format(img_slice+1), **config.title_font_large)
+                    ax1.set_title("Slice {}/{}: End-diastole".format(img_slice+1, num_of_slices_img),
+                                  **config.title_font_medium)
                     str_phase = "ED"
                 # the original image we are segmenting
                 img_with_contours = detect_seg_contours(img, slice_true_labels, cls_offset)
@@ -1161,7 +1176,7 @@ class TestResults(object):
                                                               cls_offset, slice_stddev, std_threshold=0.)
                 ax1b.imshow(rgb_img_w_pred, interpolation='nearest')
                 ax1b.set_aspect('auto')
-                ax1b.text(20, 20, 'red: RV ({}), yellow: Myo ({}), green: LV ({})'.format(cls_errors[1],
+                ax1b.text(20, 20, 'yellow: RV ({}), blue: Myo ({}), red: LV ({})'.format(cls_errors[1],
                                                                                           cls_errors[2],
                                                                                           cls_errors[3]),
                           bbox={'facecolor': 'white', 'pad': 18})
@@ -1175,9 +1190,9 @@ class TestResults(object):
                     rgb_img_w_pred, cls_errors = set_error_pixels(rgb_img, slice_pred_labels_wo_sampling,
                                                                   slice_true_labels, cls_offset,
                                                                   slice_stddev, std_threshold=0.)
-                    ax_pred.text(20, 20, 'red: RV ({}), yellow: Myo ({}), '
-                                                'green: LV ({})'.format(cls_errors[1], cls_errors[2], cls_errors[3]),
-                                                bbox={'facecolor': 'white', 'pad': 18})
+                    ax_pred.text(20, 20, 'yellow: RV ({}), blue: Myo ({}), '
+                                 'red: LV ({}) '.format(cls_errors[1], cls_errors[2], cls_errors[3]),
+                                 bbox={'facecolor': 'white', 'pad': 18})
                     ax_pred.imshow(rgb_img_w_pred, interpolation='nearest')
                     ax_pred.set_aspect('auto')
                     ax_pred.set_title("Prediction errors wo sampling", **config.title_font_medium)
@@ -1196,9 +1211,9 @@ class TestResults(object):
                     else:
                         unc_pixels = filtered_std_map[1, :, :, img_slice] != 0
                     # rgb_img_ref_pred[unc_pixels, :] = [0, 0, 204]
-                    ax_pred_ref.text(20, 20, 'red: RV ({}), yellow: Myo ({}), '
-                                         'green: LV ({})'.format(cls_errors[1], cls_errors[2], cls_errors[3]),
-                                 bbox={'facecolor': 'white', 'pad': 18})
+                    ax_pred_ref.text(20, 20, 'yellow: RV ({}), blue: Myo ({}), '
+                                     'red: LV ({})'.format(cls_errors[1], cls_errors[2], cls_errors[3]),
+                                     bbox={'facecolor': 'white', 'pad': 18})
                     ax_pred_ref.imshow(rgb_img_ref_pred, interpolation='nearest')
                     ax_pred_ref.set_aspect('auto')
                     ax_pred_ref.set_title("Prediction errors after referral", **config.title_font_medium)
@@ -1210,7 +1225,6 @@ class TestResults(object):
                     # add all uncertainties from the separate STDDEV maps per class
                     slice_bald = filtered_std_map[phase, :, :, img_slice]
                     bald_max = np.max(slice_bald)
-                    # print("Phase {} row {} - BALD heatmap".format(phase, row))
                     ax4 = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
                     ax4plot = ax4.imshow(slice_bald, cmap=plt.get_cmap('jet'), vmin=0., vmax=bald_max)
                     # divider = make_axes_locatable(ax)

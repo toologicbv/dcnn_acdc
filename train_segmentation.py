@@ -3,7 +3,6 @@ import torch
 import numpy as np
 
 from common.parsing import do_parse_args
-from common.common import compute_batch_freq_outliers
 from config.config import config
 from utils.experiment import Experiment, ExperimentHandler
 from utils.batch_handlers import TwoDimBatchHandler
@@ -89,6 +88,7 @@ def training(exper_hdl):
         accuracy = np.zeros((exper_hdl.exper.batches_per_epoch, 6))
         # in order to store the 2 mean dice losses (ES/ED)
         losses = np.zeros(exper_hdl.exper.batches_per_epoch)
+        reg_losses = np.zeros(exper_hdl.exper.batches_per_epoch)
         start_time = time.time()
         used_outliers = False
         for batch_id in range(exper_hdl.exper.batches_per_epoch):
@@ -112,12 +112,14 @@ def training(exper_hdl):
             dices[batch_id] = dcnn_model.get_dice_losses(average=True)
             accuracy[batch_id] = dcnn_model.get_accuracy()
             losses[batch_id] = b_loss
+            reg_losses[batch_id] = dcnn_model.get_reg_loss()
             exper_hdl.exper.batch_stats.update_stats(new_batch.batch_stats)
 
         losses = np.mean(losses)
+        reg_losses = np.mean(reg_losses)
         accuracy = np.mean(accuracy, axis=0)
         dices = np.mean(dices, axis=0)
-        exper_hdl.set_batch_loss(losses, used_outliers=used_outliers)
+        exper_hdl.set_batch_loss(losses, used_outliers=used_outliers, reg_loss=reg_losses)
         exper_hdl.set_accuracy(accuracy, used_outliers=used_outliers)
         exper_hdl.set_dice_losses(dices)
 
@@ -154,6 +156,9 @@ def training(exper_hdl):
                                                                       np.array_str(dices, precision=3),
                                                                       total_time,
                                                                       lr))
+            if exper_hdl.exper.run_args.use_reg_loss:
+                loss_wo = losses - reg_losses
+                exper_hdl.logger.info("\t\tLoss + reg-loss {:.2f} + {:.2f}".format(loss_wo, reg_losses))
             exper_hdl.logger.info("Current dice accuracies ES {:.3f}/{:.3f}/{:.3f} \t"
                                   "ED {:.3f}/{:.3f}/{:.3f} ".format(accuracy[0], accuracy[1],
                                                                     accuracy[2], accuracy[3],

@@ -161,6 +161,7 @@ class TwoDimBatchHandler(BatchHandler):
         self.b_images = None
         # batch reference image for the different classes (so for each reference class 1 image)
         self.b_labels_per_class = None
+        self.b_num_labels_per_class = None
         self.b_pred_labels_per_class = None
         # this objects holds for each image-slice the separate class labels, so one set for each class
         self.b_labels_per_class = None
@@ -171,6 +172,7 @@ class TwoDimBatchHandler(BatchHandler):
     def cuda(self):
         self.b_images = self.b_images.cuda()
         self.b_labels_per_class = self.b_labels_per_class.cuda()
+        self.b_num_labels_per_class = self.b_num_labels_per_class.cuda()
 
     def set_pred_labels(self, pred_per_class):
         # in order to save memory we cast the object as NUMPY array
@@ -181,6 +183,9 @@ class TwoDimBatchHandler(BatchHandler):
 
     def get_labels(self):
         return self.b_labels_per_class
+
+    def get_num_labels_per_class(self):
+        return self.b_num_labels_per_class
 
     def generate_batch_2d(self, images, labels, img_slice_ids=None, num_of_slices=None, save_batch=False, logger=None,
                           slice_range=None):
@@ -210,6 +215,7 @@ class TwoDimBatchHandler(BatchHandler):
 
         b_images = np.zeros((self.batch_size, 2, self.ps_wp, self.ps_wp))
         b_labels_per_class = np.zeros((self.batch_size, self.num_classes, self.patch_size + 1, self.patch_size + 1))
+        b_num_labels_per_class = np.zeros((self.batch_size, self.num_classes))
         if num_of_slices is None:
             num_of_slices = len(images)
 
@@ -247,13 +253,20 @@ class TwoDimBatchHandler(BatchHandler):
             for cls_idx in np.arange(half_classes):
                 # store ED class labels in first 4 positions of dim-1
                 b_labels_per_class[idx, cls_idx, :, :] = (label_ed == cls_idx).astype('int16')
+                if cls_idx != 0:
+                    b_num_labels_per_class[idx, cls_idx] = np.count_nonzero(b_labels_per_class[idx, cls_idx, :, :])
                 # sotre ES class labels in positions 4-7 of dim-1
                 b_labels_per_class[idx, cls_idx+half_classes, :, :] = (label_es == cls_idx).astype('int16')
+                if cls_idx != 0:
+                    b_num_labels_per_class[idx, cls_idx+half_classes] = \
+                        np.count_nonzero(b_labels_per_class[idx, cls_idx+half_classes, :, :])
 
         # print("Images used {}".format(",".join(img_nums)))
         self.b_images = Variable(torch.FloatTensor(torch.from_numpy(b_images).float()), volatile=self.test_run)
         self.b_labels_per_class = Variable(torch.FloatTensor(torch.from_numpy(b_labels_per_class).float()),
                                            volatile=self.test_run)
+        self.b_num_labels_per_class = Variable(torch.FloatTensor(torch.from_numpy(b_num_labels_per_class).float()),
+                                               volatile=self.test_run)
         if save_batch:
             self.save_batch_img_to_files()
 
@@ -262,6 +275,7 @@ class TwoDimBatchHandler(BatchHandler):
 
         del b_images
         del b_labels_per_class
+        del b_num_labels_per_class
 
     def save_batch_img_to_files(self, save_dir=None):
         num_of_classes = self.b_labels_per_class.size(1)

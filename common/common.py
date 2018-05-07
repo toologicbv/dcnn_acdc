@@ -64,8 +64,8 @@ def set_error_pixels(img_rgb, pred_labels, true_labels, cls_offset, stddev=None,
     than threshold we assume the EXPERT would adjust the pixel to the correct seg-label.
     :return:
     """
-    #                       RV:RED           MYO:YELLOW    LV:GREEN
-    rgb_error_codes = [[], [255, 0, 0], [204, 204, 0], [0, 204, 0]]
+    #                       RV:YELLOW           MYO:BLUE    LV:RED
+    rgb_error_codes = [[], [204, 204, 0], [0, 120, 255], [255, 0, 0]]
     num_of_errors = np.zeros(4).astype(np.int)
 
     for cls in np.arange(pred_labels.shape[0] // 2):

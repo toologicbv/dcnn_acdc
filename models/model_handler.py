@@ -50,7 +50,8 @@ def load_model(exper_hdl, verbose=False):
                                  use_cuda=exper_hdl.exper.run_args.cuda,
                                  cycle_length=exper_hdl.exper.run_args.cycle_length,
                                  loss_function=exper_hdl.exper.run_args.loss_function,
-                                 verbose=verbose)
+                                 verbose=verbose,
+                                 use_reg_loss=exper_hdl.exper.run_args.use_reg_loss)
 
         model.apply(weights_init)
     else:
