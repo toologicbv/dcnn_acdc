@@ -6,7 +6,7 @@ from config.config import config
 import numpy as np
 from config.config import OPTIMIZER_DICT
 from building_blocks import Basic2DCNNBlock
-from models.building_blocks import ConcatenateCNNBlock
+from models.building_blocks import ConcatenateCNNBlock, ConcatenateCNNBlockWithRegression
 from utils.dice_metric import soft_dice_score, dice_coefficient
 from models.lr_schedulers import CycleLR
 from utils.medpy_metrics import hd
@@ -21,6 +21,7 @@ class BaseDilated2DCNN(nn.Module):
         super(BaseDilated2DCNN, self).__init__()
         self.architecture = architecture
         self.use_cuda = use_cuda
+        self.use_regression_loss = use_reg_loss
         self.num_conv_layers = self.architecture['num_of_layers']
         self.verbose = verbose
         self.model = self._build_dcnn()
@@ -38,7 +39,6 @@ class BaseDilated2DCNN(nn.Module):
         self.np_reg_loss = None
         self.hausdorff_list = None
         self.loss_function = loss_function
-        self.use_regression_loss = use_reg_loss
 
         if self.use_cuda:
             self.cuda()
@@ -74,14 +74,26 @@ class BaseDilated2DCNN(nn.Module):
                 if self.use_cuda:
                     layer_list[-1].cuda()
             else:
-                # for ACDC data the last layer is a concatenation of two 2D-CNN layers
-                layer_list.append(ConcatenateCNNBlock(in_channels, self.architecture['channels'][l_id],
-                                                      self.architecture['kernels'][l_id],
-                                                      stride=self.architecture['stride'][l_id],
-                                                      dilation=self.architecture['dilation'][l_id],
-                                                      apply_batch_norm=self.architecture['batch_norm'][l_id],
-                                                      apply_non_linearity=self.architecture['non_linearity'][l_id],
-                                                      axis=1, verbose=self.verbose))
+                if not self.use_regression_loss:
+                    # for ACDC data the last layer is a concatenation of two 2D-CNN layers
+                    layer_list.append(ConcatenateCNNBlock(in_channels, self.architecture['channels'][l_id],
+                                                          self.architecture['kernels'][l_id],
+                                                          stride=self.architecture['stride'][l_id],
+                                                          dilation=self.architecture['dilation'][l_id],
+                                                          apply_batch_norm=self.architecture['batch_norm'][l_id],
+                                                          apply_non_linearity=self.architecture['non_linearity'][l_id],
+                                                          axis=1, verbose=self.verbose))
+                else:
+                    layer_list.append(ConcatenateCNNBlockWithRegression(
+                        in_channels,
+                        self.architecture['channels'][l_id],
+                        self.architecture['kernels'][l_id],
+                        stride=self.architecture['stride'][l_id],
+                        dilation=self.architecture['dilation'][l_id],
+                        apply_batch_norm=self.architecture['batch_norm'][l_id],
+                        apply_non_linearity=self.architecture['non_linearity'][l_id],
+                        axis=1, verbose=self.verbose))
+
                 if self.use_cuda:
                     layer_list[-1].cuda()
 
@@ -102,16 +114,21 @@ class BaseDilated2DCNN(nn.Module):
 
         return out
 
-    def get_loss(self, predictions, labels, zooms=None, compute_hd=False, num_of_labels_per_class=None):
+    def get_loss(self, predictions, labels, zooms=None, compute_hd=False, regression_maps=None,
+                 num_of_labels_per_class=None):
         """
             we need to reshape the tensors because CrossEntropy expects 2D tensor (N, C) where C is num of classes
             the input tensor is in our case [batch_size, 2 * num_of_classes, height, width]
             the labels are                  [batch_size, 2 * num_of_classes, height, width]
-
+            :param predictions
+            :param labels
+            :param zooms
+            :param compute_hd
             When computing a kind of regression loss for the pixels we use objects:
             num_of_labels_per_class: [batch_size, 8classes]
             object contains the number of pixels for the specific slice per class
-
+            :param regression_maps: has shape [batch_size, 8, width, height]
+            :param num_of_labels_per_class
             loss_func is: (1) softdice=soft_dice_score or (2) brier=compute_brier_score
         """
         batch_size = labels.size(0)
@@ -119,13 +136,16 @@ class BaseDilated2DCNN(nn.Module):
         half_classes = int(num_of_classes / 2)
         losses = Variable(torch.FloatTensor(num_of_classes))
         dices = Variable(torch.FloatTensor(num_of_classes))
-        pixel_reg_loss = Variable(torch.FloatTensor(batch_size, num_of_classes))
+        pixel_reg_loss = Variable(torch.FloatTensor(batch_size, half_classes))
+        # compute sum of regression predictions per image-slice and class
+        reg_loss_weight = 0.01
+        adjusted_class_idx = [-1, 0, -1, 1, -1, 2, -1, 3]
+        if self.use_regression_loss:
+            regression_maps = torch.sum(regression_maps.view(batch_size, half_classes, -1), dim=2)
         # brier_score = Variable(torch.FloatTensor(num_of_classes))
         self.hausdorff_list = []
-        pred_num_of_labels = Variable(torch.zeros((batch_size, num_of_classes)))
         if self.use_cuda:
             losses = losses.cuda()
-            pred_num_of_labels = pred_num_of_labels.cuda()
             pixel_reg_loss = pixel_reg_loss.cuda()
 
         # determine the predicted labels. IMPORTANT do this separately for each ES and ED which means
@@ -151,18 +171,20 @@ class BaseDilated2DCNN(nn.Module):
                 # labels (which are situated in the second part of tensor "label" which actually has size 8 in dim1)
                 # we make sure the comparison accounts for this (cls - num_of_classes / 2)
                 pred_labels = pred_labels_ed == (cls - half_classes)
-
             dices[cls] = dice_coefficient(pred_labels, labels[:, cls, :, :])
             # Compute an adhoc regression loss for the num of pixels belonging to a certain seg-class
             if self.use_regression_loss:
-                if cls != config.class_lbl_background and cls != half_classes:
+                adj_cls_idx = adjusted_class_idx[cls]
+                if adj_cls_idx != -1:
                     # computing the number of predicted pixels per class. pred_labels should have shape
                     # [batch_size, width, height] with True values containing. we first need to flatten the
                     # tensor to [batch_size, rest] and then sum over the columns (so we get #nonzeros per row/batch)
-                    pred_num_of_labels[:, cls] = torch.sum(pred_labels.view(batch_size, -1), dim=1)
-                    pixel_reg_loss[:, cls] = (pred_num_of_labels[:, cls] - num_of_labels_per_class[:, cls])**2
+                    # pred_num_of_labels[:, cls] = torch.sum(regression_maps[:, cls].view(batch_size, -1), dim=1)
+                    # we compute the L1 norm
+                    pixel_reg_loss[:, adj_cls_idx] = torch.abs(regression_maps[:, adj_cls_idx] -
+                                                               num_of_labels_per_class[:, cls])
                 else:
-                    pixel_reg_loss[:, cls] = 0
+                    pixel_reg_loss[:, adj_cls_idx] = 0
             else:
                 pixel_reg_loss[:, cls] = 0
             # IMPORTANT: we DON't compute the HD for the background class
@@ -184,22 +206,27 @@ class BaseDilated2DCNN(nn.Module):
 
         self.np_dice_losses = losses.data.cpu().numpy()
         self.np_dice_coeffs = dices.data.cpu().numpy()
-        if self.use_regression_loss:
-            self.np_reg_loss = 0.0001 * (np.mean(pixel_reg_loss[:, 1].data.cpu().numpy()) +
-                                      np.mean(pixel_reg_loss[:, 4].data.cpu().numpy()))
+
         # NOTE: we want to minimize the loss, but the soft-dice-loss is actually increasing when our predictions
         # get better. HENCE, we need to multiply by minus one here.
         if self.loss_function == "softdice":
             return (-1.) * torch.sum(losses)
         else:
-            reg_loss = 0.0001 * (torch.mean(pixel_reg_loss[:, 1]) + torch.mean(pixel_reg_loss[:, 4]))
+            # summing the mean loss for RV & LV as if we would have the cavity volumes. See whether this "helps"
+            reg_loss = reg_loss_weight * torch.sum(torch.mean(pixel_reg_loss, dim=1))
+            self.np_reg_loss = reg_loss.data.cpu().numpy()
             losses = torch.mean(losses[0:half_classes]) + torch.mean(losses[half_classes:]) + reg_loss
             return losses
 
     def do_train(self, batch):
         self.zero_grad()
-        b_out = self(batch.get_images())
-        b_loss = self.get_loss(b_out, batch.get_labels(), num_of_labels_per_class=batch.get_num_labels_per_class())
+        if not self.use_regression_loss:
+            b_predictions = self(batch.get_images())
+            b_loss = self.get_loss(b_predictions, batch.get_labels())
+        else:
+            b_predictions, b_out_regression = self(batch.get_images())
+            b_loss = self.get_loss(b_predictions, batch.get_labels(), regression_maps=b_out_regression,
+                                   num_of_labels_per_class=batch.get_num_labels_per_class())
         # compute gradients w.r.t. model parameters
         b_loss.backward(retain_graph=False)
         if self.use_scheduler:
@@ -219,9 +246,13 @@ class BaseDilated2DCNN(nn.Module):
         """
         if test_mode:
             self.eval()
-        b_predictions = self(images)
-        test_loss = self.get_loss(b_predictions, labels, zooms=voxel_spacing, compute_hd=compute_hd,
-                                  num_of_labels_per_class=pred_num_lbls_per_class)
+        if not self.use_regression_loss:
+            b_predictions = self(images)
+            test_loss = self.get_loss(b_predictions, labels, zooms=voxel_spacing, compute_hd=compute_hd)
+        else:
+            b_predictions, b_reg_maps = self(images)
+            test_loss = self.get_loss(b_predictions, labels, zooms=voxel_spacing, compute_hd=compute_hd,
+                                      regression_maps=b_reg_maps, num_of_labels_per_class=pred_num_lbls_per_class)
         if test_mode:
             self.train()
         return test_loss, b_predictions
@@ -278,7 +309,7 @@ class BaseDilated2DCNN(nn.Module):
         return lr
 
     def sum_grads(self, verbose=False):
-        sum_grads = 0
+        sum_grads = 0.
         for name, param in self.named_parameters():
             if param.grad is not None:
                 sum_grads += torch.sum(torch.abs(param.grad.data))
