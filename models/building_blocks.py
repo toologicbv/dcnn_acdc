@@ -103,9 +103,9 @@ class ConcatenateCNNBlockWithRegression(ConcatenateCNNBlock):
         # pixels
         reg_channels = 128
         prob_dropout = 0.1
-        self.layer3a = nn.Sequential(nn.Conv2d(in_channels + 2, reg_channels, kernel_size, stride=stride, padding=0,
+        self.layer3a = nn.Sequential(nn.Conv2d(in_channels + 4, reg_channels, kernel_size, stride=stride, padding=0,
                                      dilation=dilation, bias=bias), nn.BatchNorm2d(reg_channels), nn.ELU())
-        self.layer3b = nn.Sequential(nn.Conv2d(in_channels + 2, reg_channels, kernel_size, stride=stride, padding=0,
+        self.layer3b = nn.Sequential(nn.Conv2d(in_channels + 4, reg_channels, kernel_size, stride=stride, padding=0,
                                                dilation=dilation, bias=bias), nn.BatchNorm2d(reg_channels), nn.ELU())
         self.layer4a = nn.Conv2d(reg_channels, 2, kernel_size, stride=stride, padding=0, dilation=dilation, bias=bias)
         self.layer4b = nn.Conv2d(reg_channels, 2, kernel_size, stride=stride, padding=0, dilation=dilation, bias=bias)
@@ -134,8 +134,10 @@ class ConcatenateCNNBlockWithRegression(ConcatenateCNNBlock):
             out2 = self.non_linearity(out2)
         # concatenate the features maps of tensor_in with the softmax-probability heat maps we generated in this
         # forward step: the "fused" tensors have shape [batch_size, 132, width, height]
-        out1_fused = torch.cat((tensor_in, out1[:, 1:2, :, :], out1[:, 3:4, :, :]), dim=self.axis)
-        out2_fused = torch.cat((tensor_in, out2[:, 1:2, :, :], out2[:, 3:4, :, :]), dim=self.axis)
+        # out1_fused = torch.cat((tensor_in, out1[:, 1:2, :, :], out1[:, 3:4, :, :]), dim=self.axis)
+        out1_fused = torch.cat((tensor_in, out1), dim=self.axis)
+        # out2_fused = torch.cat((tensor_in, out2[:, 1:2, :, :], out2[:, 3:4, :, :]), dim=self.axis)
+        out2_fused = torch.cat((tensor_in, out2), dim=self.axis)
         out1_fused = self.layer3a(out1_fused)
         out2_fused = self.layer3b(out2_fused)
         # in the final step the maps are compressed to [batch_size, 4, width, height]

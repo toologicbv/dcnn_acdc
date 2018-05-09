@@ -52,7 +52,7 @@ def eval_referral(errors_idx, uncertain_idx):
 
 def test_ensemble(test_set, exper_hdl, mc_samples=10, sample_weights=True, discard_outliers=False,
                   referral_threshold=None, ref_positives_only=False, image_range=None, verbose=False,
-                  reset_results=False, save_filtered_umaps=False, save_pred_labels=False,
+                  reset_results=False, save_pred_labels=False,
                   store_details=False, generate_stats=False, save_results=False, use_seed=False,
                   do_filter=False, checkpoints=None, use_uncertainty=False, u_threshold=0.01):
     """
@@ -119,8 +119,7 @@ def test_ensemble(test_set, exper_hdl, mc_samples=10, sample_weights=True, disca
                            referral_threshold=referral_threshold, verbose=verbose, store_details=store_details,
                            use_seed=use_seed, do_filter=do_filter, repeated_run=repeated_run,
                            use_uncertainty=use_uncertainty, u_threshold=u_threshold,
-                           ref_positives_only=ref_positives_only, save_pred_labels=save_pred_labels,
-                           save_filtered_umaps=save_filtered_umaps)
+                           ref_positives_only=ref_positives_only, save_pred_labels=save_pred_labels)
         del dcnn_model
         # if we test multiple checkpoints we don't want to store the image details multiple times
         repeated_run = True
@@ -180,6 +179,7 @@ class ACDC2017TestHandler(object):
         # filename of the figures printed during test evaluation e.g. patien007
         self.img_file_names = []
         self.labels = []
+        self.num_labels_per_class = []
         self.spacings = []
         self.b_pred_labels = None
         self.b_filtered_pred_labels = None
@@ -190,6 +190,7 @@ class ACDC2017TestHandler(object):
         self.b_image_id = None
         self.b_image_name = None  # store the filename from "above" used as identification during testing
         self.b_labels = None
+        self.b_num_labels_per_class = None
         self.b_new_spacing = None
         self.b_orig_spacing = None
         self.b_seg_errors = None
@@ -314,9 +315,10 @@ class ACDC2017TestHandler(object):
             images = np.concatenate((np.expand_dims(mri_scan_ed, axis=0),
                                      np.expand_dims(mri_scan_es, axis=0)))
             # same concatenation for the label files of ED and ES
-            labels = self._split_class_labels(reference_ed, reference_es)
+            labels, num_labels_per_class = self._split_class_labels(reference_ed, reference_es)
             self.images.append(images)
             self.labels.append(labels)
+            self.num_labels_per_class.append(num_labels_per_class)
             self.num_of_images += 1
 
         print("INFO - Successfully loaded {} ED/ES patient pairs".format(len(self.images)))
@@ -337,15 +339,28 @@ class ACDC2017TestHandler(object):
         return image
 
     def _split_class_labels(self, labels_ed, labels_es):
+        """
+
+        :param labels_ed:
+        :param labels_es:
+        :return: returns tensor [8classes, width, height, #slices] for reference labels (gt) and
+        a "count" of the pixels/voxels that belong to that slice per class (simulating volume regression)
+        """
         labels_per_class = np.zeros((2 * self.num_of_classes, labels_ed.shape[0], labels_ed.shape[1],
                                      labels_ed.shape[2]))
+        b_num_labels_per_class = np.zeros((1, self.num_of_classes * 2, labels_ed.shape[2]))
         for cls_idx in np.arange(self.num_of_classes):
             # store ED class labels in first 4 positions of dim-1
             labels_per_class[cls_idx, :, :, :] = (labels_ed == cls_idx).astype('int16')
-            # sotre ES class labels in positions 4-7 of dim-1
+            # store ES class labels in positions 4-7 of dim-1
             labels_per_class[cls_idx + self.num_of_classes, :, :, :] = (labels_es == cls_idx).astype('int16')
+            if cls_idx != 0:
+                b_num_labels_per_class[0, cls_idx] = \
+                    np.count_nonzero(labels_per_class[cls_idx, :, :, :], axis=(0, 1))
+                b_num_labels_per_class[0, cls_idx + self.num_of_classes] = \
+                    np.count_nonzero(labels_per_class[cls_idx + self.num_of_classes, :, :, :], axis=(0, 1))
 
-        return labels_per_class
+        return labels_per_class, b_num_labels_per_class
 
     def batch_generator(self, image_num=0, use_labels=True, use_volatile=True):
         """
@@ -356,6 +371,7 @@ class ACDC2017TestHandler(object):
         self.b_image_id = image_num
         self.b_filtered_umap = False
         b_label = None
+        b_num_labels_per_class = None
         self.slice_counter = -1
         self.b_image = self.images[image_num]
         num_of_slices = self.b_image.shape[3]
@@ -377,6 +393,8 @@ class ACDC2017TestHandler(object):
             self.b_labels = self.labels[image_num]
             self.b_pred_probs = np.zeros_like(self.b_labels)
             self.b_pred_labels = np.zeros_like(self.b_labels)
+            # b_num_labels_per_class should have shape [1, 8, #slices]
+            self.b_num_labels_per_class = self.num_labels_per_class[image_num]
         # TO DO: actually it could happen now that b_uncertainty has undefined shape (because b_labels is not used
         self.b_stddev_map = np.zeros_like(self.b_labels)
         # b_bald_map shape: [2, width, height, #slices]
@@ -389,13 +407,16 @@ class ACDC2017TestHandler(object):
             if self.b_labels is not None:
                 b_label = Variable(torch.FloatTensor(torch.from_numpy(self.b_labels[:, :, :, slice]).float()),
                                    volatile=use_volatile)
+                b_num_labels_per_class = Variable(torch.FloatTensor(torch.from_numpy(
+                    self.b_num_labels_per_class[:, :, slice]).float()), volatile=use_volatile)
                 b_label = b_label.unsqueeze(0)
             if self.use_cuda:
                 b_image = b_image.cuda()
                 if self.b_labels is not None:
                     b_label = b_label.cuda()
+                    b_num_labels_per_class = b_num_labels_per_class.cuda()
             self.slice_counter += 1
-            yield b_image, b_label
+            yield b_image, b_label, b_num_labels_per_class
 
     def set_pred_labels(self, pred_probs, verbose=False, do_filter=False):
         """
@@ -846,12 +867,13 @@ class ACDC2017TestHandler(object):
         except IOError:
             print("ERROR - Unable to save filtered umaps file {}".format(file_name))
 
-    def save_pred_labels(self, output_dir, u_threshold=0., ref_positives_only=False):
+    def save_pred_labels(self, output_dir, u_threshold=0., ref_positives_only=False, mc_dropout=False):
         """
 
         :param output_dir: is actually the exper_id e.g. 20180503_13_22_18_dcnn_mc_f2p005....
         :param u_threshold: indicating whether we store a filtered label mask...if <> 0
         :param ref_positives_only: we referred only positive labels (=1) and skipped the uncertain 0-labels
+        :param mc_dropout: boolean indicating whether we obtained the predictions by means of mc-dropout
         :return: saves the predicted label maps for an image. shape [8classes, width, height, #slices]
         """
         pred_lbl_output_dir = os.path.join(self.config.root_dir, os.path.join(output_dir, config.pred_lbl_dir))
@@ -859,11 +881,16 @@ class ACDC2017TestHandler(object):
             os.makedirs(pred_lbl_output_dir)
         if u_threshold != 0:
             u_threshold = str(u_threshold).replace(".", "_")
+            if mc_dropout:
+                u_threshold += "_mc"
             if ref_positives_only:
                 u_threshold += "_pos_only"
             file_name = self.b_image_name + "_filtered_pred_labels" + u_threshold + ".npz"
         else:
-            file_name = self.b_image_name + "_pred_labels.npz"
+            if mc_dropout:
+                file_name = self.b_image_name + "_pred_labels_mc.npz"
+            else:
+                file_name = self.b_image_name + "_pred_labels.npz"
         file_name = os.path.join(pred_lbl_output_dir, file_name)
         # we don't overwrite existing predictions we obtained with the base model, so the non-referral predictions!
         if not os.path.isfile(file_name) or u_threshold != 0:

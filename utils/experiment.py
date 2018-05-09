@@ -5,6 +5,7 @@ from torch.autograd import Variable
 import numpy as np
 import os
 import glob
+import copy
 from collections import OrderedDict
 from datetime import datetime
 from pytz import timezone
@@ -35,6 +36,7 @@ class ExperimentHandler(object):
         self.test_results = None
         self.logger = None
         self.num_val_runs = 0
+        self.saved_model_state_dict = None
         if logger is None:
             self.logger = create_logger(self.exper, file_handler=use_logfile)
         else:
@@ -196,7 +198,7 @@ class ExperimentHandler(object):
     def test(self, model, test_set, image_num=0, mc_samples=1, sample_weights=False, compute_hd=False,
              use_uncertainty=False, referral_threshold=None, use_seed=False, verbose=False, store_details=False,
              do_filter=True, repeated_run=False, u_threshold=0.01, discard_outliers=False, save_pred_labels=False,
-             ref_positives_only=False, save_filtered_umaps=False):
+             ref_positives_only=False, store_test_results=True):
         """
 
         :param model:
@@ -226,6 +228,7 @@ class ExperimentHandler(object):
                evaluate the performance on the test set. Variable is used in order to indicate this situation
         most certainly only for 1-3 images in order to generate some figures.
         :param repeated_run: used during ensemble testing. so we use the same model, different checkpoint, to
+        :param store_test_results:
         :return:
         """
         half_classes = 4
@@ -315,19 +318,21 @@ class ExperimentHandler(object):
         b_predictions = np.zeros(tuple([mc_samples] + list(test_set.labels[image_num].shape)))
         slice_idx = 0
         # batch_generator iterates over the slices of a particular image
-        for batch_image, batch_labels in test_set.batch_generator(image_num):
+        mc_dropout = sample_weights
+        for batch_image, batch_labels, b_num_labels_per_class in test_set.batch_generator(image_num):
 
             # NOTE: batch image shape (autograd.Variable): [1, 2, width, height] 1=batch size, 2=ES/ED image
             #       batch labels shape (autograd.Variable): [1, #classes, width, height] 8 classes, 4ES, 4ED
             # IMPORTANT: if we want to sample weights from the "posterior" over model weights, we
             # need to "tell" pytorch that we use "train" mode even during testing, otherwise dropout is disabled
-            pytorch_test_mode = not sample_weights
             b_test_losses = np.zeros(mc_samples)
             bald_values = np.zeros((2, batch_labels.shape[2], batch_labels.shape[3]))
             for s in np.arange(mc_samples):
                 test_loss, test_pred = model.do_test(batch_image, batch_labels,
                                                      voxel_spacing=test_set.new_voxel_spacing,
-                                                     compute_hd=True, test_mode=pytorch_test_mode)
+                                                     compute_hd=True,
+                                                     num_of_labels_per_class=b_num_labels_per_class,
+                                                     mc_dropout=mc_dropout)
                 b_predictions[s, :, :, :, test_set.slice_counter] = test_pred.data.cpu().numpy()
 
                 b_test_losses[s] = test_loss.data.cpu().numpy()
@@ -399,8 +404,8 @@ class ExperimentHandler(object):
         test_accuracy, test_hd, seg_errors = test_set.get_accuracy(compute_hd=compute_hd, compute_seg_errors=True,
                                                                    do_filter=do_filter)
         # we only want to save predicted labels when we're not SAMPLING weights
-        if save_pred_labels and not sample_weights:
-            test_set.save_pred_labels(self.exper.output_dir, u_threshold=0.)
+        if save_pred_labels:
+            test_set.save_pred_labels(self.exper.output_dir, u_threshold=0., mc_dropout=mc_dropout)
 
         if use_uncertainty:
             # u_maps_image shape [8classes, width, height, #slices]
@@ -413,7 +418,7 @@ class ExperimentHandler(object):
             # save the referred labels
             if save_pred_labels:
                 test_set.save_pred_labels(self.exper.output_dir, u_threshold=referral_threshold,
-                                          ref_positives_only=ref_positives_only)
+                                          ref_positives_only=ref_positives_only, mc_dropout=mc_dropout)
 
         print("Image {} - test loss {:.3f} "
               " dice(RV/Myo/LV):\tES {:.2f}/{:.2f}/{:.2f}\t"
@@ -470,17 +475,18 @@ class ExperimentHandler(object):
                       "ED {:.2f}/{:.2f}/{:.2f}".format(test_hd_ref[1], test_hd_ref[2],
                                                        test_hd_ref[3], test_hd_ref[5],
                                                        test_hd_ref[6], test_hd_ref[7]))
-        self.test_results.add_results(test_set.b_image, test_set.b_labels, test_set.b_image_id,
-                                      test_set.b_pred_labels, b_predictions, test_set.b_stddev_map,
-                                      test_accuracy, test_hd, seg_errors=seg_errors,
-                                      store_all=store_details,
-                                      bald_maps=test_set.b_bald_map,
-                                      uncertainty_stats=test_set.b_uncertainty_stats,
-                                      test_accuracy_slices=test_set.b_acc_slices,
-                                      test_hd_slices=test_set.b_hd_slices,
-                                      image_name=test_set.b_image_name, repeated_run=repeated_run,
-                                      referral_accuracy=test_accuracy_ref, referral_hd=test_hd_ref,
-                                      referral_stats=test_set.referral_stats)
+        if store_test_results:
+            self.test_results.add_results(test_set.b_image, test_set.b_labels, test_set.b_image_id,
+                                          test_set.b_pred_labels, b_predictions, test_set.b_stddev_map,
+                                          test_accuracy, test_hd, seg_errors=seg_errors,
+                                          store_all=store_details,
+                                          bald_maps=test_set.b_bald_map,
+                                          uncertainty_stats=test_set.b_uncertainty_stats,
+                                          test_accuracy_slices=test_set.b_acc_slices,
+                                          test_hd_slices=test_set.b_hd_slices,
+                                          image_name=test_set.b_image_name, repeated_run=repeated_run,
+                                          referral_accuracy=test_accuracy_ref, referral_hd=test_hd_ref,
+                                          referral_stats=test_set.referral_stats)
 
     def create_u_maps(self, model=None, checkpoint=None, mc_samples=10, u_threshold=0.1, do_save_u_stats=False,
                       save_actual_maps=False, test_set=None, generate_figures=False):
@@ -497,7 +503,8 @@ class ExperimentHandler(object):
         maps_generator = UncertaintyMapsGenerator(self, model=model, test_set=test_set, verbose=False,
                                                   mc_samples=mc_samples, u_threshold=u_threshold,
                                                   checkpoint=checkpoint, store_test_results=True)
-        maps_generator(do_save=do_save_u_stats, clean_up=True, save_actual_maps=save_actual_maps)
+        maps_generator(do_save=do_save_u_stats, clean_up=False, save_actual_maps=save_actual_maps,
+                       generate_figures=generate_figures)
 
         if generate_figures:
             if self.test_results is None:
@@ -674,15 +681,20 @@ class ExperimentHandler(object):
             if per_class:
                 self.referral_umaps[patientID] = data["filtered_cls_umap"]
             else:
+                # this is the one we use during referral at the moment
                 self.referral_umaps[patientID] = data["filtered_umap"]
 
-    def create_filtered_umaps(self, u_threshold, verbose=False):
+    def create_filtered_umaps(self, u_threshold, verbose=False, patient_id=None):
         if u_threshold < 0.:
             raise ValueError("ERROR - u_threshold must be greater than zero. ({:.2f})".format(u_threshold))
         # returns an OrderedDict with key "patient_id" and value=tensor of shape [2, 4classes, width, height, #slices]
         # which is stored in self.u_maps
         self.get_u_maps()
-        for patient_id, raw_u_map in self.u_maps.iteritems():
+        if patient_id is not None:
+            u_maps = {patient_id: self.u_maps.get(patient_id)}
+        else:
+            u_maps = self.u_maps
+        for patient_id, raw_u_map in u_maps.iteritems():
             num_of_phases = raw_u_map.shape[0]
             num_of_classes = raw_u_map.shape[1]
             # Yes I know, completely inconsistent the output is [8classes, width, height, #slices] instead of [2, 4...]
@@ -704,11 +716,11 @@ class ExperimentHandler(object):
                 # filtered_stddev_map[phase] = filter_connected_components(filtered_stddev_map[phase],
                 #                                                         threshold=u_threshold)
                 # Taking the maximum uncertainty per pixel over the 4 classes (for ES and ED)
+                # TODO CHANGED THIS TO MEAN BECAUSE WE HAD TOO MANY UNCERTAIN PIXELS
                 if phase == 0:
                     filtered_stddev_map[phase] = np.max(filtered_cls_stddev_map[:num_of_classes], axis=0)
                 else:
                     filtered_stddev_map[phase] = np.max(filtered_cls_stddev_map[num_of_classes:], axis=0)
-
                 # save map
             umap_output_dir = os.path.join(self.exper.config.root_dir, os.path.join(self.exper.output_dir,
                                                                                     config.u_map_dir))
@@ -731,6 +743,12 @@ class ExperimentHandler(object):
             print("INFO - Creating {} filtered u-map-{:.2f} in {}".format(len(self.u_maps.keys()),
                                                                           u_threshold, umap_output_dir))
         # we don't need this object, to big to keep
+        if patient_id is not None:
+            # let's add this to the self.referral_umaps object, in most cases we use it in the next step to
+            # make referral predictions
+            if self.referral_umaps is None:
+                self.referral_umaps = OrderedDict()
+            self.referral_umaps[patient_id] = filtered_stddev_map
         self.u_maps = None
         del filtered_cls_stddev_map
         del filtered_stddev_map
@@ -790,6 +808,15 @@ class ExperimentHandler(object):
         self.exper.model_name = model_name
 
     @staticmethod
+    def check_compatibility(exper):
+        arg_dict = vars(exper.run_args)
+        # add use_reg_loss argument to run arguments, because we added this arg later
+        if "use_reg_loss" not in arg_dict.keys():
+            arg_dict["use_reg_loss"] = False
+
+        return exper
+
+    @staticmethod
     def load_experiment(path_to_exp, full_path=False, epoch=None):
 
         path_to_exp = os.path.join(path_to_exp, config.stats_path)
@@ -815,6 +842,7 @@ class ExperimentHandler(object):
             print "Unexpected error:", sys.exc_info()[0]
             raise
 
+        experiment = ExperimentHandler.check_compatibility(experiment)
         return experiment
 
 

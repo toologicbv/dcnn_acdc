@@ -1023,7 +1023,7 @@ class TestResults(object):
                                            image_name + "*" + "_filtered_umaps" + referral_threshold + ".npz")
                 filtered_std_map = load_referral_umap(search_path, per_class=False)
                 if ref_positives_only:
-                    referral_threshold += "_pos_only"
+                    referral_threshold += "_mc_pos_only"
                 # predicted labels we obtained after referral with this threshold
                 search_path = os.path.join(self.pred_labels_input_dir,
                                            image_name + "_filtered_pred_labels" + referral_threshold + ".npz")
@@ -1042,14 +1042,18 @@ class TestResults(object):
             # Normal non-referral functionality
             filtered_std_map = None
             referral_pred_labels = None
-        search_path = os.path.join(self.pred_labels_input_dir, image_name + "_pred_labels.npz")
-        # the predicted labels we obtained with the MC model when NOT using dropout during inference!
-        pred_labels_wo_sampling = load_referral_pred_labels(search_path)
+        if std_threshold != 0:
+            search_path = os.path.join(self.pred_labels_input_dir, image_name + "_pred_labels.npz")
+            # the predicted labels we obtained with the MC model when NOT using dropout during inference!
+            pred_labels_wo_sampling = load_referral_pred_labels(search_path)
+        else:
+            pred_labels_wo_sampling = None
         if ref_positives_only and std_threshold != 0.:
             if pred_labels_wo_sampling is not None:
                 print("---- pred_labels_wo_sampling is not none ------")
                 mask = pred_labels_wo_sampling == 0
-                overall_mask = create_mask_uncertainties(pred_labels_wo_sampling)
+                # overall_mask = create_mask_uncertainties(pred_labels_wo_sampling)
+                overall_mask = create_mask_uncertainties(pred_labels)
                 overall_mask_es = overall_mask[0]
                 overall_mask_ed = overall_mask[1]
             else:
@@ -1066,10 +1070,20 @@ class TestResults(object):
             filtered_cls_std_map[mask] = 0
         # sum uncertainties over slice-pixels, to give us an indication about the amount of uncertainty
         # and whether we can visually inspect why tht model is uncertain
-        es_count_nonzero = np.count_nonzero(filtered_std_map[0], axis=(0, 1))
-        ed_count_nonzero = np.count_nonzero(filtered_std_map[1], axis=(0, 1))
+        if filtered_std_map is None:
+
+            es_count_nonzero = np.count_nonzero(uncertainty_map[:4], axis=(0, 1, 2))
+            ed_count_nonzero = np.count_nonzero(uncertainty_map[4:], axis=(0, 1, 2))
+        else:
+            es_count_nonzero = np.count_nonzero(filtered_std_map[0], axis=(0, 1))
+            ed_count_nonzero = np.count_nonzero(filtered_std_map[1], axis=(0, 1))
         total_uncertainty_per_slice = es_count_nonzero + ed_count_nonzero
         print(total_uncertainty_per_slice)
+        dice_scores_slices = self.test_accuracy_slices[image_num]
+        print(es_count_nonzero)
+        print("ES {}".format(np.array_str(np.mean(dice_scores_slices[0, 1:], axis=0), precision=2)))
+        print(ed_count_nonzero)
+        print("ED {}".format(np.array_str(np.mean(dice_scores_slices[1, 1:], axis=0), precision=2)))
         max_u_value = np.max(total_uncertainty_per_slice)
         sorted_u_value_list = np.sort(total_uncertainty_per_slice)[::-1]
 
@@ -1206,11 +1220,7 @@ class TestResults(object):
                     rgb_img_ref_pred, cls_errors = set_error_pixels(rgb_img, slice_pred_labels_referred,
                                                                     slice_true_labels, cls_offset,
                                                                     slice_stddev, std_threshold=0.)
-                    if phase == 0:
-                        unc_pixels = filtered_std_map[0, :, :, img_slice] != 0
-                    else:
-                        unc_pixels = filtered_std_map[1, :, :, img_slice] != 0
-                    # rgb_img_ref_pred[unc_pixels, :] = [0, 0, 204]
+
                     ax_pred_ref.text(20, 20, 'yellow: RV ({}), blue: Myo ({}), '
                                      'red: LV ({})'.format(cls_errors[1], cls_errors[2], cls_errors[3]),
                                      bbox={'facecolor': 'white', 'pad': 18})
@@ -1219,7 +1229,7 @@ class TestResults(object):
                     ax_pred_ref.set_title("Prediction errors after referral", **config.title_font_medium)
                     plt.axis('off')
                 # ARE WE SHOWING THE BALD value heatmap?
-                if use_bald:
+                if use_bald and filtered_std_map is not None:
                     row += 2
                     # CONFUSING!!! not using BALD here anymore (dead code) using it now for u-map where we
                     # add all uncertainties from the separate STDDEV maps per class
@@ -1291,14 +1301,14 @@ class TestResults(object):
                     # print("Phase {} row {} - BALD histogram".format(phase, row + 2))
                     if bald_err is not None:
 
-                        ax5.hist(bald_err[bald_err >= std_threshold], bins=xs,
+                        ax5.hist(bald_err, bins=xs,
                                  label=r"$bald_{{pred(fp+fn)}}({})$".format(bald_err.shape[0])
                                  , color='b', alpha=0.2, histtype='stepfilled')
                         ax5.legend(loc="best", prop={'size': 12})
                         ax5.grid(False)
                     if bald_corr is not None:
                         ax5b = ax5.twinx()
-                        ax5b.hist(bald_corr[bald_corr >= std_threshold], bins=xs,
+                        ax5b.hist(bald_corr, bins=xs,
                                   label=r"$bald_{{pred(tp)}}({})$".format(bald_corr.shape[0]),
                                   color='g', alpha=0.4, histtype='stepfilled')
                         ax5b.legend(loc=2, prop={'size': 12})
@@ -1379,8 +1389,8 @@ class TestResults(object):
                             if p_err_std is not None:
                                 ax2b = ax2.twinx()
                                 # p_err_std = p_err_std[np.where((p_err_std>0.1) & (p_err_std< 0.9) )]
-                                if info_type == "uncertainty":
-                                    p_err_std = p_err_std[p_err_std >= std_threshold]
+                                # if info_type == "uncertainty":
+                                #    p_err_std = p_err_std[p_err_std >= std_threshold]
 
                                 ax2b.hist(p_err_std, bins=xs,
                                          label=r"$\sigma_{{pred(fp+fn)}}({})$".format(cls_errors[cls])
@@ -1388,8 +1398,8 @@ class TestResults(object):
                                 ax2b.legend(loc=2, prop={'size': 9})
 
                             if p_corr_std is not None:
-                                if info_type == "uncertainty":
-                                    p_corr_std = p_corr_std[p_corr_std >= std_threshold]
+                                # if info_type == "uncertainty":
+                                #    p_corr_std = p_corr_std[p_corr_std >= std_threshold]
                                 # p_corr_std = p_corr_std[np.where((p_corr_std > 0.1) & (p_corr_std < 0.9))]
                                 ax2.hist(p_corr_std, bins=xs,
                                          label=r"$\sigma_{{pred(tp)}}({})$".format(p_corr_std.shape[0]),

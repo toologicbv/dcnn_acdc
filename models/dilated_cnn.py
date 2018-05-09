@@ -138,7 +138,7 @@ class BaseDilated2DCNN(nn.Module):
         dices = Variable(torch.FloatTensor(num_of_classes))
         pixel_reg_loss = Variable(torch.FloatTensor(batch_size, half_classes))
         # compute sum of regression predictions per image-slice and class
-        reg_loss_weight = 0.01
+        reg_loss_weight = 0.05
         adjusted_class_idx = [-1, 0, -1, 1, -1, 2, -1, 3]
         if self.use_regression_loss:
             regression_maps = torch.sum(regression_maps.view(batch_size, half_classes, -1), dim=2)
@@ -185,8 +185,7 @@ class BaseDilated2DCNN(nn.Module):
                                                                num_of_labels_per_class[:, cls])
                 else:
                     pixel_reg_loss[:, adj_cls_idx] = 0
-            else:
-                pixel_reg_loss[:, cls] = 0
+
             # IMPORTANT: we DON't compute the HD for the background class
             if cls != config.class_lbl_background and cls != half_classes:
                 if compute_hd:
@@ -213,9 +212,11 @@ class BaseDilated2DCNN(nn.Module):
             return (-1.) * torch.sum(losses)
         else:
             # summing the mean loss for RV & LV as if we would have the cavity volumes. See whether this "helps"
-            reg_loss = reg_loss_weight * torch.sum(torch.mean(pixel_reg_loss, dim=1))
-            self.np_reg_loss = reg_loss.data.cpu().numpy()
-            losses = torch.mean(losses[0:half_classes]) + torch.mean(losses[half_classes:]) + reg_loss
+            losses = torch.mean(losses[0:half_classes]) + torch.mean(losses[half_classes:])
+            if self.use_regression_loss:
+                reg_loss = reg_loss_weight * torch.sum(torch.mean(pixel_reg_loss, dim=1))
+                self.np_reg_loss = reg_loss.data.cpu().numpy()
+                losses += reg_loss
             return losses
 
     def do_train(self, batch):
@@ -235,8 +236,8 @@ class BaseDilated2DCNN(nn.Module):
         self.optimizer.step()
         return b_loss
 
-    def do_test(self, images, labels, voxel_spacing=None, compute_hd=False, test_mode=True,
-                pred_num_lbls_per_class=None):
+    def do_test(self, images, labels, voxel_spacing=None, compute_hd=False, num_of_labels_per_class=None,
+                mc_dropout=False):
         """
         voxel_spacing: we assume the image slices are 2D and have isotropic spacing. Hence voxel_spacing is a scaler
                        and for AC-DC equal to 1.4
@@ -244,17 +245,15 @@ class BaseDilated2DCNN(nn.Module):
         :returns validation loss (autograd.Variable) and the label predictions [batch_size, classes, width, height]
                  also as autograd.Variable
         """
-        if test_mode:
-            self.eval()
+        self.eval(mc_dropout=mc_dropout)
         if not self.use_regression_loss:
             b_predictions = self(images)
             test_loss = self.get_loss(b_predictions, labels, zooms=voxel_spacing, compute_hd=compute_hd)
         else:
             b_predictions, b_reg_maps = self(images)
             test_loss = self.get_loss(b_predictions, labels, zooms=voxel_spacing, compute_hd=compute_hd,
-                                      regression_maps=b_reg_maps, num_of_labels_per_class=pred_num_lbls_per_class)
-        if test_mode:
-            self.train()
+                                      regression_maps=b_reg_maps, num_of_labels_per_class=num_of_labels_per_class)
+        self.train()
         return test_loss, b_predictions
 
     def get_dice_losses(self, average=False):
@@ -318,6 +317,33 @@ class BaseDilated2DCNN(nn.Module):
                     print("WARNING - No gradients for parameter >>> {} <<<".format(name))
 
         return sum_grads
+
+    def train(self, mode=True, mc_dropout=False):
+        """Sets the module in training mode.
+
+        This has any effect only on modules such as Dropout or BatchNorm.
+
+        Returns:
+            Module: self
+        """
+        self.training = mode
+        for module in self.children():
+            module.train(mode)
+        # we only execute this if we're in dropout mode (sampling) and we're NOT in training mode
+        if mc_dropout and not mode:
+            for module_name, module in self.named_modules():
+                if "layer_drop" in module_name:
+                    module.training = True
+            # print("WARNING MC-DROPOUT - dropout layers are still in training mode")
+
+        return self
+
+    def eval(self, mc_dropout=False):
+        """Sets the module in evaluation mode.
+
+        This has any effect only on modules such as Dropout or BatchNorm.
+        """
+        return self.train(False, mc_dropout=mc_dropout)
 
 
 class DilatedCNN(nn.Module):
