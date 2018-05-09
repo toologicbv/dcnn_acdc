@@ -173,7 +173,7 @@ class ExperimentHandler(object):
             val_batch.generate_batch_2d(dataset.images(train=False), dataset.labels(train=False),
                                         slice_range=slice_range)
             val_loss, _ = model.do_test(val_batch.get_images(), val_batch.get_labels(),
-                                        pred_num_lbls_per_class=val_batch.get_num_labels_per_class())
+                                        num_of_labels_per_class=val_batch.get_num_labels_per_class())
             arr_val_loss[chunk] = val_loss.data.cpu().numpy()[0]
             # returns array of 6 values
             arr_val_acc += model.get_accuracy()
