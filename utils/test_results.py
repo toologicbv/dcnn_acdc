@@ -6,48 +6,13 @@ import glob
 from tqdm import tqdm
 from collections import OrderedDict
 from config.config import config
-from utils.dice_metric import dice_coefficient
-from utils.medpy_metrics import hd
 import matplotlib.pyplot as plt
 from matplotlib import cm
-from common.common import datestr, to_rgb1a, set_error_pixels, create_mask_uncertainties
+from common.common import datestr, to_rgb1a, set_error_pixels, create_mask_uncertainties, detect_seg_contours
+from common.common import load_referral_umap, load_pred_labels
 import copy
 from scipy.stats import wilcoxon, ttest_ind, mannwhitneyu
-from skimage import segmentation
-from skimage import exposure
 from utils.post_processing import filter_connected_components
-
-
-def load_referral_umap(search_path, per_class=True):
-
-    files = glob.glob(search_path)
-    if len(files) == 0:
-        raise ImportError("ERROR - no referral u-map found in {}".format(search_path))
-    fname = files[0]
-
-    try:
-        data = np.load(fname)
-    except IOError:
-        print("Unable to load uncertainty map from {}".format(fname))
-    if per_class:
-        return data["filtered_cls_umap"]
-    else:
-        return data["filtered_umap"]
-
-
-def load_referral_pred_labels(search_path):
-
-    files = glob.glob(search_path)
-    if len(files) == 0:
-        raise ImportError("ERROR - no referral pred labels found in {}".format(search_path))
-    fname = files[0]
-
-    try:
-        data = np.load(fname)
-    except IOError:
-        print("Unable to load referral pred-labels from {}".format(fname))
-        return None
-    return data["filtered_pred_label"]
 
 
 def get_accuracies_all(pred_labels, true_labels):
@@ -709,231 +674,6 @@ class TestResults(object):
             plt.show()
         plt.close()
 
-    def visualize_test_slices(self, image_num=0, width=8, height=6, slice_range=None, do_save=False,
-                              fig_name=None):
-        """
-
-        Remember that self.image is a list, containing images with shape [2, height, width, depth]
-        NOTE: self.b_pred_labels only contains the image that we just processed and NOT the complete list
-        of images as in self.images and self.labels!!!
-
-        NOTE: we only visualize 1 image (given by image_idx)
-
-        """
-        column_lbls = ["bg", "RV", "MYO", "LV"]
-        image = self.images[image_num]
-        img_labels = self.labels[image_num]
-        img_pred_labels = self.pred_labels[image_num]
-        num_of_classes = img_labels.shape[0]
-        half_classes = num_of_classes / 2
-        num_of_slices = img_labels.shape[3]
-
-        if slice_range is None:
-            slice_range = np.arange(0, num_of_slices // 2)
-
-        fig = plt.figure(figsize=(width, height))
-        counter = 1
-        columns = half_classes + 1
-        if img_pred_labels is not None:
-            rows = 4
-            plot_preds = True
-        else:
-            rows = 2
-            plot_preds = False
-
-        num_of_subplots = rows * 1 * columns  # +1 because the original image is included
-        if len(slice_range) * num_of_subplots > 100:
-            print("WARNING: need to limit number of subplots")
-            slice_range = slice_range[:5]
-        str_slice_range = [str(i) for i in slice_range]
-        print("Number of subplots {} columns {} rows {} slices {}".format(num_of_subplots, columns, rows,
-                                                                          ",".join(str_slice_range)))
-        for idx in slice_range:
-            # get the slice and then split ED and ES slices
-            img = image[:, :, :, idx]
-            labels = img_labels[:, :, :, idx]
-
-            if plot_preds:
-                pred_labels = img_pred_labels[:, :, :, idx]
-            img_ed = img[0]  # INDEX 0 = end-diastole image
-            img_es = img[1]  # INDEX 1 = end-systole image
-
-            ax1 = plt.subplot(num_of_subplots, columns, counter)
-            ax1.set_title("End-systole image", **config.title_font_medium)
-            plt.imshow(img_ed, cmap=cm.gray)
-            plt.axis('off')
-            counter += 1
-            for cls1 in np.arange(half_classes):
-                ax2 = plt.subplot(num_of_subplots, columns, counter)
-                plt.imshow(labels[cls1], cmap=cm.gray)
-                ax2.set_title(column_lbls[cls1] + " (true labels)", **config.title_font_medium)
-                plt.axis('off')
-                if plot_preds:
-                    ax3 = plt.subplot(num_of_subplots, columns, counter + columns)
-                    plt.imshow(pred_labels[cls1], cmap=cm.gray)
-                    plt.axis('off')
-                    ax3.set_title(column_lbls[cls1] + " (pred labels)", **config.title_font_medium)
-                counter += 1
-
-            cls1 += 1
-            counter += columns
-            ax2 = plt.subplot(num_of_subplots, columns, counter)
-            ax2.set_title("End-diastole image", **config.title_font_medium)
-            plt.imshow(img_es, cmap=cm.gray)
-            plt.axis('off')
-            counter += 1
-            for cls2 in np.arange(half_classes):
-                ax4 = plt.subplot(num_of_subplots, columns, counter)
-                plt.imshow(labels[cls1 + cls2], cmap=cm.gray)
-                ax4.set_title(column_lbls[cls2] + " (true labels)", **config.title_font_medium)
-                plt.axis('off')
-                if plot_preds:
-                    ax5 = plt.subplot(num_of_subplots, columns, counter + columns)
-                    plt.imshow(pred_labels[cls1 + cls2], cmap=cm.gray)
-                    ax5.set_title(column_lbls[cls2] + " (pred labels)", **config.title_font_medium)
-                    plt.axis('off')
-                counter += 1
-
-            counter += columns
-
-        fig.tight_layout()
-        if do_save:
-            file_suffix = "_".join(str_slice_range)
-            if fig_name is None:
-                fig_name = "test_img{}".format(image_num) + "_vis_pred_" + file_suffix
-            fig_name = os.path.join(self.fig_output_dir, fig_name + ".png")
-
-            plt.savefig(fig_name, bbox_inches='tight')
-            print("INFO - Successfully saved fig %s" % fig_name)
-        plt.show()
-
-    def visualize_prediction_uncertainty(self, image_num=0, width=12, height=12, slice_range=None, do_save=False,
-                                         fig_name=None, std_threshold=None, verbose=False):
-
-        if std_threshold is None:
-            use_uncertainty = False
-        else:
-            use_uncertainty = True
-
-        column_lbls = ["bg", "RV", "MYO", "LV"]
-        image = self.images[image_num]
-        labels = self.labels[image_num]
-        img_pred_labels = self.pred_labels[image_num]
-        uncertainty_map = self.stddev_maps[image_num]
-        num_of_classes = labels.shape[0]
-        half_classes = num_of_classes / 2
-        num_of_slices = labels.shape[3]
-
-        if slice_range is None:
-            slice_range = np.arange(num_of_slices)
-            num_of_slices = len(slice_range)
-
-        height = height * num_of_slices
-        fig = plt.figure(figsize=(width, height))
-        counter = 1
-        columns = half_classes + 1  # currently only original image and uncertainty map
-        rows = 2
-        num_of_slices = len(slice_range)
-        num_of_subplots = rows * num_of_slices * columns
-        str_slice_range = [str(i) for i in slice_range]
-        print("Number of subplots {} columns {} rows {} slices {}".format(num_of_subplots, columns, rows,
-                                                                          ",".join(str_slice_range)))
-        for idx in slice_range:
-            # get the slice and then split ED and ES slices
-            image_slice = image[:, :, :, idx]
-            true_labels = labels[:, :, :, idx]
-            pred_labels = img_pred_labels[:, :, :, idx]
-            uncertainty = uncertainty_map[:, :, :, idx]
-            for phase in np.arange(2):
-
-                img = image_slice[phase]  # INDEX 0 = end-systole image
-                ax1 = plt.subplot(num_of_subplots, columns, counter)
-                if phase == 0:
-                    ax1.set_title("Slice {}: End-systole".format(idx+1), **config.title_font_medium)
-                    phase_str = "ES"
-                else:
-                    ax1.set_title("Slice {}: End-diastole".format(idx+1), **config.title_font_medium)
-                    phase_str = "ED"
-
-                plt.imshow(img, cmap=cm.gray)
-                plt.axis('off')
-                counter += 1
-                # we use the cls_offset to plot ES and ED images in one loop (phase variable)
-                cls_offset = phase * half_classes
-                mean_stddev = 0.
-                for cls in np.arange(half_classes):
-                    std = uncertainty[cls + cls_offset]
-                    mean_stddev += std
-                    ax2 = plt.subplot(num_of_subplots, columns, counter)
-                    x2_plot = ax2.imshow(std, cmap=cm.coolwarm, vmin=0.0, vmax=0.6)
-                    # plt.colorbar(x2_plot, cax=ax2)
-                    ax2.set_title(r"$\sigma_{{pred}}$ {}".format(column_lbls[cls]), **config.title_font_medium)
-                    plt.axis('off')
-                    counter += 1
-                    true_cls_labels = true_labels[cls + cls_offset]
-                    pred_cls_labels = pred_labels[cls + cls_offset]
-                    errors = true_cls_labels != pred_cls_labels
-                    ax3 = plt.subplot(num_of_subplots, columns, counter + half_classes)
-                    dice_before = dice_coefficient(true_cls_labels.flatten(), pred_cls_labels.flatten())
-                    if 0 != np.count_nonzero(pred_cls_labels) and 0 != np.count_nonzero(true_cls_labels):
-                        hausdorff_before = hd(pred_cls_labels, true_cls_labels, voxelspacing=1.4, connectivity=1)
-                    else:
-                        hausdorff_before = 0.
-                    if use_uncertainty:
-                        error_std = np.copy(std)
-                        error_std[~errors] = 0.
-                        pred_cls_labels_filtered = np.copy(pred_cls_labels)
-                        error_idx = error_std > std_threshold
-                        pred_cls_labels_filtered[error_idx] = 0
-                        error_std[error_idx] = 0.
-                        errors_after = true_cls_labels != pred_cls_labels_filtered
-                        dice_after = dice_coefficient(true_cls_labels, pred_cls_labels_filtered)
-                        if 0 != np.count_nonzero(pred_cls_labels_filtered) and 0 != np.count_nonzero(true_cls_labels):
-                            hausdorff_after = hd(pred_cls_labels_filtered, true_cls_labels, voxelspacing=1.4,
-                                                 connectivity=1)
-                        else:
-                            hausdorff_after = 0.
-
-                        if False:
-                            plt.imshow(error_std, cmap=cm.coolwarm, vmin=0.0, vmax=std_threshold)
-                        else:
-                            plt.imshow(errors_after, cmap=cm.gray)
-                        ax3.set_title("{} errors: {}".format(column_lbls[cls], np.count_nonzero(errors_after)),
-                                      **config.title_font_medium)
-                        if cls != 0 and verbose:
-                            print("Slice {} - {} - Class {} before/after: errors {} {} || dice {:.2f} / {:.2f} || "
-                                  "hd  {:.2f} / {:.2f}".format(idx + 1, phase_str, cls, np.count_nonzero(errors),
-                                                               np.count_nonzero(errors_after), dice_before, dice_after,
-                                                               hausdorff_before, hausdorff_after))
-                    else:
-                        plt.imshow(errors, cmap=cm.gray)
-                        ax3.set_title("{} errors: {}".format(column_lbls[cls], np.count_nonzero(errors)),
-                                      **config.title_font_medium)
-                        if cls != 0 and verbose:
-                            print("Slice {} - {} - Class {}: errors {} || dice {:.2f} || "
-                                  "hd  {:.2f}".format(idx + 1, phase_str, cls, np.count_nonzero(errors),
-                                                      dice_before, hausdorff_before))
-                    plt.axis('off')
-
-                # plot the average uncertainty per pixel (over classes)
-                mean_stddev = 1./float(half_classes) * mean_stddev
-                ax4 = plt.subplot(num_of_subplots, columns, counter )
-                ax4_plot = ax4.imshow(mean_stddev, cmap=cm.coolwarm, vmin=0.0, vmax=0.6)
-                # plt.colorbar(ax4_plot, cax=ax4_plot)
-                ax4.set_title(r"$\sigma_{{pred}}$ {}".format("mean"), **config.title_font_medium)
-                plt.axis('off')
-                # move to the correct subplot space for the next phase (ES/ED)
-                counter += half_classes + 1  # move counter forward in subplot
-        fig.tight_layout()
-        if do_save:
-            file_suffix = "_".join(str_slice_range)
-            if fig_name is None:
-                fig_name = "test_img{}".format(image_num) + "_vis_pred_uncertainty_" + file_suffix
-            fig_name = os.path.join(self.fig_output_dir, fig_name + ".pdf")
-
-            plt.savefig(fig_name, bbox_inches='tight')
-            print("INFO - Successfully saved fig %s" % fig_name)
-
     def visualize_uncertainty_histograms(self, image_num=None, width=16, height=10, info_type="uncertainty",
                                          std_threshold=0., do_show=False, model_name="", use_bald=True,
                                          do_save=False, slice_range=None, errors_only=False,
@@ -965,26 +705,6 @@ class TestResults(object):
                                                                        NO HISTOGRAMS!
         :return:
         """
-
-        def detect_seg_contours(img, lbls, cls_offset):
-            #                 YELLOW        BLUE            RED
-            gb_error_codes = [(1, 1, 0.), (0., 0.3, 0.7), (1, 0, 0)]
-            rv_lbls = lbls[1 + cls_offset]
-            myo_lbls = lbls[2 + cls_offset]
-            lv_lbls = lbls[3 + cls_offset]
-            img_rescaled = exposure.rescale_intensity(img)
-            clean_border_rv = segmentation.clear_border(rv_lbls).astype(np.int)
-            img_lbl = segmentation.mark_boundaries(img_rescaled, clean_border_rv, mode="outer",
-                                                   color=gb_error_codes[0], background_label=0)
-            clean_border_myo = segmentation.clear_border(myo_lbls).astype(np.int)
-            img_lbl = segmentation.mark_boundaries(img_lbl, clean_border_myo, mode="inner",
-                                                   color=gb_error_codes[1], background_label=0)
-            clean_border_lv = segmentation.clear_border(lv_lbls).astype(np.int)
-            img_lbl = segmentation.mark_boundaries(img_lbl, clean_border_lv, mode="inner",
-                                                   color=gb_error_codes[2], background_label=0)
-            img_lbl = exposure.rescale_intensity(img_lbl, out_range=(0, 1))
-            return img_lbl
-
         if errors_only and use_bald:
             # need to set BALD to False as well
             print("WARNING - setting use_bald to False")
@@ -1028,7 +748,7 @@ class TestResults(object):
                 search_path = os.path.join(self.pred_labels_input_dir,
                                            image_name + "_filtered_pred_labels" + referral_threshold + ".npz")
                 print("Found label file {}".format(search_path))
-                referral_pred_labels = load_referral_pred_labels(search_path)
+                referral_pred_labels = load_pred_labels(search_path)
 
             else:
                 filtered_std_map = copy.deepcopy(uncertainty_map)
@@ -1045,7 +765,7 @@ class TestResults(object):
         if std_threshold != 0:
             search_path = os.path.join(self.pred_labels_input_dir, image_name + "_pred_labels.npz")
             # the predicted labels we obtained with the MC model when NOT using dropout during inference!
-            pred_labels_wo_sampling = load_referral_pred_labels(search_path)
+            pred_labels_wo_sampling = load_pred_labels(search_path)
         else:
             pred_labels_wo_sampling = None
         if ref_positives_only and std_threshold != 0.:
@@ -1324,7 +1044,7 @@ class TestResults(object):
                     ax5.set_title("Slice {} {}: Distribution of BALD values ".format(img_slice + 1, str_phase)
                                   , ** config.title_font_medium)
 
-                # In case we're only showing the error segmentation map we skip the next part (histgrams and
+                # In case we're only showing the error segmentation map we skip the next part (histograms and
                 # stddev uncertainty maps per class. If we only skip the histograms, we visualize the uncertainty
                 # maps for each class (at least for the stddev maps.
                 if not errors_only:
@@ -1626,8 +1346,8 @@ def load_all_results(exper_dict, search_prefix="test_results_25imgs*"):
         search_path = os.path.join(input_dir, search_prefix + ".dll")
         filenames = glob.glob(search_path)
         if len(filenames) != 1:
-            raise ValueError("ERROR - Found {} result files for this experiment."
-                             "Must be 1.".format(len(filenames)))
+            raise ValueError("ERROR - Found {} result files for this {} experiment."
+                             "Must be 1.".format(len(filenames), exper_id))
         results.append(TestResults.load_results(filenames[0], verbose=False))
 
     if len(results) != 4:

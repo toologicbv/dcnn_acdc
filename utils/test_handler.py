@@ -221,6 +221,15 @@ class ACDC2017TestHandler(object):
         file_list = self._get_file_lists()
         self._load_file_list(file_list)
 
+    def get_test_pair(self, patient_id):
+        try:
+            image_num = self.trans_dict[patient_id]
+        except KeyError:
+            print("ERROR - key {} does not exist in translation dict".format(patient_id))
+            print("Following keys exist:")
+            print(self.trans_dict.keys())
+        return self.images[image_num], self.labels[image_num]
+
     def _set_pathes(self):
         # kind of awkward. but because it's a class variable we need to check whether we extended the path
         # earlier (e.g. when running ipython notebook session, otherwise we concatenate it twice).
@@ -588,13 +597,7 @@ class ACDC2017TestHandler(object):
                         uncertain_es_idx = np.logical_and(uncertain_es_idx, pred_labels_pos_idx_es)
                         total_pixels_positive += c
                         slice_pixels_pos_es += c
-                        t_unc_total = np.count_nonzero(uncertain_es_idx)
-                        t_unc_pos = np.count_nonzero(uncertain_es_idx)
-                        # if slice_id == 4 and (cls == 3 or cls == 2):
-                        # if slice_id == 0 and (cls == 1 or cls == 1):
-                        #    print("Slice {} ES Class {}: errors {} #true_pos {} #pos_labels {} "
-                        #          "#u-pixels {} #pos+unc-pixels {}".format(slice_id+1, cls, errors_es, num_true_labels_es,
-                        #                                                                  c, t_unc_total, t_unc_pos))
+
                     # which of the uncertain pixels belong to the ones we misclassified? True positives ES
                     f1_es, pr_es, rc_es, true_pos_es, false_pos_es, false_neg_es = eval_referral(errors_es_idx,
                                                                                                  uncertain_es_idx)
@@ -610,12 +613,7 @@ class ACDC2017TestHandler(object):
                         uncertain_ed_idx = np.logical_and(uncertain_ed_idx, pred_labels_pos_idx_ed)
                         total_pixels_positive += c
                         slice_pixels_pos_ed += c
-                        t_unc_total = np.count_nonzero(uncertain_ed_idx)
-                        t_unc_pos = np.count_nonzero(uncertain_ed_idx)
-                        # if slice_id == 0 and (cls == 1 or cls == 1):
-                        #    print("Slice {} ED Class {}: errors {} #true_pos {} #pos_labels {} "
-                        #          "#u-pixels {} #pos+unc-pixels {}".format(slice_id+1, cls, errors_ed, num_true_labels_ed,
-                        #                                                                  c, t_unc_total, t_unc_pos))
+
                     f1_ed, pr_ed, rc_ed, true_pos_ed, false_pos_ed, false_neg_ed = eval_referral(errors_ed_idx,
                                                                                                  uncertain_ed_idx)
                     num_pixel_above_threshold_ed = np.count_nonzero(uncertain_ed_idx)
@@ -867,7 +865,8 @@ class ACDC2017TestHandler(object):
         except IOError:
             print("ERROR - Unable to save filtered umaps file {}".format(file_name))
 
-    def save_pred_labels(self, output_dir, u_threshold=0., ref_positives_only=False, mc_dropout=False):
+    def save_pred_labels(self, output_dir, u_threshold=0., ref_positives_only=False, mc_dropout=False,
+                         forced_save=True):
         """
 
         :param output_dir: is actually the exper_id e.g. 20180503_13_22_18_dcnn_mc_f2p005....
@@ -882,7 +881,7 @@ class ACDC2017TestHandler(object):
         if u_threshold != 0:
             u_threshold = str(u_threshold).replace(".", "_")
             if mc_dropout:
-                u_threshold += "_mc"
+                u_threshold = "_mc" + u_threshold
             if ref_positives_only:
                 u_threshold += "_pos_only"
             file_name = self.b_image_name + "_filtered_pred_labels" + u_threshold + ".npz"
@@ -893,9 +892,9 @@ class ACDC2017TestHandler(object):
                 file_name = self.b_image_name + "_pred_labels.npz"
         file_name = os.path.join(pred_lbl_output_dir, file_name)
         # we don't overwrite existing predictions we obtained with the base model, so the non-referral predictions!
-        if not os.path.isfile(file_name) or u_threshold != 0:
+        if not os.path.isfile(file_name) or u_threshold != 0 or forced_save:
             try:
-                np.savez(file_name, filtered_pred_label=self.b_pred_labels)
+                np.savez(file_name, pred_labels=self.b_pred_labels)
             except IOError:
                 print("ERROR - Unable to save predicted labels file {}".format(file_name))
 

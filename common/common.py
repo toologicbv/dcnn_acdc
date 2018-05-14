@@ -4,9 +4,90 @@ import os
 import copy
 from datetime import datetime
 import numpy as np
-
+import glob
 import torch
 from pytz import timezone
+from skimage import segmentation
+from skimage import exposure
+
+
+def prepare_referrals(image_name, referral_threshold, umap_dir, pred_labels_input_dir, ref_positives_only=False):
+    # REFERRAL functionality.
+    referral_threshold = str(referral_threshold).replace(".", "_")
+    search_path = os.path.join(umap_dir,
+                               image_name + "*" + "_filtered_cls_umaps" + referral_threshold + ".npz")
+    filtered_cls_std_map = load_referral_umap(search_path, per_class=True)
+
+    search_path = os.path.join(umap_dir,
+                               image_name + "*" + "_filtered_umaps" + referral_threshold + ".npz")
+    filtered_std_map = load_referral_umap(search_path, per_class=False)
+    if ref_positives_only:
+        referral_threshold += "_pos_only"
+    # predicted labels we obtained after referral with this threshold
+    search_path = os.path.join(pred_labels_input_dir,
+                               image_name + "_filtered_pred_labels_mc" + referral_threshold + ".npz")
+
+    referral_pred_labels = load_pred_labels(search_path)
+    return filtered_cls_std_map, filtered_std_map, referral_pred_labels
+
+
+def load_referral_umap(search_path, per_class=True):
+
+    data = None
+    files = glob.glob(search_path)
+    if len(files) == 0:
+        raise ImportError("ERROR - no referral u-map found in {}".format(search_path))
+    fname = files[0]
+
+    try:
+        data = np.load(fname)
+    except IOError:
+        print("Unable to load uncertainty map from {}".format(fname))
+    if per_class:
+        return data["filtered_cls_umap"]
+    else:
+        return data["filtered_umap"]
+
+
+def load_pred_labels(search_path):
+
+    files = glob.glob(search_path)
+    if len(files) == 0:
+        raise ImportError("ERROR - no pred labels found in {}".format(search_path))
+    fname = files[0]
+
+    try:
+        data = np.load(fname)
+    except IOError:
+        print("Unable to load pred-labels from {}".format(fname))
+        return None
+    try:
+        pred_labels = data["pred_labels"]
+    except KeyError:
+        # for backward compatibility
+        pred_labels = data["filtered_pred_label"]
+
+    return pred_labels
+
+
+def detect_seg_contours(img, lbls, cls_offset):
+    #                 YELLOW        BLUE            RED
+    gb_error_codes = [(1, 1, 0.), (0., 0.3, 0.7), (1, 0, 0)]
+    rv_lbls = lbls[1 + cls_offset]
+    myo_lbls = lbls[2 + cls_offset]
+    lv_lbls = lbls[3 + cls_offset]
+    img_rescaled = exposure.rescale_intensity(img)
+    clean_border_rv = segmentation.clear_border(rv_lbls).astype(np.int)
+    img_lbl = segmentation.mark_boundaries(img_rescaled, clean_border_rv, mode="outer",
+                                           color=gb_error_codes[0], background_label=0)
+    clean_border_myo = segmentation.clear_border(myo_lbls).astype(np.int)
+    img_lbl = segmentation.mark_boundaries(img_lbl, clean_border_myo, mode="inner",
+                                           color=gb_error_codes[1], background_label=0)
+    clean_border_lv = segmentation.clear_border(lv_lbls).astype(np.int)
+    img_lbl = segmentation.mark_boundaries(img_lbl, clean_border_lv, mode="inner",
+                                           color=gb_error_codes[2], background_label=0)
+    img_lbl = exposure.rescale_intensity(img_lbl, out_range=(0, 1))
+    return img_lbl
 
 
 def create_mask_uncertainties(labels):

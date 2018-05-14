@@ -405,7 +405,8 @@ class ExperimentHandler(object):
                                                                    do_filter=do_filter)
         # we only want to save predicted labels when we're not SAMPLING weights
         if save_pred_labels:
-            test_set.save_pred_labels(self.exper.output_dir, u_threshold=0., mc_dropout=mc_dropout)
+            test_set.save_pred_labels(self.exper.output_dir, u_threshold=0., mc_dropout=mc_dropout,
+                                      forced_save=True)
 
         if use_uncertainty:
             # u_maps_image shape [8classes, width, height, #slices]
