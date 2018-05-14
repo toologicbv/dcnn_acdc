@@ -500,7 +500,7 @@ class UncertaintyMapsGenerator(object):
         self.checkpoint = checkpoint
         self.exper_handler = exper_handler
         self.generate_figures = False
-        self.arr_ref_thresholds = [0.14, 0.15, 0.16, 0.18, 0.2]
+        self.arr_ref_thresholds = [ 0.16, 0.18, 0.2]
         if use_logger and self.exper_handler.logger is None:
             self.exper_handler.logger = create_logger(self.exper_handler.exper, file_handler=True)
         # looks kind of awkward, but originally wanted to use an array of folds, but finally we only process 1
@@ -564,6 +564,7 @@ class UncertaintyMapsGenerator(object):
 
             if len(self.arr_ref_thresholds) != 0:
                 original_pred_labels = copy.deepcopy(self.test_set.b_pred_labels)
+
                 for referral_threshold in self.arr_ref_thresholds:
                     # because we pass a single patient_id, the created filtered_u-map will be stored in
                     # exper_handler.referral_umaps object (dict). because we need it in the next step
@@ -586,7 +587,7 @@ class UncertaintyMapsGenerator(object):
                     # referral with ALL UNCERTAIN PIXELS
                     print("INFO - Results with referral of ALL uncertain pixels"
                           " using threshold {:.2f}".format(referral_threshold))
-                    self.test_set.b_pred_labels = original_pred_labels
+                    self.test_set.b_pred_labels = copy.deepcopy(original_pred_labels)
                     # generate prediction with referral OF ALL UNCERTAIN PIXELS
                     self.test_set.filter_referrals(u_maps=ref_u_map, ref_positives_only=False,
                                                    referral_threshold=referral_threshold)
@@ -596,7 +597,7 @@ class UncertaintyMapsGenerator(object):
                     self.test_set.save_pred_labels(self.exper_handler.exper.output_dir, u_threshold=referral_threshold,
                                                    ref_positives_only=True, mc_dropout=True)
                     self._show_results(image_num, test_accuracy_ref)
-                    self.test_set.b_pred_labels = original_pred_labels
+                    self.test_set.b_pred_labels = copy.deepcopy(original_pred_labels)
                 if self.generate_figures:
                     args = self.exper_handler.exper.run_args
                     self.exper_handler.test_results.generate_slice_statistics(image_num=image_num)
