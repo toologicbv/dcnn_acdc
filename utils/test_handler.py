@@ -462,7 +462,7 @@ class ACDC2017TestHandler(object):
 
         self.b_pred_probs[:, :, :, self.slice_counter] = pred_probs
 
-    def compute_img_slice_uncertainty_stats(self, u_type="bald", connectivity=2, u_threshold=0.01):
+    def compute_img_slice_uncertainty_stats(self, u_type="bald", connectivity=2, u_threshold=0.):
         """
         In order to get a first idea of how uncertain the model is w.r.t. certain image slices we compute
         same simple overall statistics per slide for stddev and BALD uncertainty measures.
@@ -481,12 +481,7 @@ class ACDC2017TestHandler(object):
                 If u_threshold = eps than #pixel measure should be the same
 
         """
-        # we set the u_threshold here for the computation of the uncertainty stats
-        eps = 0.01  # NOTE: we always filter on really tiny uncertainties. And u_threshold should be >= eps
-        if u_threshold < eps:
-            self.b_uncertainty_stats["u_threshold"] = eps
-        else:
-            self.b_uncertainty_stats["u_threshold"] = u_threshold
+        self.b_uncertainty_stats["u_threshold"] = u_threshold
         if u_type == "bald":
             uncertainty_map = self.b_bald_map[:, np.newaxis, :, :, self.slice_counter]
         elif u_type == "stddev":
@@ -506,14 +501,13 @@ class ACDC2017TestHandler(object):
             for dim1 in np.arange(uncertainty_map.shape[1]):
                 pred_uncertainty_bool = np.zeros(uncertainty_map[phase, dim1].shape).astype(np.bool)
                 # index maps for uncertain pixels
-                mask_uncertain = uncertainty_map[phase, dim1] > eps
+                mask_uncertain = uncertainty_map[phase, dim1] >= u_threshold
                 # the u_threshold was already set in the method set_pred_labels above
                 mask_uncertain_above_tre = uncertainty_map[phase, dim1] > self.b_uncertainty_stats["u_threshold"]
                 # create binary mask to determine morphology
                 pred_uncertainty_bool[mask_uncertain_above_tre] = True
                 # IMPORTANT: we use the MASK_UNCERTAIN_ABOVE_TRE !!! to compute the total uncertainty of a slice
                 total_uncertainty = np.sum(uncertainty_map[phase, dim1][mask_uncertain_above_tre])
-                total_uncertainty_base = np.sum(uncertainty_map[phase, dim1][mask_uncertain])
                 t_num_pixel_uncertain = np.count_nonzero(uncertainty_map[phase, dim1][mask_uncertain])
                 t_num_pixel_uncertain_above_tre = np.count_nonzero(uncertainty_map[phase, dim1]
                                                                    [mask_uncertain_above_tre])
@@ -690,8 +684,6 @@ class ACDC2017TestHandler(object):
         errors_es_after = np.sum(self.referral_stats[0, :, 5, :])
         errors_ed = np.sum(self.referral_stats[1, :, 4, :])
         errors_ed_after = np.sum(self.referral_stats[1, :, 5, :])
-        # abs_reduc_es = errors_es - errors_es_after
-        # abs_reduc_ed = errors_ed - errors_ed_after
 
         # average over classes and slices
         rel_perc_es = np.mean(self.referral_stats[0, :, 0, :])
@@ -720,7 +712,7 @@ class ACDC2017TestHandler(object):
         self.b_bald_map[:, :, :, self.slice_counter] = slice_bald
         self.compute_img_slice_uncertainty_stats(u_type="bald", u_threshold=u_threshold)
 
-    def get_accuracy(self, compute_hd=False, compute_seg_errors=False, do_filter=True):
+    def get_accuracy(self, compute_hd=False, compute_seg_errors=False, do_filter=True, verbose=False):
         """
 
             Compute dice coefficients for the complete 3D volume
@@ -739,7 +731,6 @@ class ACDC2017TestHandler(object):
         num_of_slices = self.b_labels.shape[3]
         if compute_seg_errors:
             # if we compute seg-errors then shape of results is [2, 4classes, #slices]
-
             seg_errors = np.zeros((2, self.num_of_classes, num_of_slices))
         for cls in np.arange(self.num_of_classes):
             if do_filter:
@@ -772,17 +763,13 @@ class ACDC2017TestHandler(object):
                 true_labels_cls_ed = self.b_labels[cls + self.num_of_classes]
                 pred_labels_cls_es = self.b_pred_labels[cls]
                 pred_labels_cls_ed = self.b_pred_labels[cls + self.num_of_classes]
-
                 errors_es = pred_labels_cls_es != true_labels_cls_es
                 errors_ed = pred_labels_cls_ed != true_labels_cls_ed
-                # Compute seg-errors per slice for this class. error_es/ed has shape [width, height, #slices]
-                # we first reshape [#slices, width * height] and then compute errors
-                errors_es = np.count_nonzero(np.reshape(errors_es, (errors_es.shape[2], -1)), axis=1)
-                errors_ed = np.count_nonzero(np.reshape(errors_ed, (errors_ed.shape[2], -1)), axis=1)
-                # store # of segmentation errors that we made per class and slice
+                errors_es = np.count_nonzero(np.reshape(errors_es, (-1, errors_es.shape[2])), axis=0)
+                errors_ed = np.count_nonzero(np.reshape(errors_ed, (-1, errors_ed.shape[2])), axis=0)
+                seg_errors[0, cls] = errors_es
+                seg_errors[1, cls] = errors_ed
 
-                seg_errors[0, cls, :] = errors_es
-                seg_errors[1, cls, :] = errors_ed
         if compute_seg_errors:
             return dices, hausdff, seg_errors
         else:

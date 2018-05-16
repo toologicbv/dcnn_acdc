@@ -197,7 +197,7 @@ class ExperimentHandler(object):
 
     def test(self, model, test_set, image_num=0, mc_samples=1, sample_weights=False, compute_hd=False,
              use_uncertainty=False, referral_threshold=None, use_seed=False, verbose=False, store_details=False,
-             do_filter=True, repeated_run=False, u_threshold=0.01, discard_outliers=False, save_pred_labels=False,
+             do_filter=True, repeated_run=False, u_threshold=0., discard_outliers=False, save_pred_labels=False,
              ref_positives_only=False, store_test_results=True):
         """
 
@@ -217,8 +217,7 @@ class ExperimentHandler(object):
         :param discard_outliers: boolean indicating whether outliers (slice/class) should be discarded when
         computing the dice coefficient
         :param u_threshold: Another threshold! used to compute the uncertainty statistics. We're currently using
-        a default value of 0.01 to filter out very tiny values but could be used to investigate the effect of
-        filtering out lower uncertainty values because may be this helps distinguishing levels of uncertainties in
+        a default value of 0. => NO FILTERING OF INITIAL RAW U-MAPS!
         image slices.
         :param use_seed:
         :param verbose:
@@ -280,7 +279,7 @@ class ExperimentHandler(object):
 
         # -------------------------------------- local procedures END -----------------------------------------
         if use_seed:
-            setSeed(1234, self.exper.run_args.cuda)
+            setSeed(4325, self.exper.run_args.cuda)
         if self.test_results is None:
             self.test_results = TestResults(self.exper, use_dropout=sample_weights, mc_samples=mc_samples)
         # if we use referral then we need to load the u-maps
@@ -380,7 +379,8 @@ class ExperimentHandler(object):
                     np.mean(test_set.b_uncertainty_stats["stddev"][1, :, :, slice_idx], axis=0) # ED
                 es_seg_errors = np.sum(test_set.b_seg_errors[slice_idx, :4])
                 ed_seg_errors = np.sum(test_set.b_seg_errors[slice_idx, 4:])
-                if verbose:
+                # CURRENTLY DISABLED
+                if False:
                     if slice_hd is None:
                         slice_hd = np.zeros(8)
                     print("Test img/slice {}/{}".format(image_num, slice_idx))
@@ -403,6 +403,12 @@ class ExperimentHandler(object):
 
         test_accuracy, test_hd, seg_errors = test_set.get_accuracy(compute_hd=compute_hd, compute_seg_errors=True,
                                                                    do_filter=do_filter)
+        if verbose:
+            for slice_id in np.arange(seg_errors.shape[2]):
+                slice_seg_error = seg_errors[:, :, slice_id]
+                print("\t Segmentation errors - \tES {}/{}/{}\t\t"
+                      "ED {}/{}/{}".format(slice_seg_error[0, 1], slice_seg_error[0, 2], slice_seg_error[0, 3],
+                                           slice_seg_error[1, 1], slice_seg_error[1, 2], slice_seg_error[1, 3]))
         # we only want to save predicted labels when we're not SAMPLING weights
         if save_pred_labels:
             test_set.save_pred_labels(self.exper.output_dir, u_threshold=0., mc_dropout=mc_dropout,
@@ -427,6 +433,7 @@ class ExperimentHandler(object):
                                                test_accuracy[1], test_accuracy[2],
                                                test_accuracy[3], test_accuracy[5],
                                                test_accuracy[6], test_accuracy[7]))
+
         if use_uncertainty:
             print("\t\t\t\t\t After referral\t\tES {:.2f}/{:.2f}/{:.2f}\t"
                   "ED {:.2f}/{:.2f}/{:.2f}".format(test_accuracy_ref[1], test_accuracy_ref[2],
@@ -489,8 +496,9 @@ class ExperimentHandler(object):
                                           referral_accuracy=test_accuracy_ref, referral_hd=test_hd_ref,
                                           referral_stats=test_set.referral_stats)
 
-    def create_u_maps(self, model=None, checkpoint=None, mc_samples=10, u_threshold=0.1, do_save_u_stats=False,
-                      save_actual_maps=False, test_set=None, generate_figures=False):
+    def create_u_maps(self, model=None, checkpoint=None, mc_samples=10, u_threshold=0., do_save_u_stats=False,
+                      save_actual_maps=False, test_set=None, generate_figures=False, verbose=False,
+                      aggregate_func="max"):
 
         if model is None and checkpoint is None:
             raise ValueError("When model parameter is None, you need to specify the checkpoint model "
@@ -501,20 +509,21 @@ class ExperimentHandler(object):
                   "save the actual uncertainty maps!")
             do_save_u_stats = True
 
-        maps_generator = UncertaintyMapsGenerator(self, model=model, test_set=test_set, verbose=False,
+        maps_generator = UncertaintyMapsGenerator(self, model=model, test_set=test_set, verbose=verbose,
                                                   mc_samples=mc_samples, u_threshold=u_threshold,
-                                                  checkpoint=checkpoint, store_test_results=True)
+                                                  checkpoint=checkpoint, store_test_results=True,
+                                                  aggregate_func=aggregate_func)
         maps_generator(do_save=do_save_u_stats, clean_up=False, save_actual_maps=save_actual_maps,
                        generate_figures=generate_figures)
 
-        if generate_figures:
-            if self.test_results is None:
-                # if test_results object of experiment handler is None (because we generated u-maps) we point to the
-                # test_result object of the map generator. If we re-use maps we load the object, see above
-                self.test_results = maps_generator.test_results
-
-            analyze_slices(self, image_range=None, do_save=True, do_show=False, u_type="stddev",
-                           use_saved_umaps=False)
+        # if generate_figures:
+        #     if self.test_results is None:
+        #         # if test_results object of experiment handler is None (because we generated u-maps) we point to the
+        #         # test_result object of the map generator. If we re-use maps we load the object, see above
+        #         self.test_results = maps_generator.test_results
+        #
+        #     analyze_slices(self, image_range=None, do_save=True, do_show=False, u_type="stddev",
+        #                    use_saved_umaps=False)
 
     def get_u_maps(self):
         # returns a dictionary key patientID with the uncertainty maps for each patient/image of shape
@@ -685,7 +694,7 @@ class ExperimentHandler(object):
                 # this is the one we use during referral at the moment
                 self.referral_umaps[patientID] = data["filtered_umap"]
 
-    def create_filtered_umaps(self, u_threshold, verbose=False, patient_id=None):
+    def create_filtered_umaps(self, u_threshold, verbose=False, patient_id=None, aggregate_func="max"):
         if u_threshold < 0.:
             raise ValueError("ERROR - u_threshold must be greater than zero. ({:.2f})".format(u_threshold))
         # returns an OrderedDict with key "patient_id" and value=tensor of shape [2, 4classes, width, height, #slices]
@@ -711,26 +720,35 @@ class ExperimentHandler(object):
                     u_3dmaps_cls = raw_u_map[phase, cls]
                     # set all uncertainties below threshold to zero
                     u_3dmaps_cls[u_3dmaps_cls < u_threshold] = 0
-                    filtered_cls_stddev_map[cls + cls_offset] = filter_connected_components(u_3dmaps_cls,
+                    if aggregate_func == "max":
+                        filtered_cls_stddev_map[cls + cls_offset] = filter_connected_components(u_3dmaps_cls,
                                                                                                 threshold=u_threshold)
-                    # filtered_stddev_map[phase] += raw_u_map[phase, cls]
-                # filtered_stddev_map[phase] = filter_connected_components(filtered_stddev_map[phase],
-                #                                                         threshold=u_threshold)
-                # Taking the maximum uncertainty per pixel over the 4 classes (for ES and ED)
+                    else:
+                        filtered_cls_stddev_map[cls + cls_offset] = u_3dmaps_cls
+                        # Taking the maximum uncertainty per pixel over the 4 classes (for ES and ED)
                 # TODO CHANGED THIS TO MEAN BECAUSE WE HAD TOO MANY UNCERTAIN PIXELS
                 if phase == 0:
-                    filtered_stddev_map[phase] = np.max(filtered_cls_stddev_map[:num_of_classes], axis=0)
+                    if aggregate_func == "max":
+                        filtered_stddev_map[phase] = np.max(filtered_cls_stddev_map[:num_of_classes], axis=0)
+                    else:
+                        filtered_stddev_map[phase] = np.mean(filtered_cls_stddev_map[:num_of_classes], axis=0)
                 else:
-                    filtered_stddev_map[phase] = np.max(filtered_cls_stddev_map[num_of_classes:], axis=0)
+                    if aggregate_func == "max":
+                        filtered_stddev_map[phase] = np.max(filtered_cls_stddev_map[num_of_classes:], axis=0)
+                    else:
+                        filtered_stddev_map[phase] = np.mean(filtered_cls_stddev_map[:num_of_classes], axis=0)
+                if aggregate_func == "mean":
+                    filtered_stddev_map[phase] = filter_connected_components(filtered_stddev_map[phase],
+                                                                             threshold=u_threshold)
                 # save map
             umap_output_dir = os.path.join(self.exper.config.root_dir, os.path.join(self.exper.output_dir,
                                                                                     config.u_map_dir))
             if not os.path.isdir(umap_output_dir):
                 os.makedirs(umap_output_dir)
             str_u_threshold = str(u_threshold).replace(".", "_")
-            file_name_cls = patient_id + "_filtered_cls_umaps" + str_u_threshold + ".npz"
+            file_name_cls = patient_id + "_filtered_cls_umaps_" + aggregate_func + str_u_threshold + ".npz"
             file_name_cls = os.path.join(umap_output_dir, file_name_cls)
-            file_name = patient_id + "_filtered_umaps" + str_u_threshold + ".npz"
+            file_name = patient_id + "_filtered_umaps_" + aggregate_func + str_u_threshold + ".npz"
             file_name = os.path.join(umap_output_dir, file_name)
             try:
                 np.savez(file_name_cls, filtered_cls_umap=filtered_cls_stddev_map)

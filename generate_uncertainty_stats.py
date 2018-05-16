@@ -18,6 +18,7 @@ def do_parse_args():
 
     parser.add_argument('--exper_id', default=None)
     parser.add_argument('--run_mode', choices=['outliers', 'u_maps_only'], default="outliers")
+    parser.add_argument('--aggregate_func', choices=['max', 'mean'], default="max")
     parser.add_argument('--mc_samples', type=int, default=5, help="# of MC samples")
     parser.add_argument('--checkpoint', type=int, default=150000, help="Saved checkpoint")
     parser.add_argument('--cuda', action='store_true', default=False, help='use GPU')
@@ -86,8 +87,9 @@ def main():
     else:
         exper_handler.create_u_maps(model=None, checkpoint=args.checkpoint, mc_samples=args.mc_samples,
                                     u_threshold=args.u_threshold,
-                                    do_save_u_stats=True,
-                                    save_actual_maps=True, test_set=None, generate_figures=args.generate_plots)
+                                    do_save_u_stats=True, verbose=args.verbose,
+                                    save_actual_maps=True, test_set=None, generate_figures=args.generate_plots,
+                                    aggregate_func=args.aggregate_func)
 
 
 if __name__ == '__main__':

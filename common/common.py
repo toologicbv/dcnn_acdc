@@ -9,26 +9,188 @@ import torch
 from pytz import timezone
 from skimage import segmentation
 from skimage import exposure
+import matplotlib.pyplot as plt
 
 
-def prepare_referrals(image_name, referral_threshold, umap_dir, pred_labels_input_dir, ref_positives_only=False):
+def generate_std_hist_corr_err(img_stds, labels, pred_labels, is_filtered=False):
+    """
+
+    Note that for detecting the correct and incorrect classified pixels, we only need to look at the background
+    class, because the incorrect pixels in this class are the summation of the other 3 classes (for ES and ED
+    separately).
+
+
+    :param img_stds: standard deviation for image pixels. One for ES and one for ED [classes, width, height, slices]
+    :param labels: true labels with [8classes, width, height, #slices]
+    :param pred_labels: [8classes, width, height, #slices]
+    :param is_filtered: boolean indicating whether the u-maps is thresholded (then we omit the 0 values)
+    :return:
+    """
+    half_classes = labels.shape[0] / 2
+    num_of_slices = labels.shape[3]
+    num_of_bins = 20
+    slice_bin_edges = np.zeros((2, num_of_slices, num_of_bins + 1))
+    # we store per phase, #slices, 2 hist arrays: one correct pixels, one error pixels
+    slice_bin_values = np.zeros((2, num_of_slices, 2, num_of_bins))
+    for img_slice in np.arange(num_of_slices):
+        for phase in np.arange(2):
+            # start with ES -> IMPORTANT, we skip the background class because we're only interested in the
+            # errors and correct segmentations we made for the classes we report the dice/hd on
+            union_errors = []
+            union_correct = []
+            for cls in np.arange(1, half_classes):
+                class_idx = (phase * half_classes) + cls
+                s_labels_ph = labels[class_idx, :, :, img_slice].flatten()
+                s_pred_labels_ph = pred_labels[class_idx, :, :, img_slice].flatten()
+                s_labels_ph = np.atleast_1d(s_labels_ph.astype(np.bool))
+                s_pred_labels_ph = np.atleast_1d(s_pred_labels_ph.astype(np.bool))
+                errors = np.argwhere((~s_pred_labels_ph & s_labels_ph) | (s_pred_labels_ph & ~s_labels_ph))
+                correct = np.argwhere((s_pred_labels_ph & s_labels_ph))
+                union_correct.extend(correct)
+                union_errors.extend(errors)
+            if img_stds.shape[0] == 8:
+                # so img_stds is a u-map per class (first dim is 8)
+                if phase == 0:
+                    # compute mean stddev (over 4 classes)
+                    slice_stds_ph = np.mean(img_stds[:half_classes, :, :, img_slice], axis=0).flatten()
+                else:
+                    # compute mean stddev (over 4 classes)
+                    slice_stds_ph = np.mean(img_stds[half_classes:, :, :, img_slice], axis=0).flatten()
+            else:
+                # so img_stds is a tensor of [2, width, height, #slices], so basically not per class u-map
+                slice_stds_ph = img_stds[phase, :, :, img_slice].flatten()
+
+            # at this moment slice_probs_ph should be [half_classes, num_of_pixels]
+            # and slice_stds_ph contains the pixel stddev for ES or ED [num_of_pixels]
+            union_errors = np.array(union_errors)
+            union_correct = np.array(union_correct)
+            if union_errors.ndim > 1:
+                err_std = slice_stds_ph[union_errors].flatten()
+            else:
+                err_std = None
+            if union_correct.ndim > 1:
+                pos_std = slice_stds_ph[union_correct].flatten()
+            else:
+                pos_std = None
+            std_max = max(err_std.max() if err_std is not None else 0,
+                          pos_std.max() if pos_std is not None else 0.)
+            # print("# in err_std ", err_std.shape[0])
+            if is_filtered:
+                if std_max != 0:
+                    std_min = 0.1
+                else:
+                    std_min = 0
+            else:
+                std_min = 0
+
+            if pos_std is not None and np.count_nonzero(pos_std) != 0:
+                # arr_stddev_cor, _, _ = plt.hist(pos_std, bins=xs)
+                arr_stddev_cor, xs_cor = np.histogram(pos_std, bins=num_of_bins, range=(std_min, std_max))
+                slice_bin_values[phase, img_slice, 0, :] = arr_stddev_cor
+            if err_std is not None and np.count_nonzero(err_std) != 0:
+                # arr_stddev_err, _, _ = plt.hist(err_std, bins=xs)
+                arr_stddev_err, xs_cor = np.histogram(err_std, bins=num_of_bins, range=(std_min, std_max))
+                slice_bin_values[phase, img_slice, 1, :] = arr_stddev_err
+            if pos_std is not None or err_std is not None:
+                slice_bin_edges[phase, img_slice] = xs_cor
+
+    return slice_bin_edges, slice_bin_values
+
+
+def generate_std_hist_corr_err_per_class(img_stds, labels, pred_labels, is_filtered=False):
+    """
+
+    Note that for detecting the correct and incorrect classified pixels, we only need to look at the background
+    class, because the incorrect pixels in this class are the summation of the other 3 classes (for ES and ED
+    separately).
+
+
+    :param img_stds: standard deviation for image pixels. One for ES and one for ED [classes, width, height, slices]
+    :param labels: true labels with [8classes, width, height, #slices]
+    :param pred_labels: [8classes, width, height, #slices]
+    :param is_filtered: boolean indicating whether the u-maps is thresholded (then we omit the 0 values)
+    :return:
+    """
+    half_classes = labels.shape[0] / 2
+    num_of_slices = labels.shape[3]
+    num_of_bins = 20
+    slice_bin_edges = np.zeros((2, half_classes, num_of_slices, num_of_bins + 1))
+    # we store per phase, #slices, 2 hist arrays: one correct pixels, one error pixels
+    slice_bin_values = np.zeros((2, half_classes, num_of_slices, 2, num_of_bins))
+    for img_slice in np.arange(num_of_slices):
+        for phase in np.arange(2):
+            # start with ES -> IMPORTANT, we skip the background class because we're only interested in the
+            # errors and correct segmentations we made for the classes we report the dice/hd on
+            for cls in np.arange(1, half_classes):
+                class_idx = (phase * half_classes) + cls
+                s_labels_ph = labels[class_idx, :, :, img_slice].flatten()
+                s_pred_labels_ph = pred_labels[class_idx, :, :, img_slice].flatten()
+                s_labels_ph = np.atleast_1d(s_labels_ph.astype(np.bool))
+                s_pred_labels_ph = np.atleast_1d(s_pred_labels_ph.astype(np.bool))
+                errors = np.argwhere((~s_pred_labels_ph & s_labels_ph) | (s_pred_labels_ph & ~s_labels_ph))
+                correct = np.argwhere((s_pred_labels_ph & s_labels_ph))
+                slice_stds_ph = img_stds[class_idx, :, :, img_slice].flatten()
+                if np.count_nonzero(errors) != 0:
+                    err_std = slice_stds_ph[errors].flatten()
+                else:
+                    err_std = None
+                if np.count_nonzero(correct) != 0:
+                    pos_std = slice_stds_ph[correct].flatten()
+                else:
+                    pos_std = None
+                if not (err_std is None and pos_std is None):
+                    std_max = max(err_std.max() if err_std is not None else 0,
+                                  pos_std.max() if pos_std is not None else 0.)
+                    # print("# in err_std ", err_std.shape[0])
+                    if is_filtered:
+                        if std_max != 0:
+                            std_min = 0.1
+                        else:
+                            std_min = 0.
+                    else:
+                        std_min = 0
+                    xs = np.linspace(std_min, std_max, num_of_bins + 1)
+                    if pos_std is not None and np.count_nonzero(pos_std) != 0:
+                        # arr_stddev_cor, _, _ = plt.hist(pos_std, bins=xs)
+                        arr_stddev_cor, xs_cor = np.histogram(pos_std, bins=num_of_bins, range=(std_min, std_max))
+                        slice_bin_values[phase, cls, img_slice, 0, :] = arr_stddev_cor
+                    if err_std is not None and np.count_nonzero(err_std) != 0:
+                        # arr_stddev_err, _, _ = plt.hist(err_std, bins=xs)
+                        arr_stddev_err, xs_cor = np.histogram(err_std, bins=num_of_bins, range=(std_min, std_max))
+                        slice_bin_values[phase, cls, img_slice, 1, :] = arr_stddev_err
+                    if pos_std is not None or err_std is not None:
+                        slice_bin_edges[phase, cls, img_slice] = xs_cor
+
+    return slice_bin_edges, slice_bin_values
+
+
+def prepare_referrals(image_name, referral_threshold, umap_dir, pred_labels_input_dir, aggregate_func="max"):
     # REFERRAL functionality.
     referral_threshold = str(referral_threshold).replace(".", "_")
     search_path = os.path.join(umap_dir,
-                               image_name + "*" + "_filtered_cls_umaps" + referral_threshold + ".npz")
+                               image_name + "*" + "_filtered_cls_umaps_" + aggregate_func + referral_threshold + ".npz")
     filtered_cls_std_map = load_referral_umap(search_path, per_class=True)
 
     search_path = os.path.join(umap_dir,
-                               image_name + "*" + "_filtered_umaps" + referral_threshold + ".npz")
+                               image_name + "*" + "_filtered_umaps_" + aggregate_func + referral_threshold + ".npz")
     filtered_std_map = load_referral_umap(search_path, per_class=False)
-    if ref_positives_only:
-        referral_threshold += "_pos_only"
+
+    search_path = os.path.join(pred_labels_input_dir,
+                               image_name + "_filtered_pred_labels_mc" + referral_threshold + ".npz")
+    try:
+        referral_pred_labels = load_pred_labels(search_path)
+    except IOError:
+        referral_pred_labels = None
+    referral_threshold += "_pos_only"
     # predicted labels we obtained after referral with this threshold
     search_path = os.path.join(pred_labels_input_dir,
                                image_name + "_filtered_pred_labels_mc" + referral_threshold + ".npz")
+    try:
+        referral_pred_labels_pos_only = load_pred_labels(search_path)
+    except IOError:
+        referral_pred_labels_pos_only = None
 
-    referral_pred_labels = load_pred_labels(search_path)
-    return filtered_cls_std_map, filtered_std_map, referral_pred_labels
+    return filtered_cls_std_map, filtered_std_map, referral_pred_labels_pos_only, referral_pred_labels
 
 
 def load_referral_umap(search_path, per_class=True):
@@ -133,16 +295,14 @@ def to_rgb1a(im):
     return ret
 
 
-def set_error_pixels(img_rgb, pred_labels, true_labels, cls_offset, stddev=None, std_threshold=0.):
+def set_error_pixels(img_rgb, pred_labels, true_labels, cls_offset):
     """
 
     :param img_rgb: The original MRI scan extended to three channels (RGB)
     :param pred_labels: The predicted segmentation mask
     :param true_labels: The GT segmentation mask
     :param cls_offset:  0 or 4 depending on the phase ES resp. ED
-    :param stddev: Uncertainty map for the image
-    :param std_threshold: Threshold which can be used to simulate the "expert" mode. If uncertainty is higher
-    than threshold we assume the EXPERT would adjust the pixel to the correct seg-label.
+
     :return:
     """
     #                       RV:YELLOW           MYO:BLUE    LV:RED
@@ -151,27 +311,30 @@ def set_error_pixels(img_rgb, pred_labels, true_labels, cls_offset, stddev=None,
 
     for cls in np.arange(pred_labels.shape[0] // 2):
         error_idx = pred_labels[cls + cls_offset] != true_labels[cls + cls_offset]
-        errors_after = None
-        if std_threshold > 0.:
-            if cls == 1:
-                # filter for RV predictions with high stddev
-                # pred_cls_labels_filtered = np.copy(pred_labels[cls + cls_offset])
-                referral_idx = stddev[cls + cls_offset] > std_threshold
-                # IMPORTANT: HERE we set the pixels of high uncertainty to the EXPERT ground truth!!!
-                pred_labels[cls + cls_offset][referral_idx] = true_labels[cls + cls_offset][referral_idx]
-                errors_after = true_labels[cls + cls_offset] != pred_labels[cls + cls_offset]
-                print("WARNING - RV-errors using {:.2f} before/after {} / {}".format(std_threshold,
-                                                                                     np.count_nonzero(error_idx),
-                                                                                     np.count_nonzero(errors_after)))
-        if errors_after is not None:
-            if cls != 0:
-                img_rgb[errors_after, :] = rgb_error_codes[cls]
-            num_of_errors[cls] = np.count_nonzero(errors_after)
-        else:
-            if cls != 0:
-                img_rgb[error_idx, :] = rgb_error_codes[cls]
-            num_of_errors[cls] = np.count_nonzero(error_idx)
+        if cls != 0:
+            img_rgb[error_idx, :] = rgb_error_codes[cls]
+        num_of_errors[cls] = np.count_nonzero(error_idx)
     return img_rgb, num_of_errors
+
+
+def overlay_seg_mask(img_rgb, pred_labels, cls_offset):
+    """
+
+    :param img_rgb: The original MRI scan extended to three channels (RGB)
+    :param pred_labels: The predicted segmentation mask
+    :param cls_offset:  0 or 4 depending on the phase ES resp. ED
+
+    :return:
+    """
+    #                       RV:YELLOW           MYO:BLUE    LV:RED
+    rgb_error_codes = [[], [204, 204, 0], [0, 120, 255], [255, 0, 0]]
+    for cls in np.arange(pred_labels.shape[0] // 2):
+        seg_idx = pred_labels[cls + cls_offset] == 1
+        if cls != 0:
+            if np.count_nonzero(seg_idx) != 0:
+                color = rgb_error_codes[cls]
+                img_rgb[seg_idx, :] = color
+    return img_rgb
 
 
 def datestr(withyear=True):

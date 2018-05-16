@@ -67,14 +67,23 @@ def get_mean_pred_per_slice(img_slice, img_probs, img_stds, img_balds, labels, p
     """
 
     for phase in np.arange(2):
-        # start with ES
-        bg_class_idx = phase * half_classes
-        s_labels_ph = labels[bg_class_idx, :, :, img_slice].flatten()
-        s_pred_labels_ph = pred_labels[bg_class_idx, :, :, img_slice].flatten()
-        s_labels_ph = np.atleast_1d(s_labels_ph.astype(np.bool))
-        s_pred_labels_ph = np.atleast_1d(s_pred_labels_ph.astype(np.bool))
-        errors = np.argwhere((~s_pred_labels_ph & s_labels_ph) | (s_pred_labels_ph & ~s_labels_ph))
-        correct = np.argwhere((s_pred_labels_ph & s_labels_ph))
+        # start with ES -> IMPORTANT, we skip the background class because we're only interested in the
+        # errors and correct segmentations we made for the classes we report the dice/hd on
+        union_errors = []
+        union_correct = []
+        for cls in np.arange(1, half_classes):
+
+            class_idx = (phase * half_classes) + cls
+            s_labels_ph = labels[class_idx, :, :, img_slice].flatten()
+            s_pred_labels_ph = pred_labels[class_idx, :, :, img_slice].flatten()
+            s_labels_ph = np.atleast_1d(s_labels_ph.astype(np.bool))
+            s_pred_labels_ph = np.atleast_1d(s_pred_labels_ph.astype(np.bool))
+            errors = np.argwhere((~s_pred_labels_ph & s_labels_ph) | (s_pred_labels_ph & ~s_labels_ph))
+            correct = np.argwhere((s_pred_labels_ph & s_labels_ph))
+            union_correct.extend(correct)
+            union_errors.extend(errors)
+        # print("slice id {} # errors {}".format(img_slice, np.count_nonzero(union_errors)))
+        # print("slice id {} # correct{}".format(img_slice, np.count_nonzero(union_correct)))
 
         if phase == 0:
             # compute mean stddev (over 4 classes)
@@ -91,13 +100,25 @@ def get_mean_pred_per_slice(img_slice, img_probs, img_stds, img_balds, labels, p
                                                      slice_probs_ph.shape[2]))
         # at this moment slice_probs_ph should be [half_classes, num_of_pixels]
         # and slice_stds_ph contains the pixel stddev for ES or ED [num_of_pixels]
-
-        err_probs = slice_probs_ph.T[errors].flatten()
-        err_std = slice_stds_ph[errors].flatten()
-        err_bald = slice_bald_ph[errors].flatten()
-        pos_probs = slice_probs_ph.T[correct].flatten()
-        pos_std = slice_stds_ph[correct].flatten()
-        pos_bald = slice_bald_ph[correct].flatten()
+        union_errors = np.array(union_errors)
+        union_correct = np.array(union_correct)
+        if union_errors.ndim > 1:
+            err_probs = slice_probs_ph.T[union_errors].flatten()
+            err_std = slice_stds_ph[union_errors].flatten()
+            err_bald = slice_bald_ph[union_errors].flatten()
+        else:
+            err_probs = None
+            err_std = None
+            err_bald = None
+        if union_correct.ndim > 1:
+            pos_probs = slice_probs_ph.T[union_correct].flatten()
+            pos_std = slice_stds_ph[union_correct].flatten()
+            pos_bald = slice_bald_ph[union_correct].flatten()
+        else:
+            pos_probs = None
+            pos_std = None
+            pos_bald = None
+        # print("# in err_std ", err_std.shape[0])
         if phase == 0:
             stats["es_mean_err_p"] = err_probs
             stats["es_mean_cor_p"] = pos_probs
@@ -510,10 +531,7 @@ class TestResults(object):
                 # errors: fn + fp
                 # correct: tp
                 errors = np.argwhere((~s_pred_labels & s_labels) | (s_pred_labels & ~s_labels))
-                # correct = np.invert(errors)
                 correct = np.argwhere((s_pred_labels & s_labels))
-                # print("cls {} total/tp/fn/fp/tn {} / {} / {} / {} / {}".format(cls, total_l, tp, fn, fp, tn))
-                # print("\t tp / fn+fp {} {}".format(correct.shape[0], errors.shape[0]))
                 err_probs = s_slice_cls_probs.T[errors].flatten()
                 err_std = s_slice_cls_probs_std[errors].flatten()
                 pos_probs = s_slice_cls_probs.T[correct].flatten()
@@ -907,7 +925,7 @@ class TestResults(object):
                 # IMPORTANT: we disables filtering of RV pixels based on high uncertainties, hence we set
                 # std_threshold to zero! We use the threshold only to filter the uncertainty maps!
                 rgb_img_w_pred, cls_errors = set_error_pixels(rgb_img, slice_pred_labels, slice_true_labels,
-                                                              cls_offset, slice_stddev, std_threshold=0.)
+                                                              cls_offset)
                 ax1b.imshow(rgb_img_w_pred, interpolation='nearest')
                 ax1b.set_aspect('auto')
                 ax1b.text(20, 20, 'yellow: RV ({}), blue: Myo ({}), red: LV ({})'.format(cls_errors[1],
@@ -922,8 +940,7 @@ class TestResults(object):
                     rgb_img = to_rgb1a(img)
                     ax_pred = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
                     rgb_img_w_pred, cls_errors = set_error_pixels(rgb_img, slice_pred_labels_wo_sampling,
-                                                                  slice_true_labels, cls_offset,
-                                                                  slice_stddev, std_threshold=0.)
+                                                                  slice_true_labels, cls_offset)
                     ax_pred.text(20, 20, 'yellow: RV ({}), blue: Myo ({}), '
                                  'red: LV ({}) '.format(cls_errors[1], cls_errors[2], cls_errors[3]),
                                  bbox={'facecolor': 'white', 'pad': 18})
@@ -938,8 +955,7 @@ class TestResults(object):
                         row += 2
                     ax_pred_ref = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
                     rgb_img_ref_pred, cls_errors = set_error_pixels(rgb_img, slice_pred_labels_referred,
-                                                                    slice_true_labels, cls_offset,
-                                                                    slice_stddev, std_threshold=0.)
+                                                                    slice_true_labels, cls_offset)
 
                     ax_pred_ref.text(20, 20, 'yellow: RV ({}), blue: Myo ({}), '
                                      'red: LV ({})'.format(cls_errors[1], cls_errors[2], cls_errors[3]),

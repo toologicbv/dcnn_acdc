@@ -56,7 +56,7 @@ def dice_coefficient(pred_labels, true_labels, cls=None):
         return 1.
     elif np.sum(np_true_labels == 1) == 0:
         if cls is not None:
-            print("!!! WARNING !!! - Class {} no true positive) - dice=0".format(cls))
+            print("!!! WARNING !!! - Class {} no true positives but we predicted some - dice=0".format(cls))
         return 0.
         # np_true_labels = (~np_true_labels.astype(np.bool)).astype(np.int)
         # np_pred_labels = (~np_pred_labels.astype(np.bool)).astype(np.int)

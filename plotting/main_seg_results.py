@@ -6,7 +6,8 @@ import copy
 
 from matplotlib import cm
 from common.common import to_rgb1a, set_error_pixels, create_mask_uncertainties, detect_seg_contours
-from common.common import load_pred_labels, prepare_referrals
+from common.common import load_pred_labels, prepare_referrals, generate_std_hist_corr_err
+from common.common import generate_std_hist_corr_err_per_class, overlay_seg_mask
 
 
 def get_exper_objects(exper_handler, patient_id):
@@ -36,10 +37,10 @@ def get_exper_objects(exper_handler, patient_id):
 
 
 def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=None, width=16,
-                                 test_results=None, image_probs_categorized=None,
+                                 test_results=None,
                                  info_type=None, referral_threshold=0., do_show=False, model_name="",
                                  do_save=False, slice_range=None, errors_only=False,
-                                 ref_positives_only=False, load_base_model_pred_labels=False):
+                                 load_base_model_pred_labels=False):
     """
 
     :param patient_id:
@@ -50,7 +51,6 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
     :param info_type: default is None. Only used if we want extra histogram figures related to softmax probabilities
            info_type="probs"   OR  uncertainties. info_type="uncertainty"
     :param referral_threshold:
-    :param image_probs_categorized:
 
     :param do_show:
     :param model_name:
@@ -60,10 +60,6 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
     :param load_base_model_pred_labels: load the predicted labels for Jelmer's baseline model
            The files should be stored in the specific fold-directory that you're currently evaluating
            e.g:     data/Folds/fold1/pred_lbls/
-    :param ref_positives_only: only consider voxels with high uncertainties that we predicted as positive (1)
-    and ignore the ones we predicted as non-member of the specific class (mostly background).
-    This reduces the number of voxels to be referred without hopefully impairing the referral results
-    significantly. We can then probably lower the referral threshold.
     :param plot_detailed_hists: if False then we plot only 5 rows: 1-2 images, 3-4 huge uncertainty maps,
                                                                    5: uncertainty maps per class
                                                                    NO HISTOGRAMS!
@@ -81,9 +77,7 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
     image = image[:, config.pad_size:-config.pad_size, config.pad_size:-config.pad_size, :]
     image_num = test_set.trans_dict[patient_id]
     image_name = patient_id
-    if info_type is not None and exper_handler.test_results.image_probs_categorized[image_num] is None:
-        raise ValueError("ERROR - with info_type {} object image_probs_categorized needs to be passed to "
-                         "procedure".format(info_type))
+
     if test_results is not None:
         pred_labels = test_results.pred_labels[image_num]
         uncertainty_map = test_results.stddev_maps[image_num]
@@ -101,15 +95,17 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
     half_classes = num_of_classes / 2
     num_of_slices_img = image.shape[3]
     columns = half_classes
-
+    # ------------------------------- Referral preparations --------------------------------------
     if referral_threshold != 0.:
-        filtered_cls_std_map, filtered_std_map, referral_pred_labels = \
-            prepare_referrals(image_name, referral_threshold, umap_dir, pred_labels_input_dir,
-                              ref_positives_only=ref_positives_only)
+        filtered_cls_std_map, filtered_std_map, referral_pred_labels_pos_only, referral_pred_labels = \
+            prepare_referrals(image_name, referral_threshold, umap_dir, pred_labels_input_dir)
     else:
         # Normal non-referral functionality
         filtered_std_map = None
         referral_pred_labels = None
+        filtered_stddev_bin_edges = None
+        filtered_sstddev_bin_values = None
+    # ------------------------------------ LOADING pred_labels -----------------------------------------
     # Finally we need the predictions of the base-model if...
     if load_base_model_pred_labels:
         os.path.join(test_set.abs_path_fold + str(test_set.fold_ids[0]), config.pred_lbl_dir)
@@ -118,38 +114,24 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
         pred_labels_base_model = load_pred_labels(search_path)
     else:
         pred_labels_base_model = None
-    if ref_positives_only and referral_threshold != 0.:
+    # ---------------------------- If REFERRAL and we only want to refer pos-labels we filter here ------------
+    if referral_threshold != 0.:
         mask = pred_labels == 0
         overall_mask = create_mask_uncertainties(pred_labels)
         overall_mask_es = overall_mask[0]
         overall_mask_ed = overall_mask[1]
-        filtered_std_map[0][overall_mask_es] = 0.
-        filtered_std_map[1][overall_mask_ed] = 0.
-        filtered_cls_std_map[mask] = 0
-    # sum uncertainties over slice-pixels, to give us an indication about the amount of uncertainty
-    # and whether we can visually inspect why tht model is uncertain
-    if filtered_std_map is None:
-        es_count_nonzero = np.count_nonzero(uncertainty_map[:4], axis=(0, 1, 2))
-        ed_count_nonzero = np.count_nonzero(uncertainty_map[4:], axis=(0, 1, 2))
+        filtered_std_map_pos_only = copy.deepcopy(filtered_std_map)
+        filtered_cls_std_map_pos_only = copy.deepcopy(filtered_cls_std_map)
+        filtered_std_map_pos_only[0][overall_mask_es] = 0.
+        filtered_std_map_pos_only[1][overall_mask_ed] = 0.
+        filtered_cls_std_map_pos_only[mask] = 0
     else:
-        es_count_nonzero = np.count_nonzero(filtered_std_map[0], axis=(0, 1))
-        ed_count_nonzero = np.count_nonzero(filtered_std_map[1], axis=(0, 1))
-    # total_uncertainty_per_slice = es_count_nonzero + ed_count_nonzero
-    # print(total_uncertainty_per_slice)
-    # dice_scores_slices = self.test_accuracy_slices[image_num]
-    # print(es_count_nonzero)
-    # print("ES {}".format(np.array_str(np.mean(dice_scores_slices[0, 1:], axis=0), precision=2)))
-    # print(ed_count_nonzero)
-    # print("ED {}".format(np.array_str(np.mean(dice_scores_slices[1, 1:], axis=0), precision=2)))
-    # max_u_value = np.max(total_uncertainty_per_slice)
-    # sorted_u_value_list = np.sort(total_uncertainty_per_slice)[::-1]
+        filtered_std_map_pos_only = None
+        filtered_cls_std_map_pos_only = None
 
-    if errors_only or info_type is None:
-        image_probs = None
-    else:
-        # TODO: we need to find a solution to generate the image_probs_categorized that we need for the
-        # TODO: that we need for the histograms. Is part of the TestResult object!
-        image_probs = exper_handler.test_results.image_probs_categorized[image_num]
+    if referral_threshold != 0:
+        filtered_stddev_bin_edges, filtered_sstddev_bin_values = \
+            generate_std_hist_corr_err(filtered_std_map, label, pred_labels, is_filtered=True)
 
     if slice_range is None:
         slice_range = np.arange(0, image.shape[3])
@@ -160,14 +142,14 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
         height = 20
     elif info_type is None:
         if referral_threshold != 0:
+            rows = 18
+            height = 70
+        else:
             rows = 14
             height = 50
-        else:
-            rows = 10
-            height = 40
     else:
-        rows = 18
-        height = 70
+        rows = 22
+        height = 86
     print("Rows/columns/height {}/{}/{}".format(rows, columns, height))
 
     _ = rows * num_of_slices * columns
@@ -188,14 +170,23 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
         row = 0
         # get the slice and then split ED and ES slices
         image_slice = image[:, :, :, img_slice]
-        if errors_only or info_type is None:
-            img_slice_probs = None
-        else:
-            img_slice_probs = image_probs[img_slice]
+
+        if info_type is not None:
+            if filtered_stddev_bin_edges is not None:
+                # stddev_bin_edges has shape [phases, #slices, #bins+1] and stddev_bin_values [phases, #slices, 2, bins]
+                # when we use the filtered u-maps we omit all the zero values in the first bin!
+                stddev_bin_edges = filtered_stddev_bin_edges
+                stddev_bin_values = filtered_sstddev_bin_values
+            else:
+                stddev_bin_edges, stddev_bin_values = generate_std_hist_corr_err(uncertainty_map, label, pred_labels)
+
+            cls_stddev_bin_edges, cls_stddev_bin_values = \
+                generate_std_hist_corr_err_per_class(uncertainty_map, label, pred_labels, is_filtered=False)
 
         for phase in np.arange(2):
             cls_offset = phase * half_classes
             img = image_slice[phase]  # INDEX 0 = end-systole image
+            rgb_img_saved = to_rgb1a(img)
             slice_pred_labels = copy.deepcopy(pred_labels[:, :, :, img_slice])
             slice_true_labels = label[:, :, :, img_slice]
             slice_stddev = uncertainty_map[:, :, :, img_slice]
@@ -211,35 +202,18 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
                 ax1.set_title("Slice {}/{}: End-diastole".format(img_slice + 1, num_of_slices_img),
                               **config.title_font_medium)
                 str_phase = "ED"
-            # the original image we are segmenting
+            # -------------------------------- the original image we are segmenting -----------------------
             img_with_contours = detect_seg_contours(img, slice_true_labels, cls_offset)
             ax1.imshow(img_with_contours, cmap=cm.gray)
             ax1.set_aspect('auto')
             plt.axis('off')
-            # -------------------------- Plot segmentation ERRORS per class on original image -----------
-            # we also construct an image with the segmentation errors, placing it next to the original img
-            ax1b = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
-            rgb_img = to_rgb1a(img)
-            # IMPORTANT: we disables filtering of RV pixels based on high uncertainties, hence we set
-            # std_threshold to zero! We use the threshold only to filter the uncertainty maps!
-            rgb_img_w_pred, cls_errors = set_error_pixels(rgb_img, slice_pred_labels, slice_true_labels,
-                                                          cls_offset, slice_stddev, std_threshold=0.)
-            ax1b.imshow(rgb_img_w_pred, interpolation='nearest')
-            ax1b.set_aspect('auto')
-            ax1b.text(20, 20, 'yellow: RV ({}), blue: Myo ({}), red: LV ({})'.format(cls_errors[1],
-                                                                                     cls_errors[2],
-                                                                                     cls_errors[3]),
-                      bbox={'facecolor': 'white', 'pad': 18})
-            ax1b.set_title("Prediction errors with sampling", **config.title_font_medium)
-            plt.axis('off')
+            # --------------------  Plot segmentation errors for BASELINE (Jelmer) MODEL ------------------------
             if load_base_model_pred_labels:
                 slice_pred_labels_wo_sampling = pred_labels_base_model[:, :, :, img_slice]
-                row += 2
-                rgb_img = to_rgb1a(img)
-                ax_pred = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
+                rgb_img = copy.deepcopy(rgb_img_saved)
+                ax_pred = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
                 rgb_img_w_pred, cls_errors_base = set_error_pixels(rgb_img, slice_pred_labels_wo_sampling,
-                                                              slice_true_labels, cls_offset,
-                                                              slice_stddev, std_threshold=0.)
+                                                              slice_true_labels, cls_offset)
                 ax_pred.text(20, 20, 'yellow: RV ({}), blue: Myo ({}), '
                                      'red: LV ({}) '.format(cls_errors_base[1], cls_errors_base[2], cls_errors_base[3]),
                              bbox={'facecolor': 'white', 'pad': 18})
@@ -247,29 +221,72 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
                 ax_pred.set_aspect('auto')
                 ax_pred.set_title("Prediction errors BASELINE model", **config.title_font_medium)
                 plt.axis('off')
+            # -------------------------- Plot segmentation ERRORS per class on original image -----------
+
+            row += 2
+            ax1b = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
+            rgb_img = copy.deepcopy(rgb_img_saved)
+            rgb_img_with_seg_masks = overlay_seg_mask(rgb_img, slice_pred_labels, cls_offset)
+            ax1b.imshow(rgb_img_with_seg_masks, interpolation='nearest')
+            ax1b.set_aspect('auto')
+            ax1b.set_title("Predicted labels WITH sampling", **config.title_font_medium)
+            plt.axis('off')
+            # -------------------------- Plot segmentation ERRORS per class on original image -----------
+            # we also construct an image with the segmentation errors, placing it next to the original img
+            ax1b = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
+            rgb_img = copy.deepcopy(rgb_img_saved)
+            rgb_img_w_pred, cls_errors = set_error_pixels(rgb_img, slice_pred_labels, slice_true_labels,
+                                                          cls_offset)
+            ax1b.imshow(rgb_img_w_pred, interpolation='nearest')
+            ax1b.set_aspect('auto')
+            ax1b.text(20, 20, 'yellow: RV ({}), blue: Myo ({}), red: LV ({})'.format(cls_errors[1],
+                                                                                     cls_errors[2],
+                                                                                     cls_errors[3]),
+                      bbox={'facecolor': 'white', 'pad': 18})
+            ax1b.set_title("Prediction errors WITH sampling", **config.title_font_medium)
+            plt.axis('off')
+
+            # ------------------- Next two figures are only plotted in case of REFERRAL -----------------------
+            # show the remaining seg-errors after referral only positive uncertain pixels and another to the right
+            # with remaining seg-errors after referral of all uncertain pixels
+            if referral_pred_labels_pos_only is not None:
+                row += 2
+                rgb_img = copy.deepcopy(rgb_img_saved)
+                slice_pred_labels_referred_pos_only = referral_pred_labels_pos_only[:, :, :, img_slice]
+                ax_pred_ref = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
+                rgb_img_ref_pred_pos_only, cls_errors_ref_pos_only = \
+                    set_error_pixels(rgb_img, slice_pred_labels_referred_pos_only, slice_true_labels, cls_offset)
+
+                ax_pred_ref.text(20, 20, 'yellow: RV ({}), blue: Myo ({}), '
+                                         'red: LV ({})'.format(cls_errors_ref_pos_only[1], cls_errors_ref_pos_only[2],
+                                                               cls_errors_ref_pos_only[3]),
+                                 bbox={'facecolor': 'white', 'pad': 18})
+                ax_pred_ref.imshow(rgb_img_ref_pred_pos_only, interpolation='nearest')
+                ax_pred_ref.set_aspect('auto')
+                ax_pred_ref.set_title("Prediction errors after referral (pos-only)", **config.title_font_medium)
+                plt.axis('off')
+
             if referral_pred_labels is not None:
-                rgb_img = to_rgb1a(img)
+                rgb_img = copy.deepcopy(rgb_img_saved)
                 slice_pred_labels_referred = referral_pred_labels[:, :, :, img_slice]
-                if pred_labels_base_model is None:
+                if referral_pred_labels_pos_only is None:
                     row += 2
                 ax_pred_ref = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
                 rgb_img_ref_pred, cls_errors_ref = set_error_pixels(rgb_img, slice_pred_labels_referred,
-                                                                slice_true_labels, cls_offset,
-                                                                slice_stddev, std_threshold=0.)
+                                                                    slice_true_labels, cls_offset)
 
                 ax_pred_ref.text(20, 20, 'yellow: RV ({}), blue: Myo ({}), '
                                          'red: LV ({})'.format(cls_errors_ref[1], cls_errors_ref[2], cls_errors_ref[3]),
                                  bbox={'facecolor': 'white', 'pad': 18})
                 ax_pred_ref.imshow(rgb_img_ref_pred, interpolation='nearest')
                 ax_pred_ref.set_aspect('auto')
-                ax_pred_ref.set_title("Prediction errors after referral", **config.title_font_medium)
+                ax_pred_ref.set_title("Prediction errors after referral (all)", **config.title_font_medium)
                 plt.axis('off')
             # ARE WE SHOWING THE BALD value heatmap?
-            if filtered_std_map is not None:
+            if filtered_std_map_pos_only is not None:
                 row += 2
-                # CONFUSING!!! not using BALD here anymore (dead code) using it now for u-map where we
                 # add all uncertainties from the separate STDDEV maps per class
-                filtered_std_slice_map = filtered_std_map[phase, :, :, img_slice]
+                filtered_std_slice_map = filtered_std_map_pos_only[phase, :, :, img_slice]
                 filtered_std_slice_max = np.max(filtered_std_slice_map)
                 ax4 = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
                 ax4plot = ax4.imshow(filtered_std_slice_map, cmap=plt.get_cmap('jet'), vmin=0.,
@@ -277,65 +294,72 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
                 ax4.set_aspect('auto')
                 fig.colorbar(ax4plot, ax=ax4, fraction=0.046, pad=0.04)
                 total_uncertainty = np.count_nonzero(filtered_std_slice_map)
-                ax4.set_title("Slice {} {}: Filtered STDDEV u-map (#u={})".format(img_slice + 1, str_phase,
-                                                                                  total_uncertainty),
-                              **config.title_font_medium)
+                ax4.set_title("Slice {} {}: Filtered-pos-only STDDEV u-map (#u={})".format(img_slice + 1, str_phase,
+                                                                                           total_uncertainty),
+                              **config.title_font_small)
                 plt.axis('off')
 
             if not errors_only:
                 # plot (2) MEAN STD (over classes) next to BALD heatmap, so we can compare the two measures
                 # get the stddev value for the first 4 or last 4 classes (ES/ED) and average over classes (dim0)
-                if phase == 0:
-                    mean_slice_stddev = np.mean(slice_stddev[:half_classes], axis=0)
-                    # mean_slice_stddev = filtered_add_std_map_es[:, :, img_slice]
+                if filtered_std_map_pos_only is None:
+                    row += 2
+                    sub_title = "Slice {} {}: MEAN stddev-values".format(img_slice + 1, str_phase)
+                    if phase == 0:
+                        mean_slice_stddev = np.mean(slice_stddev[:half_classes], axis=0)
+                    else:
+                        mean_slice_stddev = np.mean(slice_stddev[half_classes:], axis=0)
                 else:
-                    mean_slice_stddev = np.mean(slice_stddev[half_classes:], axis=0)
-                    # mean_slice_stddev = filtered_add_std_map_ed[:, :, img_slice]
+                    # We plot the filtered u-map WHICH ALL UNCERTAIN PIXELS not just he positive-ones only
+                    mean_slice_stddev = filtered_std_map[phase, :, :, img_slice]
+                    total_uncertainty = np.count_nonzero(mean_slice_stddev)
+                    sub_title = "Slice {} {}: Filtered U-map (#u={})".format(img_slice + 1, str_phase,
+                                                                                    total_uncertainty)
 
-                total_uncertainty = np.count_nonzero(mean_slice_stddev)
                 max_mean_stddev = np.max(mean_slice_stddev)
-                max_slice_stddev = np.max(slice_stddev)
-                # print("Phase {} row {} - MEAN STDDEV heatmap".format(phase, row))
                 ax4a = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
                 ax4aplot = ax4a.imshow(mean_slice_stddev, cmap=plt.get_cmap('jet'),
                                        vmin=0., vmax=max_mean_stddev)
                 ax4a.set_aspect('auto')
                 fig.colorbar(ax4aplot, ax=ax4a, fraction=0.046, pad=0.04)
-                ax4a.set_title("Slice {} {}: MEAN stddev-values (#u={})".format(img_slice + 1, str_phase,
-                                                                                total_uncertainty),
-                               **config.title_font_medium)
+                ax4a.set_title(sub_title, **config.title_font_small)
                 plt.axis('off')
 
             if info_type is not None:
                 # last 2 rows: left-> histogram of bald uncertainties or softmax probabilities
                 #              right-> 4 histograms for each class, showing stddev uncertainties or softmax-probs
                 # create histogram
-                if phase == 0:
-                    stddev_corr = img_slice_probs["es_mean_cor_std"]
-                    stddev_err = img_slice_probs["es_mean_err_std"]
+                if referral_threshold != 0:
+                    title_suffix = "(filtered-pos-only)"
                 else:
-                    stddev_corr = img_slice_probs["ed_mean_cor_std"]
-                    stddev_err = img_slice_probs["ed_mean_err_std"]
-
-                xs = np.linspace(0, max_slice_stddev, 20)
+                    title_suffix = ""
+                stddev_corr = stddev_bin_values[phase, img_slice, 0]
+                stddev_err = stddev_bin_values[phase, img_slice, 1]
+                xs = stddev_bin_edges[phase, img_slice]
+                bar_width = xs[1] - xs[0]
                 ax5 = plt.subplot2grid((rows, columns), (row + 3, 0), rowspan=2, colspan=2)
                 # print("Phase {} row {} - BALD histogram".format(phase, row + 2))
-                if stddev_err is not None:
-                    ax5.hist(stddev_err, bins=xs,
-                             label=r"$stddev_{{pred(fp+fn)}}({})$".format(stddev_err.shape[0])
-                             , color='b', alpha=0.2, histtype='stepfilled')
-                    ax5.legend(loc="best", prop={'size': 12})
+                # if stddev_err is not None:
+                if np.sum(stddev_err) > 0:
+                    ax5.bar(xs[:-1], stddev_err, bar_width,
+                            label=r"$\sigma_{{pred(fp+fn)}}({})$".format(np.sum(stddev_err).astype(np.int)),
+                            color='b', alpha=0.2, align="center")
+                    ax5.legend(loc=1, prop={'size': 12})
+                    ax5.tick_params(axis='y', colors='b')
                     ax5.grid(False)
-                if stddev_corr is not None:
+                # if stddev_corr is not None:
+                if np.sum(stddev_corr) > 0:
                     ax5b = ax5.twinx()
-                    ax5b.hist(stddev_corr, bins=xs,
-                              label=r"$stddev_{{pred(tp)}}({})$".format(stddev_corr.shape[0]),
-                              color='g', alpha=0.4, histtype='stepfilled')
+                    ax5b.bar(xs[:-1], stddev_corr, bar_width,
+                            label=r"$\sigma_{{pred(tp)}}({})$".format(np.sum(stddev_corr).astype(np.int)),
+                            color='g', alpha=0.2, align="center")
                     ax5b.legend(loc=2, prop={'size': 12})
+                    ax5b.tick_params(axis='y', colors='g')
                     ax5b.grid(False)
-                ax5.set_xlabel("Stddev value", **config.axis_font)
-                ax5.set_title("Slice {} {}: Distribution of STDDEV values ".format(img_slice + 1, str_phase)
-                              , **config.title_font_medium)
+                ax5.set_xlabel("model uncertainty", **config.axis_font)
+                sub_title = "Slice {} {}: Distribution of uncertainties" + title_suffix
+                ax5.set_title(sub_title.format(img_slice + 1, str_phase)
+                              , **config.title_font_small)
 
             # In case we're only showing the error segmentation map we skip the next part (histgrams and
             # stddev uncertainty maps per class. If we only skip the histograms, we visualize the uncertainty
@@ -352,21 +376,6 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
                     max_stdddev_over_classes = np.max(slice_stddev[half_classes:])
 
                 for cls in np.arange(half_classes):
-                    if info_type is not None:
-                        if phase == 0:
-                            if info_type == "uncertainty":
-                                p_err_std = np.array(img_slice_probs["es_err_std"][cls])
-                                p_corr_std = np.array(img_slice_probs["es_cor_std"][cls])
-                            else:
-                                p_err_std = np.array(img_slice_probs["es_err_p"][cls])
-                                p_corr_std = np.array(img_slice_probs["es_cor_p"][cls])
-                        else:
-                            if info_type == "uncertainty":
-                                p_err_std = np.array(img_slice_probs["ed_err_std"][cls])
-                                p_corr_std = np.array(img_slice_probs["ed_cor_std"][cls])
-                            else:
-                                p_err_std = np.array(img_slice_probs["ed_err_p"][cls])
-                                p_corr_std = np.array(img_slice_probs["ed_cor_p"][cls])
                     # in the next subplot row we visualize the uncertainties per class
                     # print("phase {} row {} counter {}".format(phase, row, counter))
                     ax3 = plt.subplot2grid((rows, columns), (row, counter), colspan=1)
@@ -383,42 +392,38 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
                         fig.colorbar(ax3plot, ax=ax3, fraction=0.046, pad=0.04)
                     sub_title = "{} " + sub_title_prefix + " stddev: {} "
                     ax3.set_title(sub_title.format(str_phase, column_lbls[cls]),
-                                  **config.title_font_medium)
+                                  **config.title_font_small)
                     plt.axis("off")
                     # finally in the next row we plot the uncertainty densities per class
                     if info_type is not None:
-                        ax2 = plt.subplot2grid((rows, columns), (row + row_offset, 2 + col_offset), colspan=1)
+                        if cls != 0:
+                            p_corr_std = cls_stddev_bin_values[phase, cls, img_slice, 0]
+                            p_err_std = cls_stddev_bin_values[phase, cls, img_slice, 1]
+                            xs = cls_stddev_bin_edges[phase, cls, img_slice]
+                            bar_width = xs[1] - xs[0]
+                            ax2 = plt.subplot2grid((rows, columns), (row + row_offset, 2 + col_offset), colspan=1)
+                            if np.sum(p_err_std) != 0:
+                                ax2b = ax2.twinx()
+                                ax2b.bar(xs[:-1], p_err_std, bar_width,
+                                         label=r"$\sigma_{{pred(fp+fn)}}({})$".format(np.sum(p_err_std).astype(np.int))
+                                         , color="b", alpha=0.2)
+                                ax2b.legend(loc=2, prop={'size': 9})
+                                ax2b.tick_params(axis='y', colors='b')
+
+                            if np.sum(p_corr_std) != 0:
+                                ax2.bar(xs[:-1], p_corr_std, bar_width,
+                                        label=r"$\sigma_{{pred(tp)}}({})$".format(np.sum(p_corr_std).astype(np.int)),
+                                        color="g", alpha=0.4)
+                                ax2.tick_params(axis='y', colors='g')
+                                ax2.legend(loc=1, prop={'size': 9})
+
+                            if info_type == "uncertainty":
+                                ax2.set_xlabel("model uncertainty", **config.axis_font)
+                            else:
+                                ax2.set_xlabel(r"softmax $p(c|x)$", **config.axis_font)
+                            ax2.set_title("{} slice-{}: {}".format(str_phase, img_slice + 1, column_lbls[cls]),
+                                          **config.title_font_small)
                         col_offset += 1
-                        std_max = max(p_err_std.max() if p_err_std.shape[0] > 0 else 0,
-                                      p_corr_std.max() if p_corr_std.shape[0] > 0 else 0.)
-
-                        if info_type == "uncertainty":
-                            xs = np.linspace(0, std_max, 20)
-                        else:
-                            xs = np.linspace(0, std_max, 10)
-                        if p_err_std is not None:
-                            ax2b = ax2.twinx()
-                            ax2b.hist(p_err_std, bins=xs,
-                                      label=r"$\sigma_{{pred(fp+fn)}}({})$".format(cls_errors[cls])
-                                      , color="b", alpha=0.2)
-                            ax2b.legend(loc=2, prop={'size': 9})
-
-                        if p_corr_std is not None:
-                            # if info_type == "uncertainty":
-                            #    p_corr_std = p_corr_std[p_corr_std >= std_threshold]
-                            # p_corr_std = p_corr_std[np.where((p_corr_std > 0.1) & (p_corr_std < 0.9))]
-                            ax2.hist(p_corr_std, bins=xs,
-                                     label=r"$\sigma_{{pred(tp)}}({})$".format(p_corr_std.shape[0]),
-                                     color="g", alpha=0.4)
-
-                        if info_type == "uncertainty":
-                            ax2.set_xlabel("model uncertainty", **config.axis_font)
-                        else:
-                            ax2.set_xlabel(r"softmax $p(c|x)$", **config.axis_font)
-                        ax2.set_title("{} slice-{}: {}".format(str_phase, img_slice + 1, column_lbls[cls]),
-                                      **config.title_font_medium)
-                        ax2.legend(loc="best", prop={'size': 9})
-
                         if cls == 1:
                             row_offset += 1
                             col_offset = 0
@@ -442,8 +447,7 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
             if referral_threshold > 0.:
                 tr_string = "_tr" + str(referral_threshold).replace(".", "_")
                 fig_name += tr_string
-                if ref_positives_only:
-                    fig_name += "_pos_only"
+
             if errors_only:
                 fig_name = fig_name + "_w_uncrty"
             fig_name = os.path.join(fig_path, fig_name + ".pdf")
