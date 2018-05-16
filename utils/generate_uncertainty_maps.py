@@ -515,7 +515,10 @@ class UncertaintyMapsGenerator(object):
         if test_set is None:
             self.info("Loading validation set of fold {} as test "
                       "set.".format(self.exper_handler.exper.run_args.fold_ids[0]))
-            self.test_set = self._get_test_set(load_val=True, load_train=False, batch_size=None)
+            self.test_set = ACDC2017TestHandler.get_testset_instance(self.exper_handler.exper.config,
+                                                                     self.fold_id,
+                                                                     load_train=False, load_val=True,
+                                                                     batch_size=None, use_cuda=True)
         else:
             self.test_set = test_set
         self.num_of_images = len(self.test_set.images)
@@ -547,7 +550,7 @@ class UncertaintyMapsGenerator(object):
         if clean_up:
             self.info("NOTE: first cleaning up previous generated uncertainty maps!")
             self.clean_up_files()
-        # image_range = [0]
+        # image_range = [0, 1]
         image_range = np.arange(self.num_of_images)
         self.exper_handler.test_results = TestResults(self.exper_handler.exper, use_dropout=True,
                                                       mc_samples=self.mc_samples)
@@ -607,14 +610,8 @@ class UncertaintyMapsGenerator(object):
                     self._show_results(image_num, test_accuracy_ref)
                     self.test_set.b_pred_labels = copy.deepcopy(original_pred_labels)
                     if self.generate_figures:
-                        args = self.exper_handler.exper.run_args
-                        model_name = args.model + " (p={:.2f})".format(args.drop_prob) + " - {}".format(args.loss_function)
-                        plot_seg_erros_uncertainties(self.exper_handler, self.test_set, patient_id=patient_id,
-                                                     test_results=None,
-                                                     referral_threshold=referral_threshold, do_show=False,
-                                                     model_name=model_name, info_type="uncertainty",
-                                                     do_save=True, slice_range=None, errors_only=False,
-                                                     load_base_model_pred_labels=True)
+                        self.exper_handler.generate_figures(self.test_set, image_range=[image_num],
+                                                            referral_threshold=referral_threshold)
 
         duration = time.time() - start_time
         if do_save:
@@ -718,24 +715,6 @@ class UncertaintyMapsGenerator(object):
         a_stats[0, :] = [np.mean(es_all), np.std(es_all), np.min(es_all), np.max(es_all)]
         a_stats[1, :] = [np.mean(ed_all), np.std(ed_all), np.min(ed_all), np.max(ed_all)]
         return a_stats, cls_stats
-
-    def _get_test_set(self, load_train=True, load_val=False, batch_size=None):
-        """
-        Important note:
-        we set batch_size to None, which means all images will be loaded
-        we set load_train parameter to True and the load_val=False, which means only images from "train"
-        and directory will be loaded.
-        :param load_train:
-        :param load_val:
-        :return:
-
-        """
-        return ACDC2017TestHandler(exper_config=self.exper_handler.exper.config,
-                                   search_mask=self.exper_handler.exper.config.dflt_image_name + ".mhd",
-                                   fold_ids=[self.fold_id],
-                                   debug=False, batch_size=batch_size,
-                                   use_cuda=self.exper_handler.exper.run_args.cuda,
-                                   load_train=load_train, load_val=load_val, use_iso_path=True)
 
     def _get_model(self):
         print("INFO - loading model {}".format(self.exper_handler.exper.model_name))

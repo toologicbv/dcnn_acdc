@@ -936,6 +936,15 @@ class ACDC2017TestHandler(object):
                             write_numpy_to_image(pred_cls_lbl.astype("float32"), filename=filename_lbl, swap_axis=True,
                                                  spacing=new_spacing)
 
+    @staticmethod
+    def get_testset_instance(config_obj, fold_id, load_train=False, load_val=True, batch_size=None, use_cuda=True):
+        return ACDC2017TestHandler(exper_config=config_obj,
+                                   search_mask=config_obj.dflt_image_name + ".mhd",
+                                   fold_ids=[fold_id],
+                                   debug=False, batch_size=batch_size,
+                                   use_cuda=use_cuda,
+                                   load_train=load_train, load_val=load_val, use_iso_path=True)
+
 
 # print("Root path {}".format(os.environ.get("REPO_PATH")))
 # dataset = ACDC2017TestHandler(exper_config=config, search_mask=config.dflt_image_name + ".mhd", fold_ids=[0],

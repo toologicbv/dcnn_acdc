@@ -91,7 +91,8 @@ def generate_std_hist_corr_err(img_stds, labels, pred_labels, is_filtered=False)
                 # arr_stddev_err, _, _ = plt.hist(err_std, bins=xs)
                 arr_stddev_err, xs_cor = np.histogram(err_std, bins=num_of_bins, range=(std_min, std_max))
                 slice_bin_values[phase, img_slice, 1, :] = arr_stddev_err
-            if pos_std is not None or err_std is not None:
+            if (pos_std is not None and np.count_nonzero(pos_std) != 0) or \
+                    (err_std is not None and np.count_nonzero(err_std) != 0):
                 slice_bin_edges[phase, img_slice] = xs_cor
 
     return slice_bin_edges, slice_bin_values
@@ -162,6 +163,32 @@ def generate_std_hist_corr_err_per_class(img_stds, labels, pred_labels, is_filte
                         slice_bin_edges[phase, cls, img_slice] = xs_cor
 
     return slice_bin_edges, slice_bin_values
+
+
+def get_exper_objects(exper_handler, patient_id):
+
+    # if not yet done, get raw uncertainty maps
+    if exper_handler.u_maps is None:
+        exper_handler.get_u_maps()
+
+    umap_dir = os.path.join(exper_handler.exper.config.root_dir,
+                                 os.path.join(exper_handler.exper.output_dir, config.u_map_dir))
+
+    pred_labels_input_dir = os.path.join(exper_handler.exper.config.root_dir,
+                                              os.path.join(exper_handler.exper.output_dir, config.pred_lbl_dir))
+    fig_output_dir = os.path.join(exper_handler.exper.config.root_dir,
+                                       os.path.join(exper_handler.exper.output_dir, config.figure_path))
+
+    search_path = os.path.join(pred_labels_input_dir, patient_id + "_pred_labels_mc.npz")
+    pred_labels = load_pred_labels(search_path)
+    uncertainty_map = exper_handler.u_maps[patient_id]
+    # in this case uncertainty_map has shape [2, 4, width, height, #slices] but we need [8, width, heiht, #slices]
+    uncertainty_map = np.concatenate((uncertainty_map[0], uncertainty_map[1]))
+    fig_path = os.path.join(fig_output_dir, patient_id)
+    if not os.path.isdir(fig_path):
+        os.makedirs(fig_path)
+
+    return umap_dir, pred_labels_input_dir, fig_path, pred_labels, uncertainty_map
 
 
 def prepare_referrals(image_name, referral_threshold, umap_dir, pred_labels_input_dir, aggregate_func="max"):

@@ -3,7 +3,8 @@ import argparse
 import torch
 import numpy as np
 from utils.experiment import ExperimentHandler
-from utils.generate_uncertainty_maps import UncertaintyMapsGenerator
+from utils.test_handler import ACDC2017TestHandler
+from utils.referral_handler import ReferralHandler
 from in_out.load_data import ACDC2017DataSet
 from config.config import config
 
@@ -17,7 +18,8 @@ def do_parse_args():
     parser = argparse.ArgumentParser(description='Generate Uncertainty Maps')
 
     parser.add_argument('--exper_id', default=None)
-    parser.add_argument('--run_mode', choices=['outliers', 'u_maps_only'], default="outliers")
+    parser.add_argument('--run_mode', choices=['outliers', 'u_maps_only', 'figures_only', 'test_referrals'],
+                        default="u_maps_only")
     parser.add_argument('--aggregate_func', choices=['max', 'mean'], default="max")
     parser.add_argument('--mc_samples', type=int, default=5, help="# of MC samples")
     parser.add_argument('--checkpoint', type=int, default=150000, help="Saved checkpoint")
@@ -25,7 +27,7 @@ def do_parse_args():
     parser.add_argument('--reuse_maps', action='store_true', default=False, help='use existing U-maps')
     parser.add_argument('--save_actual_maps', action='store_true', default=False, help='save detailed u-maps')
 
-    parser.add_argument('--u_threshold', type=float, default=0.05, help="Threshold to filter initial u-values.")
+    parser.add_argument('--referral_thresholds', nargs='+', default=0.1, help="Referral thresholds used for figures.")
     parser.add_argument('--verbose', action='store_true', default=False, help='show debug messages')
     parser.add_argument('--generate_plots', action='store_true', default=False, help='generate plots for analysis')
 
@@ -80,16 +82,34 @@ def main():
         # IMPORTANT: current settings=we're loading VALIDATION set for outlier detection: use_train_set=False !!!
         _ = exper_handler.create_outlier_dataset(dataset, model=None, test_set=None,
                                                  checkpoint=args.checkpoint, mc_samples=args.mc_samples,
-                                                 u_threshold=args.u_threshold, use_train_set=False,
+                                                 u_threshold=0., use_train_set=False,
                                                  do_save_u_stats=True, use_high_threshold=True,
                                                  do_save_outlier_stats=True, use_existing_umaps=args.reuse_maps,
                                                  do_analyze_slices=args.generate_plots)
-    else:
+    elif args.run_mode == "u_maps_only":
         exper_handler.create_u_maps(model=None, checkpoint=args.checkpoint, mc_samples=args.mc_samples,
-                                    u_threshold=args.u_threshold,
+                                    u_threshold=0.,
                                     do_save_u_stats=True, verbose=args.verbose,
                                     save_actual_maps=True, test_set=None, generate_figures=args.generate_plots,
                                     aggregate_func=args.aggregate_func)
+    elif args.run_mode == "figures_only":
+        args.referral_thresholds.sort()
+        if args.referral_thresholds[0] <= 0.:
+            raise ValueError("ERROR - argument referral_threshold needs to be greater than 0.")
+        test_set = ACDC2017TestHandler.get_testset_instance(exper_handler.exper.config,
+                                                            exper_handler.exper.run_args.fold_ids,
+                                                            load_train=False, load_val=True,
+                                                            batch_size=None, use_cuda=True)
+        exper_handler.generate_figures(test_set, image_range=None, referral_thresholds=args.referral_thresholds)
+
+    elif args.run_mode == "test_referrals":
+        test_set = ACDC2017TestHandler.get_testset_instance(exper_handler.exper.config,
+                                                            exper_handler.exper.run_args.fold_ids,
+                                                            load_train=False, load_val=True,
+                                                            batch_size=None, use_cuda=True)
+        ref_handler = ReferralHandler(exper_handler, test_set=test_set,
+                                      verbose=False, do_save=True, num_of_images=None)
+        ref_handler.test(non_referral=True, verbose=False)
 
 
 if __name__ == '__main__':
@@ -98,8 +118,17 @@ if __name__ == '__main__':
 
 """
 python generate_uncertainty_stats.py --cuda --exper_id=20180426_14_47_23_dcnn_mc_f2p005_brier_150KE_lr2e02 
---checkpoint=150000 --mc_samples=10  --u_threshold=0.1 --save_actual_maps --run_mode="u_maps_only" --generate_plots
+--checkpoint=150000 --mc_samples=10  --save_actual_maps --run_mode="u_maps_only" --generate_plots
 
 python generate_uncertainty_stats.py --cuda --exper_id=20180426_14_13_46_dcnn_mc_f1p01_brier_150KE_lr2e02 
---checkpoint=150000 --mc_samples=10  --u_threshold=0.05 --save_actual_maps --run_mode="u_maps_only"
+--checkpoint=150000 --mc_samples=10 --save_actual_maps --run_mode="u_maps_only"
+"""
+#
+# nohup python generate_uncertainty_stats.py --cuda --exper_id=20180418_15_02_05_dcnn_mcv1_150000E_lr2e02
+# --checkpoint=150000 --mc_samples=10 --save_actual_maps --run_mode="u_maps_only"
+# --aggregate_func=max > /home/jorg/tmp/20180418_15_02_05_dcnn_mcv1_150000E_lr2e02.log 2>&1&
+
+"""
+python generate_uncertainty_stats.py --cuda --exper_id=20180426_14_14_57_dcnn_mc_f3p01_brier_150KE_lr2e02 
+ --run_mode="figures_only" --referral_thresholds 0.2 0.18
 """

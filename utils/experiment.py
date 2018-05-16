@@ -22,6 +22,7 @@ import models.dilated_cnn
 from utils.test_results import TestResults
 from common.acquisition_functions import bald_function
 from plotting.uncertainty_plots import analyze_slices
+from plotting.main_seg_results import plot_seg_erros_uncertainties
 
 
 class ExperimentHandler(object):
@@ -771,6 +772,24 @@ class ExperimentHandler(object):
         self.u_maps = None
         del filtered_cls_stddev_map
         del filtered_stddev_map
+
+    def generate_figures(self, test_set, image_range=None, referral_thresholds=[0.]):
+        args = self.exper.run_args
+        model_name = args.model + " (p={:.2f})".format(args.drop_prob) + " - {}".format(args.loss_function)
+        if image_range is None:
+            image_range = np.arange(len(test_set.images))
+
+        for image_num in image_range:
+            patient_id = test_set.img_file_names[image_num]
+            for referral_threshold in referral_thresholds:
+                if isinstance(referral_threshold, str):
+                    referral_threshold = float(referral_threshold)
+                plot_seg_erros_uncertainties(self, test_set, patient_id=patient_id,
+                                             test_results=None,
+                                             referral_threshold=referral_threshold, do_show=False,
+                                             model_name=model_name, info_type="uncertainty",
+                                             do_save=True, slice_range=None, errors_only=False,
+                                             load_base_model_pred_labels=True)
 
     def info(self, message):
         if self.logger is None:
