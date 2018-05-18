@@ -504,7 +504,7 @@ class UncertaintyMapsGenerator(object):
         self.generate_figures = False
         self.aggregate_func = aggregate_func
         if self.aggregate_func == "max":
-            self.arr_ref_thresholds = [0.16, 0.18, 0.2, 0.22, 0.24]
+            self.arr_ref_thresholds = [0.14, 0.15]  # [0.16, 0.18, 0.2, 0.22, 0.24]
         else:
             self.arr_ref_thresholds = [0.12, 0.13, 0.14, 0.16]
         if use_logger and self.exper_handler.logger is None:

@@ -83,8 +83,8 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
     # ------------------------------------ LOADING pred_labels -----------------------------------------
     # Finally we need the predictions of the base-model if...
     if load_base_model_pred_labels:
-        os.path.join(test_set.abs_path_fold + str(test_set.fold_ids[0]), config.pred_lbl_dir)
-        search_path = os.path.join(pred_labels_input_dir, image_name + "_pred_labels.npz")
+        base_pred_labels_input_dir = os.path.join(test_set.abs_path_fold + str(test_set.fold_ids[0]), config.pred_lbl_dir)
+        search_path = os.path.join(base_pred_labels_input_dir, image_name + "_pred_labels.npz")
         # the predicted labels we obtained with the MC model when NOT using dropout during inference!
         pred_labels_base_model = load_pred_labels(search_path)
     else:

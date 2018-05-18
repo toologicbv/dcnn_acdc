@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import glob
-
+from collections import OrderedDict
 from common.common import load_pred_labels
 from utils.test_handler import ACDC2017TestHandler
 from config.config import config
@@ -10,18 +10,19 @@ from config.config import config
 class ReferralHandler(object):
 
     def __init__(self, exper_handler, referral_thresholds=None, test_set=None, verbose=False, do_save=False,
-                 num_of_images=None):
+                 num_of_images=None, pos_only=False):
 
         self.exper_handler = exper_handler
         self.referral_threshold = None
         self.str_referral_threshold = None
         if referral_thresholds is None:
-            self.referral_thresholds = [0.16, 0.18, 0.2, 0.22, 0.24]
+            self.referral_thresholds = [0.14, 0.15, 0.16, 0.18, 0.2, 0.22, 0.24]
         else:
             self.referral_thresholds = referral_thresholds
         self.verbose = verbose
         self.do_save = do_save
         self.test_set = test_set
+        self.pos_only = pos_only
         if self.test_set is None:
             self.test_set = ACDC2017TestHandler.get_testset_instance(exper_handler.exper.config,
                                                                      exper_handler.exper.run_args.fold_ids,
@@ -47,14 +48,21 @@ class ReferralHandler(object):
         self.dice_mean = None
         self.dice_std = None
 
-    def __load_pred_labels(self, patient_id):
+    def __load_pred_labels(self, patient_id, pos_only=False):
 
         search_path = os.path.join(self.pred_labels_input_dir,
                                    patient_id + "_pred_labels_mc.npz")
         pred_labels = load_pred_labels(search_path)
-        search_path = os.path.join(self.pred_labels_input_dir,
-                                   patient_id + "_filtered_pred_labels_mc" + self.str_referral_threshold + ".npz")
+        if pos_only:
+            search_path = os.path.join(self.pred_labels_input_dir,
+                                       patient_id + "_filtered_pred_labels_mc" + self.str_referral_threshold +
+                                       "_pos_only.npz")
+        else:
+            search_path = os.path.join(self.pred_labels_input_dir,
+                                       patient_id + "_filtered_pred_labels_mc" + self.str_referral_threshold + ".npz")
+
         ref_pred_labels = load_pred_labels(search_path)
+
         return pred_labels, ref_pred_labels
 
     def test(self, non_referral=False, verbose=False, referral_threshold=None):
@@ -67,9 +75,11 @@ class ReferralHandler(object):
         for referral_threshold in self.referral_thresholds:
             self.referral_threshold = referral_threshold
             self.str_referral_threshold = str(referral_threshold).replace(".", "_")
+            print("INFO - Running evaluation with referral for threshold {}"
+                  " (pos-only={})".format(self.str_referral_threshold, self.pos_only))
             for image_num in np.arange(self.num_of_images):
                 patient_id = self.test_set.img_file_names[image_num]
-                pred_labels, ref_pred_labels = self.__load_pred_labels(patient_id)
+                pred_labels, ref_pred_labels = self.__load_pred_labels(patient_id, self.pos_only)
                 self.test_set.b_labels = self.test_set.labels[image_num]
                 self.test_set.b_image = self.test_set.images[image_num]
                 self.test_set.b_image_name = patient_id
@@ -100,6 +110,7 @@ class ReferralHandler(object):
             self._show_results()
             if self.do_save:
                 self.save_results()
+        print("INFO - Done")
 
     def _show_results(self, test_accuracy=None, image_num=None, msg=""):
         if image_num is not None:
@@ -137,6 +148,8 @@ class ReferralHandler(object):
     def save_results(self):
         outfile = "ref_test_results_{}imgs_fold{}".format(self.num_of_images, self.fold_id)
         outfile += "_utr{}".format(self.str_referral_threshold)
+        if self.pos_only:
+            outfile += "_pos_only"
         outfile = os.path.join(self.save_output_dir, outfile)
         try:
             np.savez(outfile, ref_dice_mean=self.ref_dice_mean, ref_dice_std=self.ref_dice_std,
@@ -166,48 +179,108 @@ class ReferralHandler(object):
         return ref_dice_results, ref_hd_results, dice_results
 
 
-def load_all_ref_results(exper_dict, referral_threshold, search_prefix="ref_test_results_25imgs*",
-                         root_dir="/home/jorg/repository/dcnn_acdc"):
+class ReferralResults(object):
+    """
+        These are currently the DICE results of the MC-0.1 model with Brier loss functional
+    """
+    results_dice_wo_referral = np.array([[0, 0.84, 0.88, 0.91], [0, 0.92, 0.86, 0.96]])
 
-    log_dir = os.path.join(root_dir, "logs")
-    str_referral_threshold = str(referral_threshold).replace(".", "_")
-    overall_dice, std_dice = np.zeros((2, 4)), np.zeros((2, 4))
-    overall_hd, std_hd = np.zeros((2, 4)), np.zeros((2, 4))
-    results = []
-    for fold_id, exper_id in exper_dict.iteritems():
-        input_dir = os.path.join(log_dir, os.path.join(exper_id, config.stats_path))
-        search_path = os.path.join(input_dir, search_prefix + "utr" + str_referral_threshold + ".npz")
-        filenames = glob.glob(search_path)
-        if len(filenames) != 1:
-            raise ValueError("ERROR - Found {} result files for this {} experiment."
-                             "Must be 1.".format(len(filenames), exper_id))
-        # ref_dice_results is a list with 2 objects
-        # 1st object: ref_dice_mean has shape [2 (ES/ED), 4 classes],
-        # 2nd object: ref_dice_std has shape [2 (ES/ED), 4 classes]
-        # the same is applicable to object ref_hd_results
-        ref_dice_results, ref_hd_results, _ = ReferralHandler.load_results(filenames[0], verbose=False)
-        results.append([ref_dice_results, ref_hd_results])
+    def __init__(self, exper_dict, referral_thresholds, pos_only=False, print_latex_string=False,
+                 print_results=True):
 
-    if len(results) != 4:
-        raise ValueError("ERROR - Loaded {} instead of 4 result files.".format(len(results)))
-    for _ in results:
-        overall_dice += results[0][0]
-        std_dice += results[0, 1]
-        overall_hd += results[1, 0]
-        std_hd += results[1, 1]
-    overall_dice *= 1. / 4
-    std_dice *= 1. / 4
-    overall_hd *= 1. / 4
-    std_hd *= 1. / 4
+        self.referral_thresholds = referral_thresholds
+        self.exper_dict = exper_dict
+        self.search_prefix = "ref_test_results_25imgs*"
+        self.print_results = print_results
+        self.print_latex_string = print_latex_string
+        self.pos_only = pos_only
+        self.root_dir = config.root_dir
+        self.log_dir = os.path.join(self.root_dir, "logs")
+        self.dice = OrderedDict()
+        self.hd = OrderedDict()
+        self.load_all_ref_results()
 
-    print("Overall:\t"
-          "dice(RV/Myo/LV): ES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})\t"
-          "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(overall_dice[1], std_dice[1], overall_dice[2],
-                                                                      std_dice[2], overall_dice[3], std_dice[3],
-                                                                      overall_dice[5], std_dice[5], overall_dice[6],
-                                                                      std_dice[6], overall_dice[7], std_dice[7]))
-    print("Hausdorff(RV/Myo/LV):\tES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})\t"
-          "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(overall_hd[1], std_hd[1], overall_hd[2],
-                                                                      std_hd[2], overall_hd[3], std_hd[3],
-                                                                      overall_hd[5], std_hd[5], overall_hd[6],
-                                                                      std_hd[6], overall_hd[7], std_hd[7]))
+    def load_all_ref_results(self):
+        print("INFO - Loading referral results for thresholds"
+              " {}".format(self.referral_thresholds))
+        print("WARNING - referral positives-only={}".format(self.pos_only))
+        for referral_threshold in self.referral_thresholds:
+            str_referral_threshold = str(referral_threshold).replace(".", "_")
+            overall_dice, std_dice = np.zeros((2, 4)), np.zeros((2, 4))
+            overall_hd, std_hd = np.zeros((2, 4)), np.zeros((2, 4))
+            results = []
+            for fold_id, exper_id in self.exper_dict.iteritems():
+                input_dir = os.path.join(self.log_dir, os.path.join(exper_id, config.stats_path))
+                if self.pos_only:
+                    search_path = os.path.join(input_dir, self.search_prefix + "utr" + str_referral_threshold +
+                                               "_pos_only.npz")
+                else:
+                    search_path = os.path.join(input_dir, self.search_prefix + "utr" + str_referral_threshold + ".npz")
+                filenames = glob.glob(search_path)
+                if len(filenames) != 1:
+                    raise ValueError("ERROR - Found {} result files for this {} experiment."
+                                     "Must be 1.".format(len(filenames), exper_id))
+                # ref_dice_results is a list with 2 objects
+                # 1st object: ref_dice_mean has shape [2 (ES/ED), 4 classes],
+                # 2nd object: ref_dice_std has shape [2 (ES/ED), 4 classes]
+                # the same is applicable to object ref_hd_results
+                ref_dice_results, ref_hd_results, _ = ReferralHandler.load_results(filenames[0], verbose=False)
+                results.append([ref_dice_results, ref_hd_results])
+
+            if len(results) != 4:
+                raise ValueError("ERROR - Loaded {} instead of 4 result files.".format(len(results)))
+            for ref_dice_results, ref_hd_results in results:
+                ref_dice_mean = ref_dice_results[0]
+                overall_dice += ref_dice_mean
+                ref_dice_std = ref_dice_results[1]
+                std_dice += ref_dice_std
+                ref_hd_mean = ref_hd_results[0]
+                overall_hd += ref_hd_mean
+                ref_hd_std = ref_hd_results[1]
+                std_hd += ref_hd_std
+            overall_dice *= 1. / 4
+            std_dice *= 1. / 4
+            overall_hd *= 1. / 4
+            std_hd *= 1. / 4
+            if self.print_results:
+                print("Evaluation with referral threshold {:.2f}".format(referral_threshold))
+                print("Overall:\t"
+                      "dice(RV/Myo/LV): ES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})\t"
+                      "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(overall_dice[0, 1], std_dice[0, 1],
+                                                                                  overall_dice[0, 2],
+                                                                                  std_dice[0, 2], overall_dice[0, 3],
+                                                                                  std_dice[0, 3],
+                                                                                  overall_dice[1, 1], std_dice[1, 1],
+                                                                                  overall_dice[1, 2],
+                                                                                  std_dice[1, 2], overall_dice[1, 3],
+                                                                                  std_dice[1, 3]))
+                print("Hausdorff(RV/Myo/LV):\t\tES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})\t"
+                      "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(overall_hd[0, 1], std_hd[0, 1],
+                                                                                  overall_hd[0, 2],
+                                                                                  std_hd[0, 2], overall_hd[0, 3],
+                                                                                  std_hd[0, 3],
+                                                                                  overall_hd[1, 1], std_hd[1, 1],
+                                                                                  overall_hd[1, 2],
+                                                                                  std_hd[1, 2], overall_hd[1, 3],
+                                                                                  std_hd[1, 3]))
+            if self.print_latex_string:
+                latex_line = " & {:.2f} $\pm$ {:.2f} & {:.2f}  $\pm$ {:.2f} & {:.2f} $\pm$ {:.2f} &" \
+                             "{:.2f} $\pm$ {:.2f} & {:.2f} $\pm$ {:.2f} & {:.2f} $\pm$ {:.2f} "
+                # print Latex strings
+                print("----------------------------------------------------------------------------------------------")
+                print("INFO - Latex strings")
+                print("Dice coefficients")
+                print(latex_line.format(overall_dice[0, 1], std_dice[0, 1], overall_dice[0, 2], std_dice[0, 2],
+                                        overall_dice[0, 3], std_dice[0, 3],
+                                        overall_dice[1, 1], std_dice[1, 1], overall_dice[1, 2], std_dice[1, 2],
+                                        overall_dice[1, 3], std_dice[1, 3]))
+                print("Hausdorff distance")
+                print(latex_line.format(overall_hd[0, 1], std_hd[0, 1], overall_hd[0, 2],  std_hd[0, 2],
+                                        overall_hd[0, 3],
+                                        std_hd[0, 3],
+                                        overall_hd[1, 1], std_hd[1, 1], overall_hd[1, 2], std_hd[1, 2],
+                                        overall_hd[1, 3],
+                                        std_hd[1, 3]))
+
+            self.dice[referral_threshold] = overall_dice
+            self.hd[referral_threshold] = overall_hd

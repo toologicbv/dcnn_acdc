@@ -108,7 +108,8 @@ def main():
                                                             load_train=False, load_val=True,
                                                             batch_size=None, use_cuda=True)
         ref_handler = ReferralHandler(exper_handler, test_set=test_set,
-                                      verbose=False, do_save=True, num_of_images=None)
+                                      verbose=False, do_save=True, num_of_images=None,
+                                      pos_only=True)
         ref_handler.test(non_referral=True, verbose=False)
 
 
