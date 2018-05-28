@@ -40,6 +40,18 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
                                                                    NO HISTOGRAMS!
     :return:
     """
+
+    def transparent_cmap(cmap, N=255):
+        "Copy colormap and set alpha values"
+
+        mycmap = cmap
+        mycmap._init()
+        mycmap._lut[:, -1] = np.linspace(0, 0.8, N + 4)
+        return mycmap
+
+    # Use base cmap to create transparent
+    mycmap = transparent_cmap(plt.get_cmap('jet'))
+
     if test_set is None:
         raise ValueError("ERROR - test_set cannot be None.")
     plt.rcParams['font.family'] = 'serif'
@@ -257,14 +269,15 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
                 ax_pred_ref.set_aspect('auto')
                 ax_pred_ref.set_title("Prediction errors after referral (all)", **config.title_font_medium)
                 plt.axis('off')
-            # ARE WE SHOWING THE BALD value heatmap?
+            # ARE WE SHOWING THE FILTERED (Positive-only) HEAT MAP?
             if filtered_std_map_pos_only is not None:
                 row += 2
                 # add all uncertainties from the separate STDDEV maps per class
                 filtered_std_slice_map = filtered_std_map_pos_only[phase, :, :, img_slice]
                 filtered_std_slice_max = np.max(filtered_std_slice_map)
                 ax4 = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
-                ax4plot = ax4.imshow(filtered_std_slice_map, cmap=plt.get_cmap('jet'), vmin=0.,
+                ax4.imshow(img, cmap=cm.gray)
+                ax4plot = ax4.imshow(filtered_std_slice_map, cmap=mycmap, vmin=0.,
                                      vmax=filtered_std_slice_max)
                 ax4.set_aspect('auto')
                 fig.colorbar(ax4plot, ax=ax4, fraction=0.046, pad=0.04)
@@ -275,7 +288,8 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
                 plt.axis('off')
 
             if not errors_only:
-                # plot (2) MEAN STD (over classes) next to BALD heatmap, so we can compare the two measures
+                # plot unfiltered or filtered u-map (for all uncertain pixels) to the right of the u-map
+                # see "filtered_std_map_pos_only is not None" above
                 # get the stddev value for the first 4 or last 4 classes (ES/ED) and average over classes (dim0)
                 if filtered_std_map_pos_only is None:
                     row += 2
@@ -293,7 +307,8 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
 
                 max_mean_stddev = np.max(mean_slice_stddev)
                 ax4a = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
-                ax4aplot = ax4a.imshow(mean_slice_stddev, cmap=plt.get_cmap('jet'),
+                ax4a.imshow(img, cmap=cm.gray)
+                ax4aplot = ax4a.imshow(mean_slice_stddev, cmap=mycmap,
                                        vmin=0., vmax=max_mean_stddev)
                 ax4a.set_aspect('auto')
                 fig.colorbar(ax4aplot, ax=ax4a, fraction=0.046, pad=0.04)
@@ -360,8 +375,9 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
                     else:
                         std_map_cls = slice_stddev[cls + cls_offset]
                         sub_title_prefix = ""
+                    ax3.imshow(img, cmap=cm.gray)
                     ax3plot = ax3.imshow(std_map_cls, vmin=0.,
-                                         vmax=max_stdddev_over_classes, cmap=plt.get_cmap('jet'))
+                                         vmax=max_stdddev_over_classes, cmap=mycmap)
                     ax3.set_aspect('auto')
                     if cls == half_classes - 1:
                         fig.colorbar(ax3plot, ax=ax3, fraction=0.046, pad=0.04)
