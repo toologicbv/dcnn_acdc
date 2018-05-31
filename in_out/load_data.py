@@ -38,7 +38,7 @@ def crawl_dir(in_dir, load_func="load_itk", pattern="*.mhd", logger=None):
 
 
 def rescale_image(img, perc_low=5, perc_high=95, axis=None):
-    # flatten 3D image to 1D and determine percentiles for recaling
+    # flatten 3D image to 1D and determine percentiles for rescaling
     lower, upper = np.percentile(img, [perc_low, perc_high], axis=axis)
     # set new normalized image
     img = (img - lower) * 1. / (upper - lower)
@@ -403,14 +403,22 @@ class ACDC2017DataSet(BaseImageDataSet):
                                  spacing[2]))
             out_filename = file_tuple[0]
             out_filename = out_filename.replace("images", "images_iso")
-            mri_scan = resample_image_scipy(mri_scan, new_spacing=zoom_factors, order=3)
+            # using scipy.interpolation.zoom
+            # mri_scan = resample_image_scipy(mri_scan, new_spacing=zoom_factors, order=3)
+            # using scipy.misc.imresize
+            mri_scan = resample_image_scipy(mri_scan, new_spacing=zoom_factors, order=None, use_func="imresize",
+                                            interp="lanczos")
             save_img_as_mhg(mri_scan, new_spacing, origin, out_filename, swap_axis=True)
             # print("INFO - Loading file {}".format(file_tuple[1]))
             reference, origin, spacing = self.load_func(file_tuple[1], data_type=ACDC2017DataSet.pixel_dta_type,
                                                         swap_axis=True)
             out_filename = file_tuple[1]
             out_filename = out_filename.replace("reference", "reference_iso")
-            reference = resample_image_scipy(reference, new_spacing=zoom_factors, order=0)
+            # using scipy.interpolation.zoom
+            # reference = resample_image_scipy(reference, new_spacing=zoom_factors, order=0)
+            # using scipy.misc.imresize
+            reference = resample_image_scipy(reference, new_spacing=zoom_factors, order=None, use_func="imresize",
+                                             interp="nearest")
             save_img_as_mhg(reference, new_spacing, origin, out_filename, swap_axis=True)
             files_loaded += 1
         return files_loaded
@@ -463,8 +471,9 @@ class ACDC2017DataSet(BaseImageDataSet):
                                                self.incomplete_stats["ed_all"],
                                                self.incomplete_stats["ed_wo_all"]))
 
-# dataset = ACDC2017DataSet(exper_config=config, search_mask=config.dflt_image_name + ".mhd", fold_ids=[0],
-#                          preprocess=False, debug=True)
+
+dataset = ACDC2017DataSet(exper_config=config, search_mask=config.dflt_image_name + ".mhd", fold_ids=[0],
+                          preprocess=True, debug=False)
 
 # del dataset
 

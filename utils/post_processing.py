@@ -25,6 +25,8 @@ def filter_connected_components(pred_labels, cls=None, verbose=False, threshold=
         raise ValueError("Input has more than 3 dimensions which is not supported by this function")
 
     if threshold != 0:
+        # used for filtering 3D class uncertainty maps, masking voxels that are below uncertainty (tolerated)
+        # threshold
         mask = pred_labels >= threshold
     else:
         mask = pred_labels == 1
