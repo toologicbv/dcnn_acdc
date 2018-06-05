@@ -7,7 +7,7 @@ import dill
 import copy
 import numpy as np
 from utils.test_handler import ACDC2017TestHandler
-from common.common import create_logger, setSeed
+from common.common import create_logger, load_pred_labels
 from config.config import config
 from utils.test_results import TestResults
 from plotting.main_seg_results import plot_seg_erros_uncertainties
@@ -491,22 +491,23 @@ class UncertaintyMapsGenerator(object):
 
     file_suffix = "_raw_umaps.npz"
 
-    def __init__(self, exper_handler, test_set=None, mc_samples=10, model=None, checkpoint=None, verbose=False,
-                 use_logger=False, u_threshold=0., store_test_results=False, generate_figures=False,
-                 aggregate_func="max"):
+    def __init__(self, exper_handler, test_set=None, mc_samples=10, checkpoints=None, verbose=False,
+                 use_logger=False, u_threshold=0., store_test_results=False, aggregate_func="max",
+                 referral_thresholds=None):
 
         self.store_test_results = store_test_results
         self.verbose = verbose
         self.u_threshold = u_threshold
         self.mc_samples = mc_samples
-        self.checkpoint = checkpoint
+        self.checkpoints = checkpoints
+        if self.checkpoints is None:
+            self.checkpoints = [100000, 110000, 120000, 130000, 140000, 150000]
         self.exper_handler = exper_handler
         self.generate_figures = False
         self.aggregate_func = aggregate_func
-        if self.aggregate_func == "max":
-            self.arr_ref_thresholds = [0.14, 0.15]  # [0.16, 0.18, 0.2, 0.22, 0.24]
-        else:
-            self.arr_ref_thresholds = [0.12, 0.13, 0.14, 0.16]
+        self.referral_thresholds = referral_thresholds
+        if self.referral_thresholds is None:
+            self.referral_thresholds = [0.2]
         if use_logger and self.exper_handler.logger is None:
             self.exper_handler.logger = create_logger(self.exper_handler.exper, file_handler=True)
         # looks kind of awkward, but originally wanted to use an array of folds, but finally we only process 1
@@ -522,13 +523,12 @@ class UncertaintyMapsGenerator(object):
         else:
             self.test_set = test_set
         self.num_of_images = len(self.test_set.images)
-        if model is None:
-            self.model = self._get_model()
-        else:
-            self.model = model
         # set path in order to save results and figures
         self.umap_output_dir = os.path.join(self.exper_handler.exper.config.root_dir,
                                             os.path.join(self.exper_handler.exper.output_dir, config.u_map_dir))
+        self.pred_lbl_output_dir = os.path.join(self.exper_handler.exper.config.root_dir,
+                                                os.path.join(self.exper_handler.exper.output_dir,
+                                                             config.pred_lbl_dir))
         if not os.path.isdir(self.umap_output_dir):
             os.makedirs(self.umap_output_dir)
         if self.store_test_results:
@@ -539,7 +539,7 @@ class UncertaintyMapsGenerator(object):
     def __call__(self, do_save=True, clean_up=False, save_actual_maps=False, generate_figures=False):
 
         start_time = time.time()
-        message = "INFO - Starting to generate uncertainty maps (agg-func={})" \
+        message = "INFO - Starting to generate uncertainty maps (agg-func={}) " \
                   "for {} images using {} samples and u-threshold {:.2f}".format(self.aggregate_func,
                                                                                  self.num_of_images, self.mc_samples,
                                                                                  self.u_threshold)
@@ -550,21 +550,15 @@ class UncertaintyMapsGenerator(object):
         if clean_up:
             self.info("NOTE: first cleaning up previous generated uncertainty maps!")
             self.clean_up_files()
-        # image_range = [0, 1]
-        image_range = np.arange(self.num_of_images)
+        image_range = [0, 1, 2]
+        # image_range = np.arange(self.num_of_images)
         self.exper_handler.test_results = TestResults(self.exper_handler.exper, use_dropout=True,
                                                       mc_samples=self.mc_samples)
         # make a "pointer" to the test_results object of the exper_handler because we are using both
         self.test_results = self.exper_handler.test_results
 
         for image_num in tqdm(image_range):
-            # get predictions without sampling in order to save the predicted labels we need for the figures
-            # get predictions with SAMPLING, we don't need t
-            print("Prediction mc=1 without sampling without referral")
-            self._test(image_num, mc_samples=1, sample_weights=False, referral_threshold=0.,
-                       store_test_results=False, save_pred_labels=True, ref_positives_only=False,
-                       use_uncertainty=False, store_details=False)
-            print("Prediction mc=10 with sampling without referral")
+            print("Prediction mc={} with sampling without referral".format(self.mc_samples))
             self._test(image_num, mc_samples=self.mc_samples, sample_weights=True, referral_threshold=0.,
                        store_test_results=True, save_pred_labels=True, ref_positives_only=False,
                        use_uncertainty=False, store_details=False)
@@ -572,47 +566,9 @@ class UncertaintyMapsGenerator(object):
                 saved += 1
                 self.save(save_actual_maps=save_actual_maps)
 
-            if len(self.arr_ref_thresholds) != 0:
-                original_pred_labels = copy.deepcopy(self.test_set.b_pred_labels)
-
-                for referral_threshold in self.arr_ref_thresholds:
-                    # because we pass a single patient_id, the created filtered_u-map will be stored in
-                    # exper_handler.referral_umaps object (dict). because we need it in the next step
-                    patient_id = self.exper_handler.test_results.image_names[image_num]
-                    self.exper_handler.create_filtered_umaps(u_threshold=referral_threshold,
-                                                             patient_id=patient_id,
-                                                             aggregate_func=self.aggregate_func)
-                    # generate prediction with referral OF UNCERTAIN, POSITIVES ONLY
-                    ref_u_map = self.exper_handler.referral_umaps[patient_id]
-                    print("INFO - Results with referral of all uncertain-POSITIVES using "
-                          "threshold {:.2f}".format(referral_threshold))
-
-                    self.test_set.filter_referrals(u_maps=ref_u_map, ref_positives_only=True,
-                                                   referral_threshold=referral_threshold)
-                    test_accuracy_ref, test_hd_ref, seg_errors_ref = \
-                        self.test_set.get_accuracy(compute_hd=True, compute_seg_errors=True, do_filter=True)
-                    # save the referred labels
-                    self.test_set.save_pred_labels(self.exper_handler.exper.output_dir, u_threshold=referral_threshold,
-                                                   ref_positives_only=True, mc_dropout=True)
-                    self._show_results(image_num, test_accuracy_ref)
-                    # referral with ALL UNCERTAIN PIXELS
-                    print("INFO - Results with referral of ALL uncertain pixels"
-                          " using threshold {:.2f}".format(referral_threshold))
-                    self.test_set.b_pred_labels = copy.deepcopy(original_pred_labels)
-                    # generate prediction with referral OF ALL UNCERTAIN PIXELS
-                    self.test_set.filter_referrals(u_maps=ref_u_map, ref_positives_only=False,
-                                                   referral_threshold=referral_threshold)
-                    test_accuracy_ref, test__hd_ref, _ = \
-                        self.test_set.get_accuracy(compute_hd=True, compute_seg_errors=True, do_filter=True)
-                    # save the referred labels
-                    self.test_set.save_pred_labels(self.exper_handler.exper.output_dir, u_threshold=referral_threshold,
-                                                   ref_positives_only=False, mc_dropout=True)
-                    self._show_results(image_num, test_accuracy_ref)
-                    self.test_set.b_pred_labels = copy.deepcopy(original_pred_labels)
-                    if self.generate_figures:
-                        self.exper_handler.generate_figures(self.test_set, image_range=[image_num],
-                                                            referral_threshold=referral_threshold)
-
+        if self.store_test_results:
+            self.exper_handler.test_results.compute_mean_stats()
+            self.exper_handler.test_results.show_results()
         duration = time.time() - start_time
         if do_save:
             self.info("INFO - Successfully saved {} maps to {}".format(saved, self.umap_output_dir))
@@ -716,12 +672,6 @@ class UncertaintyMapsGenerator(object):
         a_stats[1, :] = [np.mean(ed_all), np.std(ed_all), np.min(ed_all), np.max(ed_all)]
         return a_stats, cls_stats
 
-    def _get_model(self):
-        print("INFO - loading model {}".format(self.exper_handler.exper.model_name))
-        return self.exper_handler.load_checkpoint(verbose=self.verbose,
-                                                  drop_prob=self.exper_handler.exper.run_args.drop_prob,
-                                                  checkpoint=self.checkpoint)
-
     def info(self, message):
         if self.exper_handler.logger is None:
             print(message)
@@ -732,7 +682,7 @@ class UncertaintyMapsGenerator(object):
               store_test_results=False, save_pred_labels=False, ref_positives_only=False,
               use_uncertainty=False, store_details=False):
 
-        self.exper_handler.test(self.model, self.test_set, image_num=image_num,
+        self.exper_handler.test(self.checkpoints, self.test_set, image_num=image_num,
                                 sample_weights=sample_weights,
                                 mc_samples=mc_samples, compute_hd=True, discard_outliers=False,
                                 referral_threshold=referral_threshold,
@@ -740,7 +690,6 @@ class UncertaintyMapsGenerator(object):
                                 verbose=self.verbose,
                                 store_details=store_details,
                                 use_seed=False, do_filter=True,
-                                repeated_run=False,
                                 use_uncertainty=use_uncertainty,
                                 ref_positives_only=ref_positives_only,
                                 save_pred_labels=save_pred_labels,

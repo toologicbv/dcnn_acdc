@@ -86,7 +86,8 @@ def test_ensemble(test_set, exper_hdl, mc_samples=10, sample_weights=True, disca
                          "than test fold {}".format(exper_hdl.exper.model_name,
                                                     exper_hdl.exper.run_args.fold_ids[0],
                                                     test_set.fold_ids[0]))
-
+    # reset pointers to checkpoint models
+    exper_hdl.ensemble_models = OrderedDict()
     if checkpoints is None:
         checkpoints = [100000, 110000, 120000, 130000, 140000, 150000]
     if reset_results:
@@ -99,30 +100,20 @@ def test_ensemble(test_set, exper_hdl, mc_samples=10, sample_weights=True, disca
     if discard_outliers:
         # print("INFO - Using {:.2f} as uncertainty threshold".format(referral_threshold))
         print("WARNING - Using outlier statistics.")
+    if image_range is None:
+        image_range = np.arange(len(test_set.images))
+    num_of_images = len(image_range)
+    str_checkpoints = ", ".join([str(c) for c in checkpoints])
+    print("INFO - Evaluating model {} on checkpoints {}".format(exper_hdl.exper.model_name, str_checkpoints))
+    print("INFO - Running test on {} images".format(num_of_images))
+    for image_num in image_range:
+        exper_hdl.test(checkpoints, test_set, image_num=image_num, sample_weights=sample_weights,
+                       mc_samples=mc_samples, compute_hd=True, discard_outliers=discard_outliers,
+                       referral_threshold=referral_threshold, verbose=verbose, store_details=store_details,
+                       use_seed=use_seed, do_filter=do_filter,
+                       use_uncertainty=use_uncertainty, u_threshold=u_threshold,
+                       ref_positives_only=ref_positives_only, save_pred_labels=save_pred_labels)
 
-    repeated_run = True
-    for run_id, checkpoint in enumerate(checkpoints):
-        if run_id == 0:
-            # only store the image details in test_results objects when running the test for the first
-            # checkpoint of the same model
-            repeated_run = False
-        dcnn_model = exper_hdl.load_checkpoint(verbose=False, drop_prob=exper_hdl.exper.run_args.drop_prob,
-                                               checkpoint=checkpoint)
-        if image_range is None:
-            image_range = np.arange(len(test_set.images))
-        num_of_images = len(image_range)
-        print("Evaluating model {} - runID {}".format(exper_hdl.exper.model_name, run_id + 1))
-        print("INFO - Running test on {} images with model from checkpoint {}".format(num_of_images, checkpoint))
-        for image_num in image_range:
-            exper_hdl.test(dcnn_model, test_set, image_num=image_num, sample_weights=sample_weights,
-                           mc_samples=mc_samples, compute_hd=True, discard_outliers=discard_outliers,
-                           referral_threshold=referral_threshold, verbose=verbose, store_details=store_details,
-                           use_seed=use_seed, do_filter=do_filter, repeated_run=repeated_run,
-                           use_uncertainty=use_uncertainty, u_threshold=u_threshold,
-                           ref_positives_only=ref_positives_only, save_pred_labels=save_pred_labels)
-        del dcnn_model
-        # if we test multiple checkpoints we don't want to store the image details multiple times
-        repeated_run = True
     exper_hdl.test_results.compute_mean_stats()
     exper_hdl.test_results.show_results()
 
@@ -175,7 +166,7 @@ class ACDC2017TestHandler(object):
         self.load_func = load_func
         self.abs_path_fold = os.path.join(self.data_dir, "fold")
         self.images = []
-        # storing a concatenated filename used as an identification during testing and used for the output
+        #
         # filename of the figures printed during test evaluation e.g. patien007
         self.img_file_names = []
         self.labels = []
@@ -201,6 +192,8 @@ class ACDC2017TestHandler(object):
         # accuracy and hausdorff measure for slices (per image)
         self.b_hd_slices = None
         self.b_acc_slices = None
+        self.b_ref_hd_slices = None
+        self.b_ref_acc_slices = None
         self.debug = debug
         self._set_pathes()
         # dictionary with key is patientID and value is imageID that we assign when loading the stuff
@@ -535,6 +528,7 @@ class ACDC2017TestHandler(object):
         again the dice and HD after correction (simulation).
 
         :param u_maps: We assume this is a tensor of shape [2 (ES/ED), 4classes, width, height, #slices]
+                       NOTE: this is not the original/raw u-map but the filtered u-map for this referral threshold
         :param referral_threshold:
         :param apply_to_cls: array specifying the classes to which referral should be applied
         :param ref_positives_only: we only refer pixels with high uncertainties that we predicted as positive
@@ -550,6 +544,8 @@ class ACDC2017TestHandler(object):
         self.referral_stats = np.zeros((2, self.num_of_classes - 1,  12, num_of_slices))
         # this version assumes that u_maps has shape [2, width, height, #slices]
         if ref_positives_only:
+            # unfortunately we need to make a deepcopy of u_maps because we'll alter it here
+            u_maps = copy.deepcopy(u_maps)
             # returns mask for ES and ED [2, width, height, #slices]
             ref_positive_mask = create_mask_uncertainties(self.b_pred_labels)
             # set all uncertainties (pixels) to zero where we didn't predict a positive label
@@ -557,11 +553,20 @@ class ACDC2017TestHandler(object):
             u_maps[1][ref_positive_mask[1]] = 0
 
         total_pixels_positive, total_pixels_referred = 0, 0
+        # we call this method during referral procedure i.e. without calling first the batch_generator method
+        # so we need to initialize some variables first:
+        if self.b_acc_slices is None:
+            self.b_acc_slices = np.zeros((2, self.num_of_classes, num_of_slices))
+            self.b_hd_slices = np.zeros((2, self.num_of_classes, num_of_slices))
+        if self.b_ref_acc_slices is None:
+            self.b_ref_acc_slices = np.zeros((2, self.num_of_classes, num_of_slices))
+            self.b_ref_hd_slices = np.zeros((2, self.num_of_classes, num_of_slices))
         for slice_id in np.arange(num_of_slices):
             slice_uncertainty_idx_es, slice_uncertainty_idx_ed = None, None
             slice_pixels_pos_es, slice_pixels_pos_ed = 0, 0
             slice_total_pixels_ref_es, slice_total_pixels_ref_ed = 0, 0
             total_pos_labels_slice_es, total_pos_labels_slice_ed = 0, 0
+            _, _ = self.compute_slice_accuracy(slice_idx=slice_id, compute_hd=True, store_results=True)
             # NOTE: we start with class 1, and skip the background class
             for cls in np.arange(1, self.num_of_classes):
                 pred_labels_cls_es = self.b_pred_labels[cls, :, :, slice_id]
@@ -614,6 +619,7 @@ class ACDC2017TestHandler(object):
                     slice_total_pixels_ref_ed += num_pixel_above_threshold_ed
                     # temporary, number of all pixels equal to 0
                     # IMPORTANT: this is the EXPERT, setting the high uncertainty pixels to the ground truth labels
+
                     pred_labels_cls_es[uncertain_es_idx] = true_labels_cls_es[uncertain_es_idx]
                     pred_labels_cls_ed[uncertain_ed_idx] = true_labels_cls_ed[uncertain_ed_idx]
                     errors_es_filtered = np.count_nonzero(pred_labels_cls_es != true_labels_cls_es)
@@ -679,6 +685,14 @@ class ACDC2017TestHandler(object):
                         ref_perc_ed = 0
                     self.referral_stats[1, :, 0, slice_id] = ref_perc_ed
                     # print("Slice {} ES/ED Ref% {:.2f}/{:.2f}".format(slice_id + 1, ref_perc_es, ref_perc_ed))
+            # compute slice accuracy/hd after referral
+            slice_acc_after, slice_hd_after = self.compute_slice_accuracy(slice_idx=slice_id, compute_hd=True,
+                                                                          store_results=False)
+            self.b_ref_hd_slices[0, :, slice_id] = slice_hd_after[:self.num_of_classes]  # ES
+            self.b_ref_hd_slices[1, :, slice_id] = slice_hd_after[self.num_of_classes:]  # ED
+            self.b_ref_acc_slices[0, :, slice_id] = slice_acc_after[:self.num_of_classes]  # ES
+            self.b_ref_acc_slices[1, :, slice_id] = slice_acc_after[self.num_of_classes:]  # ED
+
         # referral_stats with shape [2, 4classes, 12, #slices]. We average over slices
         errors_es = np.sum(self.referral_stats[0, :, 4, :])
         errors_es_after = np.sum(self.referral_stats[0, :, 5, :])
@@ -712,7 +726,8 @@ class ACDC2017TestHandler(object):
         self.b_bald_map[:, :, :, self.slice_counter] = slice_bald
         self.compute_img_slice_uncertainty_stats(u_type="bald", u_threshold=u_threshold)
 
-    def get_accuracy(self, compute_hd=False, compute_seg_errors=False, do_filter=True, verbose=False):
+    def get_accuracy(self, compute_hd=False, compute_seg_errors=False, do_filter=True,
+                     compute_slice_metrics=False):
         """
 
             Compute dice coefficients for the complete 3D volume
@@ -729,6 +744,9 @@ class ACDC2017TestHandler(object):
         dices = np.zeros(2 * self.num_of_classes)
         hausdff = np.zeros(2 * self.num_of_classes)
         num_of_slices = self.b_labels.shape[3]
+        if compute_slice_metrics:
+            dice_slices = np.zeros((2 * self.num_of_classes, num_of_slices))
+            hd_slices = np.zeros((2 * self.num_of_classes, num_of_slices))
         if compute_seg_errors:
             # if we compute seg-errors then shape of results is [2, 4classes, #slices]
             seg_errors = np.zeros((2, self.num_of_classes, num_of_slices))
@@ -742,6 +760,13 @@ class ACDC2017TestHandler(object):
             dices[cls] = dice_coefficient(self.b_labels[cls, :, :, :], self.b_pred_labels[cls, :, :, :])
             dices[cls + self.num_of_classes] = dice_coefficient(self.b_labels[cls + self.num_of_classes, :, :, :],
                                                                 self.b_pred_labels[cls + self.num_of_classes, :, :, :])
+            if compute_slice_metrics:
+                for s_idx in np.arange(num_of_slices):
+                    dice_slices[cls, s_idx] = dice_coefficient(self.b_labels[cls, :, :, s_idx],
+                                                  self.b_pred_labels[cls, :, :, s_idx])
+                    dice_slices[cls + self.num_of_classes, s_idx] = \
+                        dice_coefficient(self.b_labels[cls + self.num_of_classes, :, :, s_idx],
+                                         self.b_pred_labels[cls + self.num_of_classes, :, :, s_idx])
             if compute_hd:
                 # only compute distance if both contours are actually in images
                 if 0 != np.count_nonzero(self.b_pred_labels[cls, :, :, :]) and \
@@ -758,6 +783,22 @@ class ACDC2017TestHandler(object):
                            voxelspacing=self.b_new_spacing, connectivity=1)
                 else:
                     hausdff[cls + self.num_of_classes] = 0.
+
+                if compute_slice_metrics:
+                    for s_idx in np.arange(num_of_slices):
+                        # only compute distance if both contours are actually in images
+                        if 0 != np.count_nonzero(self.b_pred_labels[cls, :, :, s_idx]) and \
+                                0 != np.count_nonzero(self.b_labels[cls, :, :, s_idx]):
+                            hd_slices[cls, s_idx] = hd(self.b_pred_labels[cls, :, :, s_idx], self.b_labels[cls, :, :, s_idx],
+                                                voxelspacing=ACDC2017TestHandler.new_voxel_spacing, connectivity=1)
+                        else:
+                            hd_slices[cls] = 0
+                        if 0 != np.count_nonzero(self.b_pred_labels[cls + self.num_of_classes, :, :, s_idx]) and \
+                                0 != np.count_nonzero(self.b_labels[cls + self.num_of_classes, :, :, s_idx]):
+                            hd_slices[cls + self.num_of_classes, s_idx] = \
+                                hd(self.b_pred_labels[cls + self.num_of_classes, :, :, s_idx],
+                                   self.b_labels[cls + self.num_of_classes, :, :, s_idx],
+                                   voxelspacing=ACDC2017TestHandler.new_voxel_spacing, connectivity=1)
             if compute_seg_errors:
                 true_labels_cls_es = self.b_labels[cls]
                 true_labels_cls_ed = self.b_labels[cls + self.num_of_classes]
@@ -771,11 +812,17 @@ class ACDC2017TestHandler(object):
                 seg_errors[1, cls] = errors_ed
 
         if compute_seg_errors:
-            return dices, hausdff, seg_errors
+            if not compute_slice_metrics:
+                return dices, hausdff, seg_errors
+            else:
+                return dices, hausdff, seg_errors, dice_slices, hd_slices
         else:
-            return dices, hausdff
+            if not compute_slice_metrics:
+                return dices, hausdff
+            else:
+                return dices, hausdff, dice_slices, hd_slices
 
-    def compute_slice_accuracy(self, slice_idx=None, compute_hd=False):
+    def compute_slice_accuracy(self, slice_idx=None, compute_hd=False, store_results=True):
         """
 
             Compute dice coefficients for the complete 3D volume
@@ -784,6 +831,8 @@ class ACDC2017TestHandler(object):
                                                                     (0=ES, 1=ED)
 
             compute_hd: Boolean indicating whether or not to compute Hausdorff distance
+
+            store_results:
         """
         if slice_idx is None:
             slice_idx = self.slice_counter
@@ -813,10 +862,11 @@ class ACDC2017TestHandler(object):
                            voxelspacing=ACDC2017TestHandler.new_voxel_spacing, connectivity=1)
                 else:
                     hausdff[cls + self.num_of_classes] = 0
-        self.b_hd_slices[0, :, slice_idx] = hausdff[:self.num_of_classes]  # ES
-        self.b_hd_slices[1, :, slice_idx] = hausdff[self.num_of_classes:]  # ED
-        self.b_acc_slices[0, :, slice_idx] = dices[:self.num_of_classes]  # ES
-        self.b_acc_slices[1, :, slice_idx] = dices[self.num_of_classes:]  # ED
+        if store_results:
+            self.b_hd_slices[0, :, slice_idx] = hausdff[:self.num_of_classes]  # ES
+            self.b_hd_slices[1, :, slice_idx] = hausdff[self.num_of_classes:]  # ED
+            self.b_acc_slices[0, :, slice_idx] = dices[:self.num_of_classes]  # ES
+            self.b_acc_slices[1, :, slice_idx] = dices[self.num_of_classes:]  # ED
 
         return dices, hausdff
 

@@ -1,6 +1,8 @@
 import os
 import numpy as np
 import glob
+import copy
+import dill
 from collections import OrderedDict
 from common.common import load_pred_labels
 from utils.test_handler import ACDC2017TestHandler
@@ -10,9 +12,10 @@ from config.config import config
 class ReferralHandler(object):
 
     def __init__(self, exper_handler, referral_thresholds=None, test_set=None, verbose=False, do_save=False,
-                 num_of_images=None, pos_only=False):
+                 num_of_images=None, pos_only=False, aggregate_func="max"):
 
         self.exper_handler = exper_handler
+        self.aggregate_func = aggregate_func
         self.referral_threshold = None
         self.str_referral_threshold = None
         if referral_thresholds is None:
@@ -47,26 +50,19 @@ class ReferralHandler(object):
         self.ref_dice_std = None
         self.dice_mean = None
         self.dice_std = None
+        self.outfile = None
+        self.det_results = ReferralDetailedResults(exper_handler)
 
-    def __load_pred_labels(self, patient_id, pos_only=False):
+    def __load_pred_labels(self, patient_id):
 
         search_path = os.path.join(self.pred_labels_input_dir,
                                    patient_id + "_pred_labels_mc.npz")
         pred_labels = load_pred_labels(search_path)
-        if pos_only:
-            search_path = os.path.join(self.pred_labels_input_dir,
-                                       patient_id + "_filtered_pred_labels_mc" + self.str_referral_threshold +
-                                       "_pos_only.npz")
-        else:
-            search_path = os.path.join(self.pred_labels_input_dir,
-                                       patient_id + "_filtered_pred_labels_mc" + self.str_referral_threshold + ".npz")
 
-        ref_pred_labels = load_pred_labels(search_path)
+        return pred_labels  # , ref_pred_labels
 
-        return pred_labels, ref_pred_labels
-
-    def test(self, non_referral=False, verbose=False, referral_threshold=None):
-        if non_referral:
+    def test(self, without_referral=False, verbose=False, referral_threshold=None):
+        if without_referral:
             self.dice = np.zeros((self.num_of_images, 2, 4))
             self.hd = np.zeros((self.num_of_images, 2, 4))
         if referral_threshold is not None:
@@ -79,8 +75,12 @@ class ReferralHandler(object):
                   " (pos-only={})".format(self.str_referral_threshold, self.pos_only))
             for image_num in np.arange(self.num_of_images):
                 patient_id = self.test_set.img_file_names[image_num]
-                pred_labels, ref_pred_labels = self.__load_pred_labels(patient_id, self.pos_only)
-                self.test_set.b_labels = self.test_set.labels[image_num]
+                self.det_results.patient_ids.append(patient_id)
+                pred_labels = self.__load_pred_labels(patient_id)
+                # when we call method test_set.filter_referrals which will alter the b_labels object
+                # it is important that we make a deepcopy of test_set.labels because the original numpy array will be
+                # altered as well
+                self.test_set.b_labels = copy.deepcopy(self.test_set.labels[image_num])
                 self.test_set.b_image = self.test_set.images[image_num]
                 self.test_set.b_image_name = patient_id
                 self.test_set.b_orig_spacing = self.test_set.spacings[image_num]
@@ -90,18 +90,57 @@ class ReferralHandler(object):
                 # store the segmentation errors. shape [#slices, #classes]
                 self.test_set.b_seg_errors = np.zeros((self.test_set.b_image.shape[3],
                                                        self.test_set.num_of_classes * 2)).astype(np.int)
-                if non_referral:
-                    self.test_set.b_pred_labels = pred_labels
+                self.test_set.b_pred_labels = pred_labels
+                if without_referral:
                     test_accuracy, test_hd, seg_errors = \
-                        self.test_set.get_accuracy(compute_hd=True, compute_seg_errors=True, do_filter=False)
+                        self.test_set.get_accuracy(compute_hd=True, compute_seg_errors=True, do_filter=False,
+                                                   compute_slice_metrics=False)
+                    self.det_results.org_acc.append(test_accuracy)
+                    self.det_results.org_hd.append(test_hd)
                     self.dice[image_num] = np.reshape(test_accuracy, (2, -1))
                     self.hd[image_num] = np.reshape(test_hd, (2, -1))
+                    print("ES/ED without: {:.2f} {:.2f} {:.2f} / {:.2f} {:.2f} {:.2f} ".format(test_accuracy[1],
+                                                                                       test_accuracy[2],
+                                                                                       test_accuracy[3],
+                                                                                       test_accuracy[5],
+                                                                                       test_accuracy[6],
+                                                                                       test_accuracy[7]))
                     if verbose:
                         self._show_results(test_accuracy, image_num, msg="wo referral\t")
 
-                self.test_set.b_pred_labels = ref_pred_labels
-                test_accuracy_ref, test_hd_ref, seg_errors_ref = \
-                    self.test_set.get_accuracy(compute_hd=True, compute_seg_errors=True, do_filter=False)
+                # filter original b_labels based on the u-map with this specific referral threshold
+                self.exper_handler.create_filtered_umaps(u_threshold=referral_threshold,
+                                                         patient_id=patient_id,
+                                                         aggregate_func=self.aggregate_func)
+                # generate prediction with referral OF UNCERTAIN, POSITIVES ONLY
+                ref_u_map = self.exper_handler.referral_umaps[patient_id]
+                self.test_set.b_pred_labels = copy.deepcopy(pred_labels)
+                self.test_set.filter_referrals(u_maps=ref_u_map, ref_positives_only=self.pos_only,
+                                               referral_threshold=referral_threshold)
+                # print("Before ES-RV ", self.test_set.b_acc_slices[0, 1, :])
+                # collect original accuracy/hd on slices for predictions without referral
+                self.det_results.org_acc_slices.append(self.test_set.b_acc_slices)
+                self.det_results.org_hd_slices.append(self.test_set.b_hd_slices)
+                self.det_results.referral_stats.append(self.test_set.referral_stats)
+                # get referral accuracy & hausdorff
+                test_accuracy_ref, test_hd_ref, seg_errors_ref, acc_slices_ref, hd_slices_ref = \
+                    self.test_set.get_accuracy(compute_hd=True, compute_seg_errors=True, do_filter=True,
+                                               compute_slice_metrics=True)
+                self.det_results.acc_slices.append(acc_slices_ref)
+                # print("After ES-RV ", acc_slices_ref[1, :])
+                self.det_results.hd_slices.append(hd_slices_ref)
+                # save the referred labels
+                self.test_set.save_pred_labels(self.exper_handler.exper.output_dir, u_threshold=referral_threshold,
+                                               ref_positives_only=self.pos_only, mc_dropout=True)
+                print("INFO - {} with referral (pos-only={}) using "
+                      "threshold {:.2f}".format(patient_id, self.pos_only, referral_threshold))
+                print("ES/ED referral: {:.2f} {:.2f} {:.2f} / {:.2f} {:.2f} {:.2f} ".format(test_accuracy_ref[1],
+                                                                                            test_accuracy_ref[2],
+                                                                                            test_accuracy_ref[3],
+                                                                                            test_accuracy_ref[5],
+                                                                                            test_accuracy_ref[6],
+                                                                                            test_accuracy_ref[7]))
+
                 self.ref_dice[image_num] = np.reshape(test_accuracy_ref, (2, -1))
                 self.ref_hd[image_num] = np.reshape(test_hd_ref, (2, -1))
                 if verbose:
@@ -110,6 +149,7 @@ class ReferralHandler(object):
             self._show_results()
             if self.do_save:
                 self.save_results()
+                self.det_results.save(self.outfile)
         print("INFO - Done")
 
     def _show_results(self, test_accuracy=None, image_num=None, msg=""):
@@ -146,15 +186,17 @@ class ReferralHandler(object):
             self.hd_std = np.std(self.hd, axis=0)
 
     def save_results(self):
-        outfile = "ref_test_results_{}imgs_fold{}".format(self.num_of_images, self.fold_id)
-        outfile += "_utr{}".format(self.str_referral_threshold)
+        self.outfile = "ref_test_results_{}imgs_fold{}".format(self.num_of_images, self.fold_id)
+        self.outfile += "_utr{}".format(self.str_referral_threshold)
         if self.pos_only:
-            outfile += "_pos_only"
-        outfile = os.path.join(self.save_output_dir, outfile)
+            self.outfile += "_pos_only"
+        outfile = os.path.join(self.save_output_dir, self.outfile)
+
         try:
             np.savez(outfile, ref_dice_mean=self.ref_dice_mean, ref_dice_std=self.ref_dice_std,
                      ref_hd_mean=self.ref_hd_mean, ref_hd_std=self.ref_hd_std,
-                     ref_dice=self.ref_dice, ref_hd=self.ref_hd)
+                     ref_dice=self.ref_dice, ref_hd=self.ref_hd,
+                     dice=self.dice, hd=self.hd)
             print("INFO - Saved results to {}".format(outfile))
         except IOError as e:
             print "I/O error({0}): {1}".format(e.errno, e.strerror)
@@ -169,6 +211,8 @@ class ReferralHandler(object):
             ref_dice_results = [data["ref_dice_mean"], data["ref_dice_std"]]
             ref_hd_results = [data["ref_hd_mean"], data["ref_hd_std"]]
             dice_results = [data["ref_dice"], data["ref_hd"]]
+            org_dice = data["dice"]
+            org_hd = data["hd"]
         except IOError as e:
             print "I/O error({0}): {1}".format(e.errno, e.strerror)
             print("ERROR - Can't open file {}".format(abs_path_file))
@@ -176,7 +220,7 @@ class ReferralHandler(object):
 
         if verbose:
             print("INFO - Successfully loaded referral results.")
-        return ref_dice_results, ref_hd_results, dice_results
+        return ref_dice_results, ref_hd_results, dice_results, org_dice, org_hd
 
 
 class ReferralResults(object):
@@ -284,3 +328,51 @@ class ReferralResults(object):
 
             self.dice[referral_threshold] = overall_dice
             self.hd[referral_threshold] = overall_hd
+
+
+class ReferralDetailedResults(object):
+
+    def __init__(self, exper_handler):
+        self.acc_slices = []
+        self.hd_slices = []
+        self.org_acc = []
+        self.org_hd = []
+        self.org_acc_slices = []
+        self.org_hd_slices = []
+        self.referral_stats = []
+        self.patient_ids = []
+        self.fold_id = exper_handler.exper.run_args.fold_ids[0]
+        self.dices = []
+        self.hds = []
+        self.save_output_dir = os.path.join(exper_handler.exper.config.root_dir,
+                                            os.path.join(exper_handler.exper.output_dir,
+                                                         exper_handler.exper.config.stats_path))
+
+    def save(self, filename):
+
+        outfile = os.path.join(self.save_output_dir, filename + ".dll")
+
+        try:
+            with open(outfile, 'wb') as f:
+                dill.dump(self, f)
+            print("INFO - Saved results to {}".format(outfile))
+        except IOError as e:
+            print "I/O error({0}): {1}".format(e.errno, e.strerror)
+            print("ERROR - can't save results to {}".format(outfile))
+
+    @staticmethod
+    def load_results(path_to_exp, verbose=True):
+        if verbose:
+            print("INFO - Loading detailed referral results from file {}".format(path_to_exp))
+        try:
+            with open(path_to_exp, 'rb') as f:
+                detailed_referral_results = dill.load(f)
+
+        except IOError as e:
+            print "I/O error({0}): {1}".format(e.errno, e.strerror)
+            print("ERROR - Can't open file {}".format(path_to_exp))
+            raise IOError
+
+        if verbose:
+            print("INFO - Successfully loaded ReferralDetailedResults object.")
+        return detailed_referral_results

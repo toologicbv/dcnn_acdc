@@ -38,6 +38,7 @@ class ExperimentHandler(object):
         self.logger = None
         self.num_val_runs = 0
         self.saved_model_state_dict = None
+        self.ensemble_models = OrderedDict()
         if logger is None:
             self.logger = create_logger(self.exper, file_handler=use_logfile)
         else:
@@ -130,14 +131,15 @@ class ExperimentHandler(object):
                           verbose=verbose, use_reg_loss=self.exper.run_args.use_reg_loss)
         abs_checkpoint_dir = os.path.join(chkpnt_dir, checkpoint_file)
         if os.path.exists(abs_checkpoint_dir):
-            checkpoint = torch.load(abs_checkpoint_dir)
-            model.load_state_dict(checkpoint["state_dict"])
+            model_state_dict = torch.load(abs_checkpoint_dir)
+            model.load_state_dict(model_state_dict["state_dict"])
             if self.exper.run_args.cuda:
                 model.cuda()
             if verbose and not retrain:
-                self.info("INFO - loaded existing model from checkpoint {}".format(abs_checkpoint_dir))
+                self.info("INFO - loaded existing model with checkpoint {} from dir {}".format(abs_checkpoint_dir,
+                                                                                               checkpoint))
             else:
-                self.info("Loading existing model loaded from checkpoint dir {}".format(chkpnt_dir))
+                self.info("Loading existing model with checkpoint {} from dir {}".format(chkpnt_dir, checkpoint))
         else:
             raise IOError("Path to checkpoint not found {}".format(abs_checkpoint_dir))
 
@@ -196,9 +198,9 @@ class ExperimentHandler(object):
                                                                              arr_val_acc[4], arr_val_acc[5], duration))
         del val_batch
 
-    def test(self, model, test_set, image_num=0, mc_samples=1, sample_weights=False, compute_hd=False,
+    def test(self, checkpoints, test_set, image_num=0, mc_samples=1, sample_weights=False, compute_hd=False,
              use_uncertainty=False, referral_threshold=None, use_seed=False, verbose=False, store_details=False,
-             do_filter=True, repeated_run=False, u_threshold=0., discard_outliers=False, save_pred_labels=False,
+             do_filter=True, u_threshold=0., discard_outliers=False, save_pred_labels=False,
              ref_positives_only=False, store_test_results=True):
         """
 
@@ -229,6 +231,7 @@ class ExperimentHandler(object):
         most certainly only for 1-3 images in order to generate some figures.
         :param repeated_run: used during ensemble testing. so we use the same model, different checkpoint, to
         :param store_test_results:
+        :param checkpoints: list of model checkpoints that we use for the ensemble test
         :return:
         """
         half_classes = 4
@@ -236,7 +239,9 @@ class ExperimentHandler(object):
         ref_dice_ed = [[], [], []]
         dice_es = [[], [], []]
         dice_ed = [[], [], []]
-
+        # if we're lazy and just pass checkpoints as a single number, we convert this here to a list
+        if not isinstance(checkpoints, list):
+            checkpoints = list(checkpoints)
         # -------------------------------------- local procedures BEGIN -----------------------------------------
 
         def format_print_string(outlier_list, phase):
@@ -307,36 +312,49 @@ class ExperimentHandler(object):
             image_outliers = ImageOutliers(patient_id, outliers_per_img_class_es, outliers_per_img_class_ed)
         else:
             image_outliers = None
-            referral_dice = None
-            non_referral_dice = None
-        # correct the divisor for calculation of stdev when low number of samples (biased), used in np.std
-        if mc_samples <= 25 and mc_samples != 1:
+
+        num_of_checkpoints = len(checkpoints)
+        # correct the divisor for calculation of stddev when low number of samples (biased), used in np.std
+        if num_of_checkpoints * mc_samples <= 25 and mc_samples != 1:
             ddof = 1
         else:
             ddof = 0
-        # b_predictions has shape [mc_samples, classes, width, height, slices]
-        b_predictions = np.zeros(tuple([mc_samples] + list(test_set.labels[image_num].shape)))
+        # b_predictions has shape [num_of_checkpoints * mc_samples, classes, width, height, slices]
+        b_predictions = np.zeros(tuple([num_of_checkpoints * mc_samples] + list(test_set.labels[image_num].shape)))
         slice_idx = 0
-        # batch_generator iterates over the slices of a particular image
+        # IMPORTANT boolean indicator: if we sample weights during testing we switch of BATCH normalization.
+        # We added a new mode in pytorch module.eval method to enable this (see file dilated_cnn.py)
         mc_dropout = sample_weights
+        # batch_generator iterates over the slices of a particular image
         for batch_image, batch_labels, b_num_labels_per_class in test_set.batch_generator(image_num):
 
             # NOTE: batch image shape (autograd.Variable): [1, 2, width, height] 1=batch size, 2=ES/ED image
             #       batch labels shape (autograd.Variable): [1, #classes, width, height] 8 classes, 4ES, 4ED
             # IMPORTANT: if we want to sample weights from the "posterior" over model weights, we
             # need to "tell" pytorch that we use "train" mode even during testing, otherwise dropout is disabled
-            b_test_losses = np.zeros(mc_samples)
             bald_values = np.zeros((2, batch_labels.shape[2], batch_labels.shape[3]))
-            for s in np.arange(mc_samples):
-                test_loss, test_pred = model.do_test(batch_image, batch_labels,
-                                                     voxel_spacing=test_set.new_voxel_spacing,
-                                                     compute_hd=True,
-                                                     num_of_labels_per_class=b_num_labels_per_class,
-                                                     mc_dropout=mc_dropout)
-                b_predictions[s, :, :, :, test_set.slice_counter] = test_pred.data.cpu().numpy()
+            b_test_losses = np.zeros(num_of_checkpoints * mc_samples)
+            # loop over model checkpoints
+            for run_id, checkpoint in enumerate(checkpoints):
+                if checkpoint not in self.ensemble_models.keys():
+                    self.ensemble_models[checkpoint] = self.load_checkpoint(verbose=False,
+                                                                            drop_prob=self.exper.run_args.drop_prob,
+                                                                            checkpoint=checkpoint)
+                    model = self.ensemble_models[checkpoint]
+                else:
+                    model = self.ensemble_models[checkpoint]
+                sample_offset = run_id * mc_samples
+                # generate samples for this checkpoint
+                for s in np.arange(mc_samples):
+                    test_loss, test_pred = model.do_test(batch_image, batch_labels,
+                                                         voxel_spacing=test_set.new_voxel_spacing,
+                                                         compute_hd=True,
+                                                         num_of_labels_per_class=b_num_labels_per_class,
+                                                         mc_dropout=mc_dropout)
+                    b_predictions[s + sample_offset, :, :, :, test_set.slice_counter] = test_pred.data.cpu().numpy()
 
-                b_test_losses[s] = test_loss.data.cpu().numpy()
-                # dice_loss_es, dice_loss_ed = model.get_dice_losses(average=True)
+                    b_test_losses[s + sample_offset] = test_loss.data.cpu().numpy()
+
             # mean/std for each pixel for each class
             mc_probs = b_predictions[:, :, :, :, test_set.slice_counter]
             mean_test_pred, std_test_pred = np.mean(mc_probs, axis=0, keepdims=True), \
@@ -344,14 +362,12 @@ class ExperimentHandler(object):
 
             bald_values[0] = bald_function(b_predictions[:, 0:4, :, :, test_set.slice_counter])
             bald_values[1] = bald_function(b_predictions[:, 4:, :, :, test_set.slice_counter])
-
             means_test_loss = np.mean(b_test_losses)
             test_set.set_stddev_map(std_test_pred, u_threshold=u_threshold)
             test_set.set_bald_map(bald_values, u_threshold=u_threshold)
             # THIS IS A PIECE OF RESIDUAL CODING WHICH SHOULD BE NOT USED. THE FUNCTIONALITY IS STILL IN TACT
             # BUT WE ARE CURRENTLY USING THE Uncertainty MAPS which we generate to refer image slices-phase-class
             # to an UNKNOWN expert, we mark the dice values as OUTLIERS.
-
             test_set.set_pred_labels(mean_test_pred, verbose=verbose, do_filter=False)
             slice_acc, slice_hd = test_set.compute_slice_accuracy(compute_hd=compute_hd)
 
@@ -493,15 +509,15 @@ class ExperimentHandler(object):
                                           uncertainty_stats=test_set.b_uncertainty_stats,
                                           test_accuracy_slices=test_set.b_acc_slices,
                                           test_hd_slices=test_set.b_hd_slices,
-                                          image_name=test_set.b_image_name, repeated_run=repeated_run,
+                                          image_name=test_set.b_image_name,
                                           referral_accuracy=test_accuracy_ref, referral_hd=test_hd_ref,
                                           referral_stats=test_set.referral_stats)
 
-    def create_u_maps(self, model=None, checkpoint=None, mc_samples=10, u_threshold=0., do_save_u_stats=False,
+    def create_u_maps(self, model=None, checkpoints=None, mc_samples=10, u_threshold=0., do_save_u_stats=False,
                       save_actual_maps=False, test_set=None, generate_figures=False, verbose=False,
-                      aggregate_func="max"):
+                      aggregate_func="max", referral_thresholds=None, store_test_results=False):
 
-        if model is None and checkpoint is None:
+        if model is None and checkpoints is None:
             raise ValueError("When model parameter is None, you need to specify the checkpoint model "
                              "that needs to be loaded.")
 
@@ -510,10 +526,11 @@ class ExperimentHandler(object):
                   "save the actual uncertainty maps!")
             do_save_u_stats = True
 
-        maps_generator = UncertaintyMapsGenerator(self, model=model, test_set=test_set, verbose=verbose,
+        maps_generator = UncertaintyMapsGenerator(self, test_set=test_set, verbose=verbose,
                                                   mc_samples=mc_samples, u_threshold=u_threshold,
-                                                  checkpoint=checkpoint, store_test_results=True,
-                                                  aggregate_func=aggregate_func)
+                                                  checkpoints=checkpoints, store_test_results=store_test_results,
+                                                  aggregate_func=aggregate_func,
+                                                  referral_thresholds=referral_thresholds)
         maps_generator(do_save=do_save_u_stats, clean_up=False, save_actual_maps=save_actual_maps,
                        generate_figures=generate_figures)
 
@@ -670,14 +687,15 @@ class ExperimentHandler(object):
                   " (property=outliers_per_epoch, dictionary (key=epoch) with tuple (6 elements)"
                   " and property=test_results_per_epoch, dict (key=epoch) with tuple (4))".format(c))
 
-    def get_referral_maps(self, u_threshold, per_class=True):
+    def get_referral_maps(self, u_threshold, per_class=True, aggregate_func="max"):
         input_dir = os.path.join(self.exper.config.root_dir,
                                            os.path.join(self.exper.output_dir, config.u_map_dir))
         u_threshold = str(u_threshold).replace(".", "_")
         if per_class:
-            search_path = os.path.join(input_dir, "*" + "_filtered_cls_umaps" + u_threshold + ".npz")
+            search_path = os.path.join(input_dir, "*" + "_filtered_cls_umaps_" + aggregate_func +
+                                       u_threshold + ".npz")
         else:
-            search_path = os.path.join(input_dir, "*" + "_filtered_umaps" + u_threshold + ".npz")
+            search_path = os.path.join(input_dir, "*" + "_filtered_umaps_" + aggregate_func + u_threshold + ".npz")
         files = glob.glob(search_path)
         if len(files) == 0:
             raise ImportError("ERROR - no referral u-maps found in {}".format(search_path))
@@ -706,6 +724,7 @@ class ExperimentHandler(object):
         else:
             u_maps = self.u_maps
         for patient_id, raw_u_map in u_maps.iteritems():
+            # IMPORTANT: raw_u_map has shape [2, 4, width, height, #slices]
             num_of_phases = raw_u_map.shape[0]
             num_of_classes = raw_u_map.shape[1]
             # Yes I know, completely inconsistent the output is [8classes, width, height, #slices] instead of [2, 4...]
@@ -721,13 +740,14 @@ class ExperimentHandler(object):
                     u_3dmaps_cls = raw_u_map[phase, cls]
                     # set all uncertainties below threshold to zero
                     u_3dmaps_cls[u_3dmaps_cls < u_threshold] = 0
+                    # do not yet filter 6 largest connected comonents here when we average over the stddev values
+                    # we do that after we've averaged, for max-aggregate this wouldn't have an effect
                     if aggregate_func == "max":
                         filtered_cls_stddev_map[cls + cls_offset] = filter_connected_components(u_3dmaps_cls,
                                                                                                 threshold=u_threshold)
                     else:
                         filtered_cls_stddev_map[cls + cls_offset] = u_3dmaps_cls
-                        # Taking the maximum uncertainty per pixel over the 4 classes (for ES and ED)
-                # TODO CHANGED THIS TO MEAN BECAUSE WE HAD TOO MANY UNCERTAIN PIXELS
+
                 if phase == 0:
                     if aggregate_func == "max":
                         filtered_stddev_map[phase] = np.max(filtered_cls_stddev_map[:num_of_classes], axis=0)
@@ -737,7 +757,7 @@ class ExperimentHandler(object):
                     if aggregate_func == "max":
                         filtered_stddev_map[phase] = np.max(filtered_cls_stddev_map[num_of_classes:], axis=0)
                     else:
-                        filtered_stddev_map[phase] = np.mean(filtered_cls_stddev_map[:num_of_classes], axis=0)
+                        filtered_stddev_map[phase] = np.mean(filtered_cls_stddev_map[num_of_classes:], axis=0)
                 if aggregate_func == "mean":
                     filtered_stddev_map[phase] = filter_connected_components(filtered_stddev_map[phase],
                                                                              threshold=u_threshold)
@@ -762,13 +782,13 @@ class ExperimentHandler(object):
         if verbose:
             print("INFO - Creating {} filtered u-map-{:.2f} in {}".format(len(self.u_maps.keys()),
                                                                           u_threshold, umap_output_dir))
-        # we don't need this object, to big to keep
         if patient_id is not None:
             # let's add this to the self.referral_umaps object, in most cases we use it in the next step to
             # make referral predictions
             if self.referral_umaps is None:
                 self.referral_umaps = OrderedDict()
             self.referral_umaps[patient_id] = filtered_stddev_map
+        # we don't need this object, to big to keep
         self.u_maps = None
         del filtered_cls_stddev_map
         del filtered_stddev_map

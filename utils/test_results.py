@@ -269,7 +269,7 @@ class TestResults(object):
     def add_results(self, batch_image, batch_labels, image_id, pred_labels, mc_pred_probs, stddev_map,
                     test_accuracy, test_hd, seg_errors, store_all=False, bald_maps=None, uncertainty_stats=None,
                     test_hd_slices=None, test_accuracy_slices=None, image_name=None, referral_accuracy=None,
-                    referral_hd=None, referral_stats=None, repeated_run=False):
+                    referral_hd=None, referral_stats=None):
         """
 
         :param batch_image: [2, width, height, slices]
@@ -287,32 +287,24 @@ class TestResults(object):
                                the 3 measures: ref%, reduction%, #true positives in gt
         :param test_accuracy:
         :param test_hd:
-        :param repeated_run: when we use multiple checkpoints aka models during testing, we don't want to
-               save the image details every time we run the same model ensemble on the test set although we want
-               to average the final result over the ensemble runs (hence we save the performance measures but not
-               the image details.
-
         :return:
         """
         # get rid off padding around image
         batch_image = batch_image[:, config.pad_size:-config.pad_size, config.pad_size:-config.pad_size, :]
         # during ensemble testing we only want to store the images and ground truth labels once
         if store_all:
-            if not repeated_run:
-                self.images.append(batch_image)
-                self.labels.append(batch_labels)
+            self.images.append(batch_image)
+            self.labels.append(batch_labels)
         if store_all:
             self.pred_labels.append(pred_labels)
             self.mc_pred_probs.append(mc_pred_probs)
             self.stddev_maps.append(stddev_map)
             self.bald_maps.append(bald_maps)
-        # when using multiple models for evaluation during testing, we only want to store the image IDs and
-        # names once.
-        if not repeated_run:
-            self.image_ids.append(image_id)
-            self.image_names.append(image_name)
-            self.num_of_samples.append(mc_pred_probs.shape[0])
-            self.trans_dict[image_name] = image_id
+
+        self.image_ids.append(image_id)
+        self.image_names.append(image_name)
+        self.num_of_samples.append(mc_pred_probs.shape[0])
+        self.trans_dict[image_name] = image_id
 
         self.test_accuracy.append(test_accuracy)
         self.test_hd.append(test_hd)
@@ -1271,7 +1263,7 @@ class TestResults(object):
             print("INFO - Successfully loaded TestResult object.")
         return test_results
 
-    def show_results(self, overall_dice=None, overall_hd=None):
+    def show_results(self):
 
         if self.dice_results is not None:
             mean_dice = self.dice_results[0]
@@ -1352,7 +1344,7 @@ class TestResults(object):
         return idx
 
 
-def load_all_results(exper_dict, search_prefix="test_results_25imgs*"):
+def load_all_results(exper_dict, search_prefix="test_results_25imgs*", print_latex_string=True):
     # LOG_DIR is global variable from outside scope
     overall_dice, std_dice = np.zeros(8), np.zeros(8)
     overall_hd, std_hd = np.zeros(8), np.zeros(8)
@@ -1364,11 +1356,15 @@ def load_all_results(exper_dict, search_prefix="test_results_25imgs*"):
         if len(filenames) != 1:
             raise ValueError("ERROR - Found {} result files for this {} experiment."
                              "Must be 1.".format(len(filenames), exper_id))
-        results.append(TestResults.load_results(filenames[0], verbose=False))
+        res = TestResults.load_results(filenames[0], verbose=False)
+        if res.dice_results is None:
+            print("WARNING - Compute mean results for experiment {}".format(search_path))
+            res.compute_mean_stats()
+        results.append(res)
 
     if len(results) != 4:
         raise ValueError("ERROR - Loaded {} instead of 4 result files.".format(len(results)))
-    for res in results:
+    for idx, res in enumerate(results):
         overall_dice += res.dice_results[0]
         std_dice += res.dice_results[1]
         overall_hd += res.hd_results[0]
@@ -1389,6 +1385,25 @@ def load_all_results(exper_dict, search_prefix="test_results_25imgs*"):
                                                                       std_hd[2], overall_hd[3], std_hd[3],
                                                                       overall_hd[5], std_hd[5], overall_hd[6],
                                                                       std_hd[6], overall_hd[7], std_hd[7]))
+
+    if print_latex_string:
+        latex_line = " & {:.2f} $\pm$ {:.2f} & {:.2f}  $\pm$ {:.2f} & {:.2f} $\pm$ {:.2f} &" \
+                     "{:.2f} $\pm$ {:.2f} & {:.2f} $\pm$ {:.2f} & {:.2f} $\pm$ {:.2f} "
+        # print Latex strings
+        print("----------------------------------------------------------------------------------------------")
+        print("INFO - Latex strings")
+        print("Dice coefficients")
+        print(latex_line.format(overall_dice[1], std_dice[1], overall_dice[2], std_dice[2],
+                                overall_dice[3], std_dice[3],
+                                overall_dice[5], std_dice[5], overall_dice[6], std_dice[6],
+                                overall_dice[7], std_dice[7]))
+        print("Hausdorff distance")
+        print(latex_line.format(overall_hd[1], std_hd[1], overall_hd[2], std_hd[2],
+                                overall_hd[3],
+                                std_hd[3],
+                                overall_hd[5], std_hd[5], overall_hd[6], std_hd[6],
+                                overall_hd[7],
+                                std_hd[7]))
 
     return np.array([overall_dice, std_dice]), np.array([overall_hd, std_hd])
 
