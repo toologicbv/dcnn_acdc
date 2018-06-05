@@ -541,7 +541,7 @@ class ACDC2017TestHandler(object):
         # referral statistics: 1) relative percentage of referred pixels (number of referred / positive predicted pixels
         #                      2) error reduction (%) #reduced errors / #segmentation errors
         #                      3) Number of true, positive labels (ground truth)
-        self.referral_stats = np.zeros((2, self.num_of_classes - 1,  12, num_of_slices))
+        self.referral_stats = np.zeros((2, self.num_of_classes - 1,  14, num_of_slices))
         # this version assumes that u_maps has shape [2, width, height, #slices]
         if ref_positives_only:
             # unfortunately we need to make a deepcopy of u_maps because we'll alter it here
@@ -566,6 +566,13 @@ class ACDC2017TestHandler(object):
             slice_pixels_pos_es, slice_pixels_pos_ed = 0, 0
             slice_total_pixels_ref_es, slice_total_pixels_ref_ed = 0, 0
             total_pos_labels_slice_es, total_pos_labels_slice_ed = 0, 0
+            pixel_std_es = u_maps[0, :, :, slice_id]
+            pixel_std_ed = u_maps[1, :, :, slice_id]
+            # get pixels we're uncertain about
+            uncertain_es_idx = pixel_std_es >= referral_threshold
+            uncertain_ed_idx = pixel_std_ed >= referral_threshold
+            slice_num_pixel_uncertain_es = np.count_nonzero(uncertain_es_idx)
+            slice_num_pixel_uncertain_ed = np.count_nonzero(uncertain_ed_idx)
             _, _ = self.compute_slice_accuracy(slice_idx=slice_id, compute_hd=True, store_results=True)
             # NOTE: we start with class 1, and skip the background class
             for cls in np.arange(1, self.num_of_classes):
@@ -581,15 +588,12 @@ class ACDC2017TestHandler(object):
                 # number of errors before referral
                 errors_es = np.count_nonzero(errors_es_idx)
                 errors_ed = np.count_nonzero(errors_ed_idx)
+
                 if cls in apply_to_cls:
                     total_pos_labels_slice_es += num_true_labels_es
                     total_pos_labels_slice_ed += num_true_labels_ed
-
-                    pixel_std_es = u_maps[0, :, :, slice_id]
-                    pixel_std_ed = u_maps[1, :, :, slice_id]
-                    # get pixels we're uncertain about
-                    uncertain_es_idx = pixel_std_es >= referral_threshold
                     # collect indices of pixels with high uncertainty AND for which we predicted a positive label
+                    uncertain_es_idx = pixel_std_es >= referral_threshold
                     if ref_positives_only:
                         pred_labels_pos_idx_es = pred_labels_cls_es == 1
                         c = np.count_nonzero(pred_labels_pos_idx_es)
@@ -619,14 +623,12 @@ class ACDC2017TestHandler(object):
                     slice_total_pixels_ref_ed += num_pixel_above_threshold_ed
                     # temporary, number of all pixels equal to 0
                     # IMPORTANT: this is the EXPERT, setting the high uncertainty pixels to the ground truth labels
-
                     pred_labels_cls_es[uncertain_es_idx] = true_labels_cls_es[uncertain_es_idx]
                     pred_labels_cls_ed[uncertain_ed_idx] = true_labels_cls_ed[uncertain_ed_idx]
                     errors_es_filtered = np.count_nonzero(pred_labels_cls_es != true_labels_cls_es)
                     errors_ed_filtered = np.count_nonzero(pred_labels_cls_ed != true_labels_cls_ed)
                     # how many seg-errors did we improve (can't be negative)
                     # print("Error before/after {}  {}".format(errors_es, errors_es_filtered))
-
                     try:
                         if errors_es_filtered == errors_es:
                             error_es_reduction = 0
@@ -645,12 +647,12 @@ class ACDC2017TestHandler(object):
                     self.referral_stats[0, cls - 1, :, slice_id] = \
                         np.array([0, error_es_reduction, num_true_labels_es, num_pixel_above_threshold_es,
                                   errors_es, errors_es_filtered,
-                                  f1_es, pr_es, rc_es, true_pos_es, false_pos_es, false_neg_es])
+                                  f1_es, pr_es, rc_es, true_pos_es, false_pos_es, false_neg_es, 0, 0])
                     # ED
                     self.referral_stats[1, cls - 1, :, slice_id] = \
                         np.array([0, error_ed_reduction, num_true_labels_ed, num_pixel_above_threshold_ed,
                                   errors_ed, errors_ed_filtered,
-                                  f1_ed, pr_ed, rc_ed, true_pos_ed, false_pos_ed, false_neg_ed])
+                                  f1_ed, pr_ed, rc_ed, true_pos_ed, false_pos_ed, false_neg_ed, 0, 0])
 
                     # although this shouldn't be necessary because the object pred_labels_cls_es are no copies
                     # of the original objects, hence they will alter by reference, but for clarity we perform the
@@ -669,6 +671,10 @@ class ACDC2017TestHandler(object):
                 # end of slice
                 if cls != 0:
                     es_ref_count = np.count_nonzero(slice_uncertainty_idx_es)
+                    # we store the total number of referred pixels for this class, which we store redundantly
+                    # i.e. it's the same for all classes.
+                    self.referral_stats[0, :, 12, slice_id] = es_ref_count
+                    self.referral_stats[0, :, 13, slice_id] = slice_num_pixel_uncertain_es
                     try:
                         ref_perc_es = (slice_total_pixels_ref_es / float(slice_pixels_pos_es)) * 100
                     except ZeroDivisionError:
@@ -677,6 +683,8 @@ class ACDC2017TestHandler(object):
                     # which means, the info is redundant over the classes and should be interpreted as per slice %
                     self.referral_stats[0, :, 0, slice_id] = ref_perc_es
                     ed_ref_count = np.count_nonzero(slice_uncertainty_idx_ed)
+                    self.referral_stats[1, :, 12, slice_id] = ed_ref_count
+                    self.referral_stats[1, :, 13, slice_id] = slice_num_pixel_uncertain_ed
                     # increase the total referral counter
                     total_pixels_referred += es_ref_count + ed_ref_count
                     try:

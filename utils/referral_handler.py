@@ -339,6 +339,12 @@ class ReferralDetailedResults(object):
         self.org_hd = []
         self.org_acc_slices = []
         self.org_hd_slices = []
+        """ 
+            Remember: referral_stats has shape [2, 3classes, 13values, #slices]
+            1) for positive-only: % referred pixels; 2) % errors reduced; 3) #true labels 4) #pixels above threshold;
+            5) #errors before referral 6) #errors after referral 7) F1-value; 8) Precision; 9) Recall; 
+            10) #true positives; 11) #false positives; 12) #false negatives 13) #referred pixels 
+        """
         self.referral_stats = []
         self.patient_ids = []
         self.fold_id = exper_handler.exper.run_args.fold_ids[0]
