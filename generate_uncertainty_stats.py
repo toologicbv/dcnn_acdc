@@ -34,7 +34,6 @@ def do_parse_args():
     parser.add_argument('--referral_thresholds', nargs='+', default=0.1, help="Referral thresholds used for figures.")
     parser.add_argument('--verbose', action='store_true', default=False, help='show debug messages')
     parser.add_argument('--generate_plots', action='store_true', default=False, help='generate plots for analysis')
-    parser.add_argument('--store_test_results', action='store_true', default=False, help='save test results to file')
 
     args = parser.parse_args()
     # convert string checkpoints to int checkpoints
@@ -42,7 +41,11 @@ def do_parse_args():
         args.checkpoints = [int(c) for c in args.checkpoints]
     else:
         args.checkpoints = [int(args.checkpoints)]
-    args.referral_thresholds = [float(r_threshold) for r_threshold in args.referral_thresholds]
+
+    if isinstance(args.referral_thresholds, list):
+        args.referral_thresholds = [float(c) for c in args.referral_thresholds]
+    else:
+        args.referral_thresholds = [int(args.referral_thresholds)]
     return args
 
 
@@ -102,7 +105,7 @@ def main():
                                     do_save_u_stats=True, verbose=args.verbose,
                                     save_actual_maps=True, test_set=None, generate_figures=args.generate_plots,
                                     aggregate_func=args.aggregate_func,
-                                    store_test_results=args.store_test_results)
+                                    store_test_results=True)
     elif args.run_mode == "figures_only":
         args.referral_thresholds.sort()
         if args.referral_thresholds[0] <= 0.:
@@ -115,28 +118,24 @@ def main():
                                        referral_thresholds=args.referral_thresholds)
 
     elif args.run_mode == "test_referrals":
-        for fold_id in [3]:
-            exper_path = os.path.join(LOG_DIR, exp_mc01_brier[fold_id])
-            experiment_mc = ExperimentHandler.load_experiment(exper_path)
-            exper_handler = ExperimentHandler(experiment_mc, use_logfile=False)
-            exper_handler.set_root_dir(ROOT_DIR)
-            ref_test_set = ACDC2017TestHandler(exper_config=exper_handler.exper.config,
-                                               search_mask=config.dflt_image_name + ".mhd", fold_ids=[fold_id],
-                                               debug=False, batch_size=25, use_cuda=True, load_train=False,
-                                               load_val=True,
-                                               use_iso_path=True)
-            # refer only positive, uncertain pixels
-            ref_handler = ReferralHandler(exper_handler, test_set=ref_test_set,
-                                          referral_thresholds=args.referral_thresholds,
-                                          aggregate_func=args.aggregate_func,
-                                          verbose=False, do_save=True, num_of_images=3, pos_only=True)
-            ref_handler.test(without_referral=True, verbose=False)
-            # Refer all uncertain pixels
-            ref_handler = ReferralHandler(exper_handler, test_set=ref_test_set,
-                                          referral_thresholds=args.referral_thresholds,
-                                          aggregate_func=args.aggregate_func,
-                                          verbose=False, do_save=True, num_of_images=3, pos_only=False)
-            ref_handler.test(without_referral=True, verbose=False)
+
+        ref_test_set = ACDC2017TestHandler(exper_config=exper_handler.exper.config,
+                                           search_mask=config.dflt_image_name + ".mhd", fold_ids=exper_args.fold_ids,
+                                           debug=False, batch_size=25, use_cuda=True, load_train=False,
+                                           load_val=True,
+                                           use_iso_path=True)
+        # refer only positive, uncertain pixels
+        ref_handler = ReferralHandler(exper_handler, test_set=ref_test_set,
+                                      referral_thresholds=args.referral_thresholds,
+                                      aggregate_func=args.aggregate_func,
+                                      verbose=False, do_save=True, num_of_images=None, pos_only=True)
+        ref_handler.test(without_referral=True, verbose=False)
+        # Refer all uncertain pixels
+        ref_handler = ReferralHandler(exper_handler, test_set=ref_test_set,
+                                      referral_thresholds=args.referral_thresholds,
+                                      aggregate_func=args.aggregate_func,
+                                      verbose=False, do_save=True, num_of_images=None, pos_only=False)
+        ref_handler.test(without_referral=True, verbose=False)
 
 
 if __name__ == '__main__':
@@ -157,8 +156,10 @@ python generate_uncertainty_stats.py --cuda --exper_id=20180426_14_14_57_dcnn_mc
 """
 
 """
-python generate_uncertainty_stats.py --cuda --exper_id=20180426_14_14_57_dcnn_mc_f3p01_brier_150KE_lr2e02 
---run_mode="u_maps_and_preds" --referral_thresholds 0.14 --aggregate_func="max"  
---checkpoints 100000 110000 120000 130000 140000 150000
+python generate_uncertainty_stats.py --cuda --exper_id=20180418_15_02_05_dcnn_mcv1_150000E_lr2e02 
+--run_mode="u_maps_and_preds" --aggregate_func="max" --checkpoints 100000 110000 120000 130000 140000 150000
+
+python generate_uncertainty_stats.py --cuda --exper_id=20180418_15_02_05_dcnn_mcv1_150000E_lr2e02 
+--run_mode="test_referrals" --referral_thresholds 0.10 0.12 0.14 0.16 0.18 0.2 0.22 0.24 --aggregate_func="max" 
 
 """

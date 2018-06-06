@@ -99,12 +99,10 @@ class ReferralHandler(object):
                     self.det_results.org_hd.append(test_hd)
                     self.dice[image_num] = np.reshape(test_accuracy, (2, -1))
                     self.hd[image_num] = np.reshape(test_hd, (2, -1))
-                    print("ES/ED without: {:.2f} {:.2f} {:.2f} / {:.2f} {:.2f} {:.2f} ".format(test_accuracy[1],
-                                                                                       test_accuracy[2],
-                                                                                       test_accuracy[3],
-                                                                                       test_accuracy[5],
-                                                                                       test_accuracy[6],
-                                                                                       test_accuracy[7]))
+                    if verbose:
+                        print("ES/ED without: {:.2f} {:.2f} {:.2f} / "
+                              "{:.2f} {:.2f} {:.2f} ".format(test_accuracy[1], test_accuracy[2], test_accuracy[3],
+                                                             test_accuracy[5], test_accuracy[6], test_accuracy[7]))
                     if verbose:
                         self._show_results(test_accuracy, image_num, msg="wo referral\t")
 
@@ -117,29 +115,33 @@ class ReferralHandler(object):
                 self.test_set.b_pred_labels = copy.deepcopy(pred_labels)
                 self.test_set.filter_referrals(u_maps=ref_u_map, ref_positives_only=self.pos_only,
                                                referral_threshold=referral_threshold)
-                # print("Before ES-RV ", self.test_set.b_acc_slices[0, 1, :])
                 # collect original accuracy/hd on slices for predictions without referral
-                self.det_results.org_acc_slices.append(self.test_set.b_acc_slices)
-                self.det_results.org_hd_slices.append(self.test_set.b_hd_slices)
-                self.det_results.referral_stats.append(self.test_set.referral_stats)
+                # Note: because the self.test_set.property alters each iteration (image) but the object (test_set)
+                # is always the same, we need to make a deepcopy of the numpy array, otherwise we end up with the
+                # same slice results for all images (error I already ran into).
+                self.det_results.org_acc_slices.append(copy.deepcopy(self.test_set.b_acc_slices))
+                self.det_results.org_hd_slices.append(copy.deepcopy(self.test_set.b_hd_slices))
+                self.det_results.referral_stats.append(copy.deepcopy(self.test_set.referral_stats))
                 # get referral accuracy & hausdorff
                 test_accuracy_ref, test_hd_ref, seg_errors_ref, acc_slices_ref, hd_slices_ref = \
                     self.test_set.get_accuracy(compute_hd=True, compute_seg_errors=True, do_filter=True,
                                                compute_slice_metrics=True)
-                self.det_results.acc_slices.append(acc_slices_ref)
+                self.det_results.acc_slices.append(np.reshape(acc_slices_ref, (2, 4, -1)))
+                # self.det_results.acc_slices.append(acc_slices_ref)
                 # print("After ES-RV ", acc_slices_ref[1, :])
-                self.det_results.hd_slices.append(hd_slices_ref)
+                self.det_results.hd_slices.append(np.reshape(hd_slices_ref, (2, 4, -1)))
                 # save the referred labels
                 self.test_set.save_pred_labels(self.exper_handler.exper.output_dir, u_threshold=referral_threshold,
                                                ref_positives_only=self.pos_only, mc_dropout=True)
-                print("INFO - {} with referral (pos-only={}) using "
-                      "threshold {:.2f}".format(patient_id, self.pos_only, referral_threshold))
-                print("ES/ED referral: {:.2f} {:.2f} {:.2f} / {:.2f} {:.2f} {:.2f} ".format(test_accuracy_ref[1],
-                                                                                            test_accuracy_ref[2],
-                                                                                            test_accuracy_ref[3],
-                                                                                            test_accuracy_ref[5],
-                                                                                            test_accuracy_ref[6],
-                                                                                            test_accuracy_ref[7]))
+                if verbose:
+                    print("INFO - {} with referral (pos-only={}) using "
+                          "threshold {:.2f}".format(patient_id, self.pos_only, referral_threshold))
+                    print("ES/ED referral: {:.2f} {:.2f} {:.2f} / {:.2f} {:.2f} {:.2f} ".format(test_accuracy_ref[1],
+                                                                                                test_accuracy_ref[2],
+                                                                                                test_accuracy_ref[3],
+                                                                                                test_accuracy_ref[5],
+                                                                                                test_accuracy_ref[6],
+                                                                                                test_accuracy_ref[7]))
 
                 self.ref_dice[image_num] = np.reshape(test_accuracy_ref, (2, -1))
                 self.ref_hd[image_num] = np.reshape(test_hd_ref, (2, -1))

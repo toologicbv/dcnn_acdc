@@ -521,7 +521,7 @@ class ACDC2017TestHandler(object):
                                   num_of_objects])
 
     def filter_referrals(self, u_maps, referral_threshold=0., ref_positives_only=False,
-                         apply_to_cls=[1, 2, 3]):
+                         apply_to_cls=[1, 2, 3], verbose=False):
         """
         Based on the uncertainty maps (probably produced before inference time) we "refer" pixels with
         high uncertainty (above referral_threshold) to an expert who corrects the pixels. Hence we compute
@@ -538,9 +538,8 @@ class ACDC2017TestHandler(object):
         """
         num_of_slices = self.b_labels.shape[3]  # [#classes, width, height, #slices]
 
-        # referral statistics: 1) relative percentage of referred pixels (number of referred / positive predicted pixels
-        #                      2) error reduction (%) #reduced errors / #segmentation errors
-        #                      3) Number of true, positive labels (ground truth)
+        # referral statistics: see details in referral_handler.py, class ReferralDetailedResults
+        # we currently store 14 values
         self.referral_stats = np.zeros((2, self.num_of_classes - 1,  14, num_of_slices))
         # this version assumes that u_maps has shape [2, width, height, #slices]
         if ref_positives_only:
@@ -555,12 +554,11 @@ class ACDC2017TestHandler(object):
         total_pixels_positive, total_pixels_referred = 0, 0
         # we call this method during referral procedure i.e. without calling first the batch_generator method
         # so we need to initialize some variables first:
-        if self.b_acc_slices is None:
-            self.b_acc_slices = np.zeros((2, self.num_of_classes, num_of_slices))
-            self.b_hd_slices = np.zeros((2, self.num_of_classes, num_of_slices))
-        if self.b_ref_acc_slices is None:
-            self.b_ref_acc_slices = np.zeros((2, self.num_of_classes, num_of_slices))
-            self.b_ref_hd_slices = np.zeros((2, self.num_of_classes, num_of_slices))
+        # if self.b_acc_slices is None:
+        self.b_acc_slices = np.zeros((2, self.num_of_classes, num_of_slices))
+        self.b_hd_slices = np.zeros((2, self.num_of_classes, num_of_slices))
+        self.b_ref_acc_slices = np.zeros((2, self.num_of_classes, num_of_slices))
+        self.b_ref_hd_slices = np.zeros((2, self.num_of_classes, num_of_slices))
         for slice_id in np.arange(num_of_slices):
             slice_uncertainty_idx_es, slice_uncertainty_idx_ed = None, None
             slice_pixels_pos_es, slice_pixels_pos_ed = 0, 0
@@ -571,8 +569,11 @@ class ACDC2017TestHandler(object):
             # get pixels we're uncertain about
             uncertain_es_idx = pixel_std_es >= referral_threshold
             uncertain_ed_idx = pixel_std_ed >= referral_threshold
+            # Note: for "positive-only" mode, the uncertainty map is already filtered i.e. if the count below
+            # leverages zero uncertain voxels, this means that we indeed won't refer the slice to an expert
             slice_num_pixel_uncertain_es = np.count_nonzero(uncertain_es_idx)
             slice_num_pixel_uncertain_ed = np.count_nonzero(uncertain_ed_idx)
+            # compute the original slice accuracy
             _, _ = self.compute_slice_accuracy(slice_idx=slice_id, compute_hd=True, store_results=True)
             # NOTE: we start with class 1, and skip the background class
             for cls in np.arange(1, self.num_of_classes):
@@ -711,8 +712,8 @@ class ACDC2017TestHandler(object):
         rel_perc_es = np.mean(self.referral_stats[0, :, 0, :])
         rel_perc_ed = np.mean(self.referral_stats[1, :, 0, :])
 
-        print("Ref% ES/ED {:.2f}/{:.2f} - #Errors before/after reduction "
-              "ES: {}/{} ED: {}/{}".format(rel_perc_es, rel_perc_ed, errors_es, errors_es_after,
+        print("{}: Ref% ES/ED {:.2f}/{:.2f} - #Errors before/after reduction "
+              "ES: {}/{} ED: {}/{}".format(self.b_image_name, rel_perc_es, rel_perc_ed, errors_es, errors_es_after,
                                            errors_ed, errors_ed_after))
 
     def set_stddev_map(self, slice_std, u_threshold=0.01):
