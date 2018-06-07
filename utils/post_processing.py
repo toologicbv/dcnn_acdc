@@ -2,7 +2,7 @@ import scipy.ndimage as scnd
 import numpy as np
 
 
-def filter_connected_components(pred_labels, cls=None, verbose=False, threshold=0.):
+def filter_connected_components(pred_labels, cls=None, verbose=False, threshold=0., rank=None):
     """
 
     :param pred_labels:
@@ -10,8 +10,8 @@ def filter_connected_components(pred_labels, cls=None, verbose=False, threshold=
     :param verbose:
     :return:
     """
-
-    rank = pred_labels.ndim
+    if rank is None:
+        rank = pred_labels.ndim
 
     if rank == 2:
         structure = [[0, 1, 0],

@@ -114,6 +114,7 @@ def main():
                                                             exper_handler.exper.run_args.fold_ids,
                                                             load_train=False, load_val=True,
                                                             batch_size=None, use_cuda=True)
+        # in this case image_range REALLY must be a list e.g. [1, 3, 10] in order to select specific images
         exper_handler.generate_figures(test_set, image_range=None,
                                        referral_thresholds=args.referral_thresholds)
 

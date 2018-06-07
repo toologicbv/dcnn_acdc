@@ -764,7 +764,8 @@ class ACDC2017TestHandler(object):
                 # use 6-connected components to filter out blobs that are not relevant for segmentation
                 self.b_pred_labels[cls] = filter_connected_components(self.b_pred_labels[cls], cls, verbose=False)
                 self.b_pred_labels[cls + self.num_of_classes] = \
-                    filter_connected_components(self.b_pred_labels[cls + self.num_of_classes], cls, verbose=False)
+                    filter_connected_components(self.b_pred_labels[cls + self.num_of_classes], cls, verbose=False,
+                                                rank=None)
 
             dices[cls] = dice_coefficient(self.b_labels[cls, :, :, :], self.b_pred_labels[cls, :, :, :])
             dices[cls + self.num_of_classes] = dice_coefficient(self.b_labels[cls + self.num_of_classes, :, :, :],
@@ -772,7 +773,7 @@ class ACDC2017TestHandler(object):
             if compute_slice_metrics:
                 for s_idx in np.arange(num_of_slices):
                     dice_slices[cls, s_idx] = dice_coefficient(self.b_labels[cls, :, :, s_idx],
-                                                  self.b_pred_labels[cls, :, :, s_idx])
+                                                               self.b_pred_labels[cls, :, :, s_idx])
                     dice_slices[cls + self.num_of_classes, s_idx] = \
                         dice_coefficient(self.b_labels[cls + self.num_of_classes, :, :, s_idx],
                                          self.b_pred_labels[cls + self.num_of_classes, :, :, s_idx])

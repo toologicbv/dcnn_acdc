@@ -88,6 +88,8 @@ def plot_referral_results(dice_ref, model_name, dice_ref_pos_only=None, width=16
     fig.tight_layout(rect=[0.03, 0.03, 0.97, 0.97])
     if do_save:
         fig_path = os.path.join(config.root_dir, "figures")
+        if not os.path.isdir(fig_path):
+            os.makedirs(fig_path)
         fig_name = model_name + "_referral_results"
         fig_name = os.path.join(fig_path, fig_name + ".pdf")
         plt.savefig(fig_name, bbox_inches='tight')
