@@ -1,5 +1,6 @@
 from config.config import config
 import matplotlib.pyplot as plt
+from pylab import MaxNLocator
 import numpy as np
 import os
 import copy
@@ -331,6 +332,7 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
                 # print("Phase {} row {} - BALD histogram".format(phase, row + 2))
                 # if stddev_err is not None:
                 if np.sum(stddev_err) > 0:
+                    ax5.yaxis.set_major_locator(MaxNLocator(integer=True))
                     ax5.bar(xs[:-1], stddev_err, bar_width,
                             label=r"$\sigma_{{pred(fp+fn)}}({})$".format(np.sum(stddev_err).astype(np.int)),
                             color='b', alpha=0.2, align="center")
@@ -340,6 +342,7 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
                 # if stddev_corr is not None:
                 if np.sum(stddev_corr) > 0:
                     ax5b = ax5.twinx()
+                    ax5b.yaxis.set_major_locator(MaxNLocator(integer=True))
                     ax5b.bar(xs[:-1], stddev_corr, bar_width,
                             label=r"$\sigma_{{pred(tp)}}({})$".format(np.sum(stddev_corr).astype(np.int)),
                             color='g', alpha=0.2, align="center")
@@ -395,6 +398,7 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
                             ax2 = plt.subplot2grid((rows, columns), (row + row_offset, 2 + col_offset), colspan=1)
                             if np.sum(p_err_std) != 0:
                                 ax2b = ax2.twinx()
+                                ax2b.yaxis.set_major_locator(MaxNLocator(integer=True))
                                 ax2b.bar(xs[:-1], p_err_std, bar_width,
                                          label=r"$\sigma_{{pred(fp+fn)}}({})$".format(np.sum(p_err_std).astype(np.int))
                                          , color="b", alpha=0.2)
@@ -402,6 +406,7 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
                                 ax2b.tick_params(axis='y', colors='b')
 
                             if np.sum(p_corr_std) != 0:
+                                ax2.yaxis.set_major_locator(MaxNLocator(integer=True))
                                 ax2.bar(xs[:-1], p_corr_std, bar_width,
                                         label=r"$\sigma_{{pred(tp)}}({})$".format(np.sum(p_corr_std).astype(np.int)),
                                         color="g", alpha=0.4)

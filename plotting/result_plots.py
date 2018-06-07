@@ -27,14 +27,15 @@ def plot_referral_results(dice_ref, model_name, dice_ref_pos_only=None, width=16
     xs = np.array(dice_ref.keys() )
     X = np.vstack(dice_ref.values())
     X = np.reshape(X, (-1, 8))
-    # actually we don't want the BG class to interfer with min/max, so set to zero
+    # actually we don't want the BG class to interfere with min/max, so set to zero
     X[:, 0], X[:, 4] = 0, 0
-    min_dice, max_dice = np.min(X[X != 0]), np.max(X)
+    max_dice = np.max(X)
+    min_dice = np.min(dice_wo_ref[dice_wo_ref != 0])
     min_dice -= min_dice * 0.03
     max_dice += max_dice * 0.01
     # stacked everything so that dim0 is referral thresholds and dim1 is ES 4values + ED 4 values = [#refs, 8]
     fig = plt.figure(figsize=(width, height))
-    main_title = "Referral results for {}".format(model_name)
+    main_title = "Uncertainty informed decision referral for {}".format(model_name)
     fig.suptitle(main_title, **config.title_font_medium)
     ax1 = plt.subplot2grid((rows, columns), (0, 0), rowspan=2, colspan=2)
     wo_ref = np.zeros(xs.shape[0])
@@ -46,13 +47,15 @@ def plot_referral_results(dice_ref, model_name, dice_ref_pos_only=None, width=16
             ax1.plot(xs, X[:, cls], label="with ref {}".format(class_lbls[cls]), c=color_code[cls], marker="*",
                      linestyle="--", alpha=0.6)
             # plot our baseline performance
+            if cls == 1:
+                print(wo_ref)
             ax1.plot(xs, wo_ref, label="wo ref {}".format(class_lbls[cls]), c=color_code[cls],
                      linestyle="-", alpha=0.2)
             ax1.set_ylabel("dice", **config.axis_font)
             ax1.set_xlabel("referral threshold", **config.axis_font)
             ax1.set_ylim([min_dice, max_dice])
-            plt.tick_params(axis='both', which='major', labelsize=20)
-            plt.tick_params(axis='both', which='minor', labelsize=20)
+            plt.tick_params(axis='both', which='major', labelsize=config.axis_ticks_font_size)
+            ax1.set_xticks(xs)
             ax1.legend(loc="best")
             ax1.set_title("ES", **config.title_font_small)
             if pos_only:
@@ -76,8 +79,8 @@ def plot_referral_results(dice_ref, model_name, dice_ref_pos_only=None, width=16
                          linestyle=":", alpha=0.6)
             ax2.set_ylabel("dice", **config.axis_font)
             ax2.set_xlabel("referral threshold", **config.axis_font)
-            plt.tick_params(axis='both', which='major', labelsize=20)
-            plt.tick_params(axis='both', which='minor', labelsize=20)
+            plt.tick_params(axis='both', which='major', labelsize=config.axis_ticks_font_size)
+            ax2.set_xticks(xs)
             ax2.set_ylim([min_dice, max_dice])
             ax2.legend(loc="best")
             ax2.set_title("ED", **config.title_font_small)

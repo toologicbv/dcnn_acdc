@@ -228,8 +228,12 @@ class ReferralHandler(object):
 class ReferralResults(object):
     """
         These are currently the DICE results of the MC-0.1 model with Brier loss functional
+
+        NOTE: below we keep the results of the DCNN-MC-0.1 model without referral.
+              we use this in result_plots.py plot_referral_results method
+
     """
-    results_dice_wo_referral = np.array([[0, 0.84, 0.88, 0.91], [0, 0.92, 0.86, 0.96]])
+    results_dice_wo_referral = np.array([[0, 0.85, 0.88, 0.91], [0, 0.92, 0.86, 0.96]])
 
     def __init__(self, exper_dict, referral_thresholds, pos_only=False, print_latex_string=False,
                  print_results=True):
@@ -244,6 +248,13 @@ class ReferralResults(object):
         self.log_dir = os.path.join(self.root_dir, "logs")
         self.dice = OrderedDict()
         self.hd = OrderedDict()
+        self.dice_slices = OrderedDict()
+        self.hd_slices = OrderedDict()
+        self.referral_stats = OrderedDict()
+        self.org_dice_slices = OrderedDict()
+        self.org_hd_slices = OrderedDict()
+        # only used temporally, will be reset after all detailed results have been loaded and processed
+        self.detailed_results = []
         self.load_all_ref_results()
 
     def load_all_ref_results(self):
@@ -260,6 +271,7 @@ class ReferralResults(object):
                 if self.pos_only:
                     search_path = os.path.join(input_dir, self.search_prefix + "utr" + str_referral_threshold +
                                                "_pos_only.npz")
+
                 else:
                     search_path = os.path.join(input_dir, self.search_prefix + "utr" + str_referral_threshold + ".npz")
                 filenames = glob.glob(search_path)
@@ -270,8 +282,14 @@ class ReferralResults(object):
                 # 1st object: ref_dice_mean has shape [2 (ES/ED), 4 classes],
                 # 2nd object: ref_dice_std has shape [2 (ES/ED), 4 classes]
                 # the same is applicable to object ref_hd_results
-                ref_dice_results, ref_hd_results, _ = ReferralHandler.load_results(filenames[0], verbose=False)
+                ref_dice_results, ref_hd_results, dice_results, org_dice, org_hd = \
+                    ReferralHandler.load_results(filenames[0], verbose=False)
                 results.append([ref_dice_results, ref_hd_results])
+                # load ReferralDetailedResults
+                # we also load the ReferralDetailedResults objects, filename is identical to previous only extension
+                # is .dll instead of .npz
+                det_res_path = filenames[0].replace(".npz", ".dll")
+                self.detailed_results.append(ReferralDetailedResults.load_results(det_res_path, verbose=False))
 
             if len(results) != 4:
                 raise ValueError("ERROR - Loaded {} instead of 4 result files.".format(len(results)))
@@ -284,6 +302,8 @@ class ReferralResults(object):
                 overall_hd += ref_hd_mean
                 ref_hd_std = ref_hd_results[1]
                 std_hd += ref_hd_std
+            # first process the detailed result objects (merge the four objects, one for each fold)
+            self._process_detailed_results(referral_threshold)
             overall_dice *= 1. / 4
             std_dice *= 1. / 4
             overall_hd *= 1. / 4
@@ -330,6 +350,31 @@ class ReferralResults(object):
 
             self.dice[referral_threshold] = overall_dice
             self.hd[referral_threshold] = overall_hd
+
+    def _process_detailed_results(self, referral_threshold):
+        if len(self.detailed_results) != 4:
+            raise ValueError("ERROR - loaded less than four detailed result objects "
+                             "(actually {})".format(len(self.detailed_results)))
+
+        referral_stats = OrderedDict()
+        dice_slices = OrderedDict()
+        hd_slices = OrderedDict()
+        org_dice_slices = OrderedDict()
+        org_hd_slices = OrderedDict()
+        for det_result_obj in self.detailed_results:
+            for idx, patient_id in enumerate(det_result_obj.patient_ids):
+                referral_stats[patient_id] = det_result_obj.referral_stats[idx]
+                dice_slices[patient_id] = det_result_obj.acc_slices[idx]
+                hd_slices[patient_id] = det_result_obj.hd_slices[idx]
+                org_dice_slices[patient_id] = det_result_obj.org_acc_slices[idx]
+                org_hd_slices[patient_id] = det_result_obj.org_hd_slices[idx]
+        # reset temporary object
+        self.referral_stats[referral_threshold] = referral_stats
+        self.dice_slices[referral_threshold] = dice_slices
+        self.hd_slices[referral_threshold] = hd_slices
+        self.org_dice_slices[referral_threshold] = org_dice_slices
+        self.org_hd_slices [referral_threshold] = org_hd_slices
+        self.detailed_results = []
 
 
 class ReferralDetailedResults(object):
