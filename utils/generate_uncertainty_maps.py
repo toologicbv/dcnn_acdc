@@ -550,7 +550,7 @@ class UncertaintyMapsGenerator(object):
         if clean_up:
             self.info("NOTE: first cleaning up previous generated uncertainty maps!")
             self.clean_up_files()
-        # image_range = [0, 1, 2]
+
         image_range = np.arange(self.num_of_images)
         self.exper_handler.test_results = TestResults(self.exper_handler.exper, use_dropout=True,
                                                       mc_samples=self.mc_samples)

@@ -17,12 +17,13 @@ from config.config import config, DEFAULT_DCNN_MC_2D, DEFAULT_DCNN_2D
 from utils.batch_handlers import TwoDimBatchHandler, BatchStatistics
 from utils.generate_uncertainty_maps import UncertaintyMapsGenerator, ImageUncertainties, OutOfDistributionSlices
 from utils.generate_uncertainty_maps import ImageOutliers
-from utils.post_processing import filter_connected_components
+from utils.post_processing import filter_connected_components, detect_largest_umap_areas
 import models.dilated_cnn
 from utils.test_results import TestResults
 from common.acquisition_functions import bald_function
 from plotting.uncertainty_plots import analyze_slices
 from plotting.main_seg_results import plot_seg_erros_uncertainties
+from in_out.load_data import ACDC2017DataSet
 
 
 class ExperimentHandler(object):
@@ -39,6 +40,7 @@ class ExperimentHandler(object):
         self.num_val_runs = 0
         self.saved_model_state_dict = None
         self.ensemble_models = OrderedDict()
+        self.test_set_ids = {}
         if logger is None:
             self.logger = create_logger(self.exper, file_handler=use_logfile)
         else:
@@ -713,7 +715,8 @@ class ExperimentHandler(object):
                 # this is the one we use during referral at the moment
                 self.referral_umaps[patientID] = data["filtered_umap"]
 
-    def create_filtered_umaps(self, u_threshold, verbose=False, patient_id=None, aggregate_func="max"):
+    def create_filtered_umaps(self, u_threshold, verbose=False, patient_id=None, aggregate_func="max",
+                              filter_per_slice=False):
         if u_threshold < 0.:
             raise ValueError("ERROR - u_threshold must be greater than zero. ({:.2f})".format(u_threshold))
         # returns an OrderedDict with key "patient_id" and value=tensor of shape [2, 4classes, width, height, #slices]
@@ -727,6 +730,7 @@ class ExperimentHandler(object):
             # IMPORTANT: raw_u_map has shape [2, 4, width, height, #slices]
             num_of_phases = raw_u_map.shape[0]
             num_of_classes = raw_u_map.shape[1]
+            num_of_slices = raw_u_map.shape[4]
             # Yes I know, completely inconsistent the output is [8classes, width, height, #slices] instead of [2, 4...]
             filtered_cls_stddev_map = np.zeros((num_of_phases * num_of_classes, raw_u_map.shape[2], raw_u_map.shape[3],
                                                 raw_u_map.shape[4]))
@@ -743,8 +747,15 @@ class ExperimentHandler(object):
                     # do not yet filter 6 largest connected comonents here when we average over the stddev values
                     # we do that after we've averaged, for max-aggregate this wouldn't have an effect
                     if aggregate_func == "max":
-                        filtered_cls_stddev_map[cls + cls_offset] = filter_connected_components(u_3dmaps_cls,
-                                                                                                threshold=u_threshold)
+
+                        if filter_per_slice:
+                            for slice_id in np.arange(num_of_slices):
+                                slice_cls_u_map = u_3dmaps_cls[:, :, slice_id]
+                                filtered_cls_stddev_map[cls + cls_offset, :, :, slice_id] = \
+                                    filter_connected_components(slice_cls_u_map, threshold=u_threshold)
+                        else:
+                            filtered_cls_stddev_map[cls + cls_offset] = filter_connected_components(u_3dmaps_cls,
+                                                                                                    threshold=u_threshold)
                     else:
                         filtered_cls_stddev_map[cls + cls_offset] = u_3dmaps_cls
 
@@ -761,7 +772,8 @@ class ExperimentHandler(object):
                 if aggregate_func == "mean":
                     filtered_stddev_map[phase] = filter_connected_components(filtered_stddev_map[phase],
                                                                              threshold=u_threshold)
-                # save map
+            u_map_c_areas = detect_largest_umap_areas(filtered_stddev_map, max_objects=5)
+            # save map
             umap_output_dir = os.path.join(self.exper.config.root_dir, os.path.join(self.exper.output_dir,
                                                                                     config.u_map_dir))
             if not os.path.isdir(umap_output_dir):
@@ -772,11 +784,11 @@ class ExperimentHandler(object):
             file_name = patient_id + "_filtered_umaps_" + aggregate_func + str_u_threshold + ".npz"
             file_name = os.path.join(umap_output_dir, file_name)
             try:
-                np.savez(file_name_cls, filtered_cls_umap=filtered_cls_stddev_map)
+                np.savez(file_name_cls, filtered_cls_umap=filtered_cls_stddev_map, u_map_blobs=u_map_c_areas)
             except IOError:
                 print("ERROR - Unable to save filtered cls-umaps file {}".format(file_name_cls))
             try:
-                np.savez(file_name, filtered_umap=filtered_stddev_map)
+                np.savez(file_name, filtered_umap=filtered_stddev_map, u_map_blobs=u_map_c_areas)
             except IOError:
                 print("ERROR - Unable to save filtered umaps file {}".format(file_name))
         if verbose:
@@ -793,7 +805,19 @@ class ExperimentHandler(object):
         del filtered_cls_stddev_map
         del filtered_stddev_map
 
-    def generate_figures(self, test_set, image_range=None, referral_thresholds=[0.]):
+    def get_testset_ids(self):
+        val_path = os.path.join(config.data_dir + "fold" + str(self.exper.run_args.fold_ids[0]),
+                                os.path.join(ACDC2017DataSet.val_path, ACDC2017DataSet.image_path))
+        crawl_mask = os.path.join(val_path, "*.mhd")
+        for test_file in glob.glob(crawl_mask):
+            file_name = os.path.splitext(os.path.basename(test_file))[0]
+            patient_id = file_name[:file_name.find("_")]
+            self.test_set_ids[patient_id] = int(patient_id.strip("patient"))
+
+    def generate_figures(self, test_set, image_range=None, referral_thresholds=[0.], patients=None):
+        if patients is not None:
+            image_range = [test_set.trans_dict[p_id] for p_id in patients]
+
         args = self.exper.run_args
         model_name = args.model + " (p={:.2f})".format(args.drop_prob) + " - {}".format(args.loss_function)
         if image_range is None:

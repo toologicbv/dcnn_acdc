@@ -91,9 +91,11 @@ def plot_referral_results(dice_ref, model_name, dice_ref_pos_only=None, width=16
         if not os.path.isdir(fig_path):
             os.makedirs(fig_path)
         fig_name = model_name + "_referral_results"
-        fig_name = os.path.join(fig_path, fig_name + ".pdf")
-        plt.savefig(fig_name, bbox_inches='tight')
-        print("INFO - Successfully saved fig %s" % fig_name)
+        fig_name_pdf = os.path.join(fig_path, fig_name + ".pdf")
+        fig_name_jpeg = os.path.join(fig_path, fig_name + ".jpeg")
+        plt.savefig(fig_name_pdf, bbox_inches='tight')
+        plt.savefig(fig_name_jpeg, bbox_inches='tight')
+        print("INFO - Successfully saved fig %s" % fig_name_pdf)
 
     if do_show:
         plt.show()

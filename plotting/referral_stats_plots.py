@@ -50,23 +50,17 @@ def diff_slice_acc(dict_org_dice_slices, dict_ref_dice_slices):
                                                           slice_stats_ed, phase=1)  # ES
 
 
-def histogram_slice_acc(dict_org_dice_slices, dict_ref_dice_slices, referral_threshold, width=12, height=9,
+def histogram_slice_acc(referral_results, referral_threshold, width=12,
                         do_save=False, do_show=True, plot_title="Main title"):
 
     str_referral_threshold = str(referral_threshold).replace(".", "_")
-    slice_stats_es = OrderedDict()
-    num_of_slices_es = OrderedDict()
-    slice_stats_ed = OrderedDict()
-    num_of_slices_ed = OrderedDict()
+    # get all stats from the referral_result object
+    slice_stats_es = referral_results.es_mean_slice_improvements[referral_threshold]
+    num_of_slices_es = referral_results.es_slice_freqs[referral_threshold]
+    slice_stats_ed = referral_results.ed_mean_slice_improvements[referral_threshold]
+    num_of_slices_ed = referral_results.ed_slice_freqs[referral_threshold]
     # layout grid plots
     columns = 3
-    for patient_id, dice_slices in dict_ref_dice_slices.iteritems():
-        org_dice_slices = dict_org_dice_slices[patient_id]
-        num_of_slices_es, slice_stats_es = get_dice_diffs(org_dice_slices, dice_slices, num_of_slices_es,
-                                                          slice_stats_es, phase=0)  # ES
-        num_of_slices_ed, slice_stats_ed = get_dice_diffs(org_dice_slices, dice_slices, num_of_slices_ed,
-                                                          slice_stats_ed, phase=1)  # ES
-
     unique_num_of_slices = slice_stats_es.keys()
     num_of_plots = len(unique_num_of_slices)
     if num_of_plots % columns != 0:
@@ -74,6 +68,7 @@ def histogram_slice_acc(dict_org_dice_slices, dict_ref_dice_slices, referral_thr
     else:
         add_row = 0
     rows = (num_of_plots / columns) + add_row
+    height = rows * 5
     fig = plt.figure(figsize=(width, height))
     ax = fig.gca()
     fig.suptitle(plot_title, **config.title_font_medium)
@@ -84,8 +79,7 @@ def histogram_slice_acc(dict_org_dice_slices, dict_ref_dice_slices, referral_thr
     print("Rows/columns {}/{}".format(rows, columns))
     new_row = True
     for num_slices in unique_num_of_slices:
-        slice_stats_es[num_slices] = slice_stats_es[num_slices] * 1. / num_of_slices_es[num_slices]
-        slice_stats_ed[num_slices] = slice_stats_ed[num_slices] * 1. / num_of_slices_ed[num_slices]
+
         x_ticks = np.arange(1, num_slices + 1)
         ax1 = plt.subplot2grid((rows, columns), (row, column), rowspan=1, colspan=1)
         ax1.xaxis.set_major_locator(MaxNLocator(integer=True))
@@ -101,10 +95,11 @@ def histogram_slice_acc(dict_org_dice_slices, dict_ref_dice_slices, referral_thr
         ax1b.legend(loc=2, prop={'size': 12})
         ax1.grid(False)
         ax1.set_title("#Slices: {} Freq: {}".format(num_slices, num_of_slices_ed[num_slices]))
-        ax1.set_xlabel("Slice")
-        # ax1.set_xticks(x_ticks)
+        ax1.set_xlabel("Slice", **config.axis_font)
+        ax1.tick_params(axis='both', which='major', labelsize=config.axis_ticks_font_size)
+        ax1b.tick_params(axis='both', which='major', labelsize=config.axis_ticks_font_size)
         if new_row:
-            ax1.set_ylabel("Sum dice increase (%)")
+            ax1.set_ylabel("Sum dice increase (%)", **config.axis_font)
         if column == columns -1:
             column = 0
             row += 1

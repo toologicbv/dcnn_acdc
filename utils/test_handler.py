@@ -559,6 +559,8 @@ class ACDC2017TestHandler(object):
         self.b_hd_slices = np.zeros((2, self.num_of_classes, num_of_slices))
         self.b_ref_acc_slices = np.zeros((2, self.num_of_classes, num_of_slices))
         self.b_ref_hd_slices = np.zeros((2, self.num_of_classes, num_of_slices))
+        pred_labels_es = copy.deepcopy(self.b_pred_labels[:self.num_of_classes, :, :, :])
+        pred_labels_ed = copy.deepcopy(self.b_pred_labels[self.num_of_classes:, :, :, :])
         for slice_id in np.arange(num_of_slices):
             slice_uncertainty_idx_es, slice_uncertainty_idx_ed = None, None
             slice_pixels_pos_es, slice_pixels_pos_ed = 0, 0
@@ -577,8 +579,8 @@ class ACDC2017TestHandler(object):
             _, _ = self.compute_slice_accuracy(slice_idx=slice_id, compute_hd=True, store_results=True)
             # NOTE: we start with class 1, and skip the background class
             for cls in np.arange(1, self.num_of_classes):
-                pred_labels_cls_es = self.b_pred_labels[cls, :, :, slice_id]
-                pred_labels_cls_ed = self.b_pred_labels[cls + self.num_of_classes, :, :, slice_id]
+                pred_labels_cls_es = pred_labels_es[cls, :, :, slice_id]
+                pred_labels_cls_ed = pred_labels_ed[cls, :, :, slice_id]
                 true_labels_cls_es = self.b_labels[cls, :, :, slice_id]
                 true_labels_cls_ed = self.b_labels[cls + self.num_of_classes, :, :, slice_id]
                 num_true_labels_es = np.count_nonzero(true_labels_cls_es)
@@ -624,10 +626,11 @@ class ACDC2017TestHandler(object):
                     slice_total_pixels_ref_ed += num_pixel_above_threshold_ed
                     # temporary, number of all pixels equal to 0
                     # IMPORTANT: this is the EXPERT, setting the high uncertainty pixels to the ground truth labels
-                    pred_labels_cls_es[uncertain_es_idx] = true_labels_cls_es[uncertain_es_idx]
-                    pred_labels_cls_ed[uncertain_ed_idx] = true_labels_cls_ed[uncertain_ed_idx]
+                    pred_labels_es[cls, uncertain_es_idx, slice_id] = true_labels_cls_es[uncertain_es_idx]
+                    pred_labels_ed[cls, uncertain_ed_idx, slice_id] = true_labels_cls_ed[uncertain_ed_idx]
                     errors_es_filtered = np.count_nonzero(pred_labels_cls_es != true_labels_cls_es)
                     errors_ed_filtered = np.count_nonzero(pred_labels_cls_ed != true_labels_cls_ed)
+
                     # how many seg-errors did we improve (can't be negative)
                     # print("Error before/after {}  {}".format(errors_es, errors_es_filtered))
                     try:
@@ -655,11 +658,6 @@ class ACDC2017TestHandler(object):
                                   errors_ed, errors_ed_filtered,
                                   f1_ed, pr_ed, rc_ed, true_pos_ed, false_pos_ed, false_neg_ed, 0, 0])
 
-                    # although this shouldn't be necessary because the object pred_labels_cls_es are no copies
-                    # of the original objects, hence they will alter by reference, but for clarity we perform the
-                    # action anyway.
-                    self.b_pred_labels[cls, :, :, slice_id] = pred_labels_cls_es
-                    self.b_pred_labels[cls + self.num_of_classes, :, :, slice_id] = pred_labels_cls_ed
                     # find the union of all the pixel locations that we're uncertain about for this slice:
                     if slice_uncertainty_idx_es is None:
                         slice_uncertainty_idx_es = uncertain_es_idx
@@ -669,31 +667,43 @@ class ACDC2017TestHandler(object):
                         slice_uncertainty_idx_ed = uncertain_ed_idx
                     else:
                         slice_uncertainty_idx_ed = np.logical_or(slice_uncertainty_idx_ed, uncertain_ed_idx)
+                # IMPORTANT: we corrected slice-voxels per class, but we need to correct the voxels over all classes.
+                # E.g.: if voxel x was predicted as LV, but must be BG, we need to correct the voxel prediction
+                #       for LV (which we did above) BUT also for BG, which we haven't done
+                # es_pred_labels = self.b_pred_labels[:self.num_of_classes, :, :, slice_id]
+                # es_true_labels = self.b_labels[:self.num_of_classes, :, :, slice_id]
+                # es_pred_labels[:, slice_uncertainty_idx_es] = es_true_labels[:, slice_uncertainty_idx_es]
+                # self.b_pred_labels[:self.num_of_classes, :, :, slice_id] = es_pred_labels
+                # # same for ED
+                # ed_pred_labels = self.b_pred_labels[self.num_of_classes:, :, :, slice_id]
+                # ed_true_labels = self.b_labels[self.num_of_classes:, :, :, slice_id]
+                # ed_pred_labels[:, slice_uncertainty_idx_ed] = ed_true_labels[:, slice_uncertainty_idx_ed]
+                # self.b_pred_labels[self.num_of_classes:, :, :, slice_id] = ed_pred_labels
+
                 # end of slice
-                if cls != 0:
-                    es_ref_count = np.count_nonzero(slice_uncertainty_idx_es)
-                    # we store the total number of referred pixels for this class, which we store redundantly
-                    # i.e. it's the same for all classes.
-                    self.referral_stats[0, :, 12, slice_id] = es_ref_count
-                    self.referral_stats[0, :, 13, slice_id] = slice_num_pixel_uncertain_es
-                    try:
-                        ref_perc_es = (slice_total_pixels_ref_es / float(slice_pixels_pos_es)) * 100
-                    except ZeroDivisionError:
-                        ref_perc_es = 0
-                    # we didn't set the referral perc. above, so we do it here for all classes at the end of the slice
-                    # which means, the info is redundant over the classes and should be interpreted as per slice %
-                    self.referral_stats[0, :, 0, slice_id] = ref_perc_es
-                    ed_ref_count = np.count_nonzero(slice_uncertainty_idx_ed)
-                    self.referral_stats[1, :, 12, slice_id] = ed_ref_count
-                    self.referral_stats[1, :, 13, slice_id] = slice_num_pixel_uncertain_ed
-                    # increase the total referral counter
-                    total_pixels_referred += es_ref_count + ed_ref_count
-                    try:
-                        ref_perc_ed = (slice_total_pixels_ref_ed / float(slice_pixels_pos_ed)) * 100
-                    except ZeroDivisionError:
-                        ref_perc_ed = 0
-                    self.referral_stats[1, :, 0, slice_id] = ref_perc_ed
-                    # print("Slice {} ES/ED Ref% {:.2f}/{:.2f}".format(slice_id + 1, ref_perc_es, ref_perc_ed))
+                es_ref_count = np.count_nonzero(slice_uncertainty_idx_es)
+                # we store the total number of referred pixels for this class, which we store redundantly
+                # i.e. it's the same for all classes.
+                self.referral_stats[0, :, 12, slice_id] = es_ref_count
+                self.referral_stats[0, :, 13, slice_id] = slice_num_pixel_uncertain_es
+                try:
+                    ref_perc_es = (slice_total_pixels_ref_es / float(slice_pixels_pos_es)) * 100
+                except ZeroDivisionError:
+                    ref_perc_es = 0
+                # we didn't set the referral perc. above, so we do it here for all classes at the end of the slice
+                # which means, the info is redundant over the classes and should be interpreted as per slice %
+                self.referral_stats[0, :, 0, slice_id] = ref_perc_es
+                ed_ref_count = np.count_nonzero(slice_uncertainty_idx_ed)
+                self.referral_stats[1, :, 12, slice_id] = ed_ref_count
+                self.referral_stats[1, :, 13, slice_id] = slice_num_pixel_uncertain_ed
+                # increase the total referral counter
+                total_pixels_referred += es_ref_count + ed_ref_count
+                try:
+                    ref_perc_ed = (slice_total_pixels_ref_ed / float(slice_pixels_pos_ed)) * 100
+                except ZeroDivisionError:
+                    ref_perc_ed = 0
+                self.referral_stats[1, :, 0, slice_id] = ref_perc_ed
+                # print("Slice {} ES/ED Ref% {:.2f}/{:.2f}".format(slice_id + 1, ref_perc_es, ref_perc_ed))
             # compute slice accuracy/hd after referral
             slice_acc_after, slice_hd_after = self.compute_slice_accuracy(slice_idx=slice_id, compute_hd=True,
                                                                           store_results=False)
@@ -702,6 +712,11 @@ class ACDC2017TestHandler(object):
             self.b_ref_acc_slices[0, :, slice_id] = slice_acc_after[:self.num_of_classes]  # ES
             self.b_ref_acc_slices[1, :, slice_id] = slice_acc_after[self.num_of_classes:]  # ED
 
+        # although this shouldn't be necessary because the object pred_labels_cls_es are no copies
+        # of the original objects, hence they will alter by reference, but for clarity we perform the
+        # action anyway.
+        self.b_pred_labels[:self.num_of_classes, :, :, :] = pred_labels_es
+        self.b_pred_labels[self.num_of_classes:, :, :, :] = pred_labels_ed
         # referral_stats with shape [2, 4classes, 12, #slices]. We average over slices
         errors_es = np.sum(self.referral_stats[0, :, 4, :])
         errors_es_after = np.sum(self.referral_stats[0, :, 5, :])

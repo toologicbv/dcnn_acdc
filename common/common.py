@@ -12,7 +12,7 @@ from skimage import exposure
 import matplotlib.pyplot as plt
 
 
-def generate_std_hist_corr_err(img_stds, labels, pred_labels, is_filtered=False):
+def generate_std_hist_corr_err(img_stds, labels, pred_labels, referral_threshold=None):
     """
 
     Note that for detecting the correct and incorrect classified pixels, we only need to look at the background
@@ -23,7 +23,7 @@ def generate_std_hist_corr_err(img_stds, labels, pred_labels, is_filtered=False)
     :param img_stds: standard deviation for image pixels. One for ES and one for ED [classes, width, height, slices]
     :param labels: true labels with [8classes, width, height, #slices]
     :param pred_labels: [8classes, width, height, #slices]
-    :param is_filtered: boolean indicating whether the u-maps is thresholded (then we omit the 0 values)
+    :param referral_threshold: indicating whether the u-maps is thresholded (then we omit the 0 values)
     :return:
     """
     half_classes = labels.shape[0] / 2
@@ -75,9 +75,9 @@ def generate_std_hist_corr_err(img_stds, labels, pred_labels, is_filtered=False)
             std_max = max(err_std.max() if err_std is not None else 0,
                           pos_std.max() if pos_std is not None else 0.)
             # print("# in err_std ", err_std.shape[0])
-            if is_filtered:
+            if referral_threshold is not None:
                 if std_max != 0:
-                    std_min = 0.1
+                    std_min = referral_threshold
                 else:
                     std_min = 0
             else:
@@ -98,19 +98,16 @@ def generate_std_hist_corr_err(img_stds, labels, pred_labels, is_filtered=False)
     return slice_bin_edges, slice_bin_values
 
 
-def generate_std_hist_corr_err_per_class(img_stds, labels, pred_labels, is_filtered=False):
+def generate_std_hist_corr_err_per_class(img_stds, labels, pred_labels, referral_threshold=None):
     """
-
-    Note that for detecting the correct and incorrect classified pixels, we only need to look at the background
-    class, because the incorrect pixels in this class are the summation of the other 3 classes (for ES and ED
-    separately).
-
 
     :param img_stds: standard deviation for image pixels. One for ES and one for ED [classes, width, height, slices]
     :param labels: true labels with [8classes, width, height, #slices]
     :param pred_labels: [8classes, width, height, #slices]
-    :param is_filtered: boolean indicating whether the u-maps is thresholded (then we omit the 0 values)
-    :return:
+    :param referral_threshold: indicating whether the u-maps is thresholded (then we omit the 0 values)
+    :return: slice_bin_edges: see shape below
+             slice_bin_values: see shape below, NOTE: we store stddev densities for correct and incorrectly
+             segmented voxels
     """
     half_classes = labels.shape[0] / 2
     num_of_slices = labels.shape[3]
@@ -142,10 +139,10 @@ def generate_std_hist_corr_err_per_class(img_stds, labels, pred_labels, is_filte
                 if not (err_std is None and pos_std is None):
                     std_max = max(err_std.max() if err_std is not None else 0,
                                   pos_std.max() if pos_std is not None else 0.)
-                    # print("# in err_std ", err_std.shape[0])
-                    if is_filtered:
+                    if referral_threshold is not None:
+                        # check whether std_max is zero, no values, then we make sure std_min is also zero
                         if std_max != 0:
-                            std_min = 0.1
+                            std_min = referral_threshold
                         else:
                             std_min = 0.
                     else:
@@ -332,15 +329,25 @@ def set_error_pixels(img_rgb, pred_labels, true_labels, cls_offset):
 
     :return:
     """
-    #                       RV:YELLOW           MYO:BLUE    LV:RED
-    rgb_error_codes = [[], [204, 204, 0], [0, 120, 255], [255, 0, 0]]
+    #                     MYO/LV:green    RV:YELLOW           MYO:BLUE    LV:RED
+    rgb_error_codes = [[0, 190, 0], [204, 204, 0], [0, 120, 255], [255, 0, 0]]
     num_of_errors = np.zeros(4).astype(np.int)
-
-    for cls in np.arange(pred_labels.shape[0] // 2):
+    cls_range = np.arange(pred_labels.shape[0] // 2)
+    # cls_range.sort()
+    for cls in cls_range:
         error_idx = pred_labels[cls + cls_offset] != true_labels[cls + cls_offset]
+        if cls == 2:
+            error_idx_myo = copy.deepcopy(error_idx)
+        elif cls == 3:
+            error_idx_lv = copy.deepcopy(error_idx)
         if cls != 0:
             img_rgb[error_idx, :] = rgb_error_codes[cls]
         num_of_errors[cls] = np.count_nonzero(error_idx)
+    error_mix = np.logical_and(error_idx_myo, error_idx_lv)
+    img_rgb[error_mix, :] = rgb_error_codes[0]
+    # making slightly mis-use of BG error count, which we overwrite with mixed errors Myo/LV
+    num_of_errors[0] = np.count_nonzero(error_mix)
+
     return img_rgb, num_of_errors
 
 

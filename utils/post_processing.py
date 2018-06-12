@@ -1,6 +1,9 @@
 import scipy.ndimage as scnd
 import numpy as np
 
+from scipy.ndimage.measurements import label as scipy_label
+from scipy.ndimage.morphology import generate_binary_structure, binary_erosion
+
 
 def filter_connected_components(pred_labels, cls=None, verbose=False, threshold=0., rank=None):
     """
@@ -50,3 +53,39 @@ def filter_connected_components(pred_labels, cls=None, verbose=False, threshold=
                 pred_labels[cc_labels == i_comp] = 0
 
     return pred_labels
+
+
+def detect_largest_umap_areas(filtered_umap, rank_structure=5, max_objects=5):
+    """
+    first detect connected structures and then use erosion to detect how "connected" the areas are.
+
+
+    :param filtered_umap: uncertainty map for an mri slice of shape [2, width, height, #slices]
+    :param rank_structure:
+    :param max_objects:
+    :return:
+    """
+    num_of_slices = filtered_umap.shape[3]
+    size_detected_areas = np.zeros((2, num_of_slices, max_objects))
+    size_areas_after_erosion = np.zeros((2, num_of_slices, max_objects))
+    structure = np.ones((rank_structure, rank_structure))
+
+    for slice_id in np.arange(num_of_slices):
+        for phase in np.arange(2):
+            slice_u_map = filtered_umap[phase, :, :, slice_id]
+            binary_map = np.zeros(slice_u_map.shape).astype(np.bool)
+            mask = slice_u_map != 0
+            binary_map[mask] = True
+            binary_structure = generate_binary_structure(binary_map.ndim, connectivity=2)
+            bin_labels, num_of_objects = scipy_label(binary_map, binary_structure)
+
+            if num_of_objects >= 1:
+                for i in np.arange(1, num_of_objects + 1):
+                    if i <= max_objects:
+                        binary_map = np.zeros(bin_labels.shape).astype(np.bool)
+                        binary_map[bin_labels == i] = 1
+                        size_detected_areas[phase, slice_id, i - 1] = np.count_nonzero(binary_map)
+                        remaining_blob = binary_erosion(binary_map, structure)
+                        size_areas_after_erosion[phase, slice_id, i - 1] = np.count_nonzero(remaining_blob)
+
+    return size_areas_after_erosion, size_detected_areas

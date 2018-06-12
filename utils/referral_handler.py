@@ -9,10 +9,43 @@ from utils.test_handler import ACDC2017TestHandler
 from config.config import config
 
 
+def get_dice_diffs(diffs, num_of_slices, slice_stats, phase):
+    """
+
+    :param org_dice_slices:
+    :param ref_dice_slices:
+    :param phase: can be 0=ES or 1=ED
+    :param num_of_slices: OrderedDict with key #slices, value frequency
+    :param slice_stats: OrderedDict with key #slices, value mean dice increase between org - ref dice coeff.
+    :return:
+    """
+
+    if np.any(diffs < 0.):
+        print("------------------ WRONG negative diff between ref and org slice dice ---------------------")
+        print("Ref dice phase={}".format(phase))
+        print(diffs[phase, 1:])
+        print("Original")
+        print(diffs[phase, 1:])
+        print("Diffs")
+        print(diffs)
+    slices = diffs.shape[0]
+    if slices in slice_stats.keys():
+        num_of_slices[slices] += 1
+        slice_stats[slices] += diffs
+    else:
+        num_of_slices[slices] = 1
+        slice_stats[slices] = diffs
+
+    return num_of_slices, slice_stats
+
+
 class ReferralHandler(object):
 
     def __init__(self, exper_handler, referral_thresholds=None, test_set=None, verbose=False, do_save=False,
-                 num_of_images=None, pos_only=False, aggregate_func="max"):
+                 num_of_images=None, pos_only=False, aggregate_func="max", patients=None):
+        # Overrule!
+        if patients is not None:
+            num_of_images = None
 
         self.exper_handler = exper_handler
         self.aggregate_func = aggregate_func
@@ -34,8 +67,15 @@ class ReferralHandler(object):
         self.fold_id = exper_handler.exper.run_args.fold_ids[0]
         if num_of_images is not None:
             self.num_of_images = num_of_images
+            self.image_range = np.arange(num_of_images)
         else:
-            self.num_of_images = len(self.test_set.images)
+            if patients is not None:
+                self.image_range = [self.test_set.trans_dict[p_id] for p_id in patients]
+                self.num_of_images = len(self.image_range)
+                print("INFO - Running for {} only".format(patients))
+            else:
+                self.image_range = np.arange(self.num_of_images)
+                self.num_of_images = len(self.test_set.images)
         self.pred_labels_input_dir = os.path.join(exper_handler.exper.config.root_dir,
                                                   os.path.join(exper_handler.exper.output_dir,
                                                                config.pred_lbl_dir))
@@ -73,7 +113,7 @@ class ReferralHandler(object):
             self.str_referral_threshold = str(referral_threshold).replace(".", "_")
             print("INFO - Running evaluation with referral for threshold {}"
                   " (pos-only={})".format(self.str_referral_threshold, self.pos_only))
-            for image_num in np.arange(self.num_of_images):
+            for idx, image_num in enumerate(self.image_range):
                 patient_id = self.test_set.img_file_names[image_num]
                 self.det_results.patient_ids.append(patient_id)
                 pred_labels = self.__load_pred_labels(patient_id)
@@ -97,8 +137,8 @@ class ReferralHandler(object):
                                                    compute_slice_metrics=False)
                     self.det_results.org_acc.append(test_accuracy)
                     self.det_results.org_hd.append(test_hd)
-                    self.dice[image_num] = np.reshape(test_accuracy, (2, -1))
-                    self.hd[image_num] = np.reshape(test_hd, (2, -1))
+                    self.dice[idx] = np.reshape(test_accuracy, (2, -1))
+                    self.hd[idx] = np.reshape(test_hd, (2, -1))
                     if verbose:
                         print("ES/ED without: {:.2f} {:.2f} {:.2f} / "
                               "{:.2f} {:.2f} {:.2f} ".format(test_accuracy[1], test_accuracy[2], test_accuracy[3],
@@ -168,8 +208,8 @@ class ReferralHandler(object):
                                                                                                 test_accuracy_ref[6],
                                                                                                 test_accuracy_ref[7]))
 
-                self.ref_dice[image_num] = np.reshape(test_accuracy_ref, (2, -1))
-                self.ref_hd[image_num] = np.reshape(test_hd_ref, (2, -1))
+                self.ref_dice[idx] = np.reshape(test_accuracy_ref, (2, -1))
+                self.ref_hd[idx] = np.reshape(test_hd_ref, (2, -1))
                 if verbose:
                     self._show_results(test_accuracy_ref, image_num, msg="with referral")
             self._compute_result()
@@ -274,6 +314,7 @@ class ReferralResults(object):
         self.referral_thresholds = referral_thresholds
         if fold is not None:
             self.exper_dict = {fold: exper_dict[fold]}
+            print("WARNING - only loading results for fold {}".format(fold))
         else:
             self.exper_dict = exper_dict
         self.num_of_folds = float(len(self.exper_dict))
@@ -284,6 +325,7 @@ class ReferralResults(object):
         self.pos_only = pos_only
         self.root_dir = config.root_dir
         self.log_dir = os.path.join(self.root_dir, "logs")
+        # for all dictionaries the referral_threshold is used as key
         self.dice = OrderedDict()
         self.hd = OrderedDict()
         self.dice_slices = OrderedDict()
@@ -293,9 +335,16 @@ class ReferralResults(object):
         self.org_hd_slices = OrderedDict()
         self.org_dice_img = OrderedDict()
         self.org_hd_img = OrderedDict()
+        self.img_slice_improvements = OrderedDict()
+        self.es_mean_slice_improvements = OrderedDict()
+        self.ed_mean_slice_improvements = OrderedDict()
+        # slice frequencies e.g. #slice=10 with freq=13
+        self.es_slice_freqs = OrderedDict()
+        self.ed_slice_freqs = OrderedDict()
         # only used temporally, will be reset after all detailed results have been loaded and processed
         self.detailed_results = []
         self.load_all_ref_results()
+        self._compute_improvement_per_img_slice()
 
     def load_all_ref_results(self):
 
@@ -433,6 +482,41 @@ class ReferralResults(object):
         self.org_dice_img[referral_threshold] = org_acc
         self.org_hd_img[referral_threshold] = org_hd
         self.detailed_results = []
+
+    def _compute_improvement_per_img_slice(self):
+
+        for referral_threshold in self.referral_thresholds:
+            mean_slice_stats_es = OrderedDict()
+            mean_slice_stats_ed = OrderedDict()
+            # note: slice_stats with key patient_id, will contain numpy array of shape [2, #slices] 0=ES; 1=ED
+            img_slice_improvements = OrderedDict()
+            num_of_slices_es = OrderedDict()
+            num_of_slices_ed = OrderedDict()
+            dict_ref_dice_slices = self.dice_slices[referral_threshold]
+            dict_org_dice_slices = self.org_dice_slices[referral_threshold]
+            for patient_id, dice_slices in dict_ref_dice_slices.iteritems():
+                org_dice_slices = dict_org_dice_slices[patient_id]
+                phase = 0  # ES
+                # axis=0 is over classes, because we want overall improvements per slice
+                diffs_es = np.sum(dice_slices[phase, 1:] - org_dice_slices[phase, 1:], axis=0)
+                num_of_slices_es, slice_stats_es = get_dice_diffs(diffs_es, num_of_slices_es,
+                                                                  mean_slice_stats_es, phase=phase)  # ES
+                phase = 1
+                diffs_ed = np.sum(dice_slices[phase, 1:] - org_dice_slices[phase, 1:], axis=0)
+                num_of_slices_ed, slice_stats_ed = get_dice_diffs(diffs_ed, num_of_slices_ed,
+                                                                  mean_slice_stats_ed, phase=1)  # ES
+                img_slice_improvements[patient_id] = np.concatenate((np.expand_dims(diffs_es, axis=0),
+                                                                    np.expand_dims(diffs_ed, axis=0)))
+
+            # average improvements, by dividing through frequency
+            for num_slices in slice_stats_es.keys():
+                mean_slice_stats_es[num_slices] = mean_slice_stats_es[num_slices] * 1. / num_of_slices_es[num_slices]
+                mean_slice_stats_ed[num_slices] = mean_slice_stats_ed[num_slices] * 1. / num_of_slices_ed[num_slices]
+            self.es_mean_slice_improvements[referral_threshold] = mean_slice_stats_es
+            self.ed_mean_slice_improvements[referral_threshold] = mean_slice_stats_ed
+            self.es_slice_freqs[referral_threshold] = num_of_slices_es
+            self.ed_slice_freqs[referral_threshold] = num_of_slices_ed
+            self.img_slice_improvements[referral_threshold] = img_slice_improvements
 
 
 class ReferralDetailedResults(object):

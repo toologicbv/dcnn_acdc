@@ -189,6 +189,8 @@ class ACDC2017DataSet(BaseImageDataSet):
         self.val_images = []
         self.val_labels = []
         self.val_img_slice_ids = []
+        # patient_ids in the validation/test set
+        self.val_image_names = {}
         # the actual number of slices in val_images
         self.val_num_slices = 0
         self.val_spacings = []
@@ -271,6 +273,8 @@ class ACDC2017DataSet(BaseImageDataSet):
             # get rid off _frameXX and take only the patient name
             patientID = es_file_name[:es_file_name.find("_")]
             self.image_names.append(patientID)
+            if not is_train:
+                self.val_image_names[patientID] = int(patientID.strip("patient"))
             self.trans_dict[patientID] = self.num_of_images
             # print("INFO - Loading ES-file {}".format(img_file))
             reference_es, origin, spacing = self.load_func(ref_file, data_type=ACDC2017DataSet.pixel_dta_type,
@@ -304,8 +308,10 @@ class ACDC2017DataSet(BaseImageDataSet):
             self._set_pathes()
             self.pre_process()
             train_file_list, val_file_list = self._get_file_lists()
+        # load training set
         files_loaded += self._load_file_list(train_file_list, is_train=True)
         self.train_num_slices = len(self.train_images)
+        # load validation/test set
         files_loaded += self._load_file_list(val_file_list, is_train=False)
         self.val_num_slices = len(self.val_images)
         self.img_stats *= 1./self.num_of_images
