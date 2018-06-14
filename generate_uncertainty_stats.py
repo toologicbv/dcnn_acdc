@@ -117,7 +117,7 @@ def main():
         # in this case image_range REALLY must be a list e.g. [1, 3, 10] in order to select specific images
         exper_handler.generate_figures(test_set, image_range=None,
                                        referral_thresholds=args.referral_thresholds,
-                                       patients=["patient005", "patient022"])
+                                       patients=None)  # ["patient005", "patient022"])
 
     elif args.run_mode == "test_referrals":
 
@@ -127,18 +127,18 @@ def main():
                                            load_val=True,
                                            use_iso_path=True)
         # refer only positive, uncertain pixels
-        ref_handler = ReferralHandler(exper_handler, test_set=ref_test_set,
-                                      referral_thresholds=args.referral_thresholds,
-                                      aggregate_func=args.aggregate_func,
-                                      verbose=False, do_save=True, num_of_images=None, pos_only=True,
-                                      patients=["patient005", "patient022"])
-        ref_handler.test(without_referral=True, verbose=True)
+        # ref_handler = ReferralHandler(exper_handler, test_set=ref_test_set,
+        #                               referral_thresholds=args.referral_thresholds,
+        #                               aggregate_func=args.aggregate_func,
+        #                               verbose=False, do_save=True, num_of_images=None, pos_only=True,
+        #                               patients=["patient005", "patient022"])
+        # ref_handler.test(without_referral=True, verbose=True)
         # Refer all uncertain pixels
         ref_handler = ReferralHandler(exper_handler, test_set=ref_test_set,
                                       referral_thresholds=args.referral_thresholds,
                                       aggregate_func=args.aggregate_func,
-                                      verbose=False, do_save=True, num_of_images=None, pos_only=False,
-                                      patients=["patient005", "patient022"])
+                                      verbose=True, do_save=True, num_of_images=None, pos_only=False,
+                                      patients=None)  # ["patient005", "patient062", "patient045"])
         ref_handler.test(without_referral=True, verbose=False)
 
 

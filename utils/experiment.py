@@ -35,6 +35,7 @@ class ExperimentHandler(object):
         self.exper = exper
         self.u_maps = None
         self.referral_umaps = None
+        self.ref_map_blobs = None
         self.test_results = None
         self.logger = None
         self.num_val_runs = 0
@@ -714,6 +715,10 @@ class ExperimentHandler(object):
             else:
                 # this is the one we use during referral at the moment
                 self.referral_umaps[patientID] = data["filtered_umap"]
+            try:
+                self.rep_map_blobs[patientID] = data["filtered_stddev_blobs"]
+            except KeyError:
+                print("WARNING - filtered_stddev_blobs object does not exist for {}".format(patientID))
 
     def create_filtered_umaps(self, u_threshold, verbose=False, patient_id=None, aggregate_func="max",
                               filter_per_slice=False):
@@ -772,7 +777,8 @@ class ExperimentHandler(object):
                 if aggregate_func == "mean":
                     filtered_stddev_map[phase] = filter_connected_components(filtered_stddev_map[phase],
                                                                              threshold=u_threshold)
-            u_map_c_areas = detect_largest_umap_areas(filtered_stddev_map, max_objects=5)
+            u_map_c_areas, _ = detect_largest_umap_areas(filtered_stddev_map, rank_structure=3,
+                                                         max_objects=config.num_of_umap_blobs)
             # save map
             umap_output_dir = os.path.join(self.exper.config.root_dir, os.path.join(self.exper.output_dir,
                                                                                     config.u_map_dir))
@@ -784,11 +790,11 @@ class ExperimentHandler(object):
             file_name = patient_id + "_filtered_umaps_" + aggregate_func + str_u_threshold + ".npz"
             file_name = os.path.join(umap_output_dir, file_name)
             try:
-                np.savez(file_name_cls, filtered_cls_umap=filtered_cls_stddev_map, u_map_blobs=u_map_c_areas)
+                np.savez(file_name_cls, filtered_cls_umap=filtered_cls_stddev_map, filtered_stddev_blobs=u_map_c_areas)
             except IOError:
                 print("ERROR - Unable to save filtered cls-umaps file {}".format(file_name_cls))
             try:
-                np.savez(file_name, filtered_umap=filtered_stddev_map, u_map_blobs=u_map_c_areas)
+                np.savez(file_name, filtered_umap=filtered_stddev_map, filtered_stddev_blobs=u_map_c_areas)
             except IOError:
                 print("ERROR - Unable to save filtered umaps file {}".format(file_name))
         if verbose:
@@ -799,7 +805,9 @@ class ExperimentHandler(object):
             # make referral predictions
             if self.referral_umaps is None:
                 self.referral_umaps = OrderedDict()
+                self.ref_map_blobs = OrderedDict()
             self.referral_umaps[patient_id] = filtered_stddev_map
+            self.ref_map_blobs[patient_id] = u_map_c_areas
         # we don't need this object, to big to keep
         self.u_maps = None
         del filtered_cls_stddev_map

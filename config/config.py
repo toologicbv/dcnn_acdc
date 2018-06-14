@@ -75,6 +75,10 @@ class BaseConfig(object):
         # padding to left and right of the image in order to reach the final image size for classification
         self.pad_size = 65
 
+        #
+        self.erosion_rank_structure = 3
+        self.num_of_umap_blobs = 5
+
         # class labels
         self.class_lbl_background = 0
         self.class_lbl_RV = 1

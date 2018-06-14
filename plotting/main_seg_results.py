@@ -4,7 +4,7 @@ from pylab import MaxNLocator
 import numpy as np
 import os
 import copy
-from scipy.ndimage.measurements import label as scipy_label
+from utils.post_processing import detect_larget_umap_areas_slice
 from scipy.ndimage.morphology import generate_binary_structure, binary_erosion
 
 from matplotlib import cm
@@ -165,6 +165,7 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
             if filtered_stddev_bin_edges is not None:
                 # stddev_bin_edges has shape [phases, #slices, #bins+1] and stddev_bin_values [phases, #slices, 2, bins]
                 # when we use the filtered u-maps we omit all the zero values in the first bin!
+                #
                 stddev_bin_edges = filtered_stddev_bin_edges
                 stddev_bin_values = filtered_stddev_bin_values
             else:
@@ -315,28 +316,18 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
                                                                                     total_uncertainty)
                 ax4a = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
                 if referral_threshold != 0:
-                    binary_map = np.zeros(mean_slice_stddev.shape).astype(np.bool)
-                    mask = mean_slice_stddev > referral_threshold
-                    binary_map[mask] = True
-                    binary_structure = generate_binary_structure(binary_map.ndim, connectivity=2)
-                    bin_labels, num_of_objects = scipy_label(binary_map, binary_structure)
-                    patch_sizes = []
-                    remaining_patch = []
-                    if num_of_objects >= 1:
-                        structure = np.ones((5, 5))
-                        for i in np.arange(1, num_of_objects + 1):
-                            if i <= 5:
-                                binary_map = np.zeros(bin_labels.shape).astype(np.bool)
-                                binary_map[bin_labels == i] = 1
-                                patch_sizes.append(str(np.count_nonzero(binary_map)))
-                                remaining_blob = binary_erosion(binary_map, structure)
-                                remaining_patch.append(str(np.count_nonzero(remaining_blob)))
-                        blobs = ", ".join(patch_sizes)
-                        ax4a.text(20, 20, "u-blobs: {}".format(blobs), bbox={'facecolor': 'white', 'pad': 18})
+                    structure = np.ones((config.erosion_rank_structure, config.erosion_rank_structure))
+                    # structure = np.ones((3, 3))
+                    patch_sizes, remaining_patch = detect_larget_umap_areas_slice(mean_slice_stddev, structure)
+                    patch_sizes = patch_sizes[patch_sizes != 0]
+                    remaining_patch = remaining_patch[remaining_patch != 0]
+                    if len(patch_sizes) != 0:
+                        blobs = ", ".join([str(a) for a in patch_sizes])
+                        blobs_remaining = ", ".join([str(a) for a in remaining_patch])
+                        ax4a.text(20, 20, "u-blobs: {}".format(blobs_remaining), bbox={'facecolor': 'white', 'pad': 18})
                         print(blobs)
                         print(remaining_patch)
-                else:
-                    blobs = ""
+
                 max_mean_stddev = np.max(mean_slice_stddev)
                 ax4a.imshow(img, cmap=cm.gray)
                 ax4aplot = ax4a.imshow(mean_slice_stddev, cmap=mycmap,
@@ -350,7 +341,7 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
                 # Last two rows: histogram of uncertainties (pos-only or raw ones). Covers 2 rows/columns
                 # create histogram
                 if referral_threshold != 0:
-                    title_suffix = "(filtered-pos-only)"
+                    title_suffix = " (filtered)"
                 else:
                     title_suffix = ""
                 stddev_corr = stddev_bin_values[phase, img_slice, 0]

@@ -74,8 +74,8 @@ class ReferralHandler(object):
                 self.num_of_images = len(self.image_range)
                 print("INFO - Running for {} only".format(patients))
             else:
-                self.image_range = np.arange(self.num_of_images)
                 self.num_of_images = len(self.test_set.images)
+                self.image_range = np.arange(self.num_of_images)
         self.pred_labels_input_dir = os.path.join(exper_handler.exper.config.root_dir,
                                                   os.path.join(exper_handler.exper.output_dir,
                                                                config.pred_lbl_dir))
@@ -152,6 +152,7 @@ class ReferralHandler(object):
                                                          aggregate_func=self.aggregate_func)
                 # generate prediction with referral OF UNCERTAIN, POSITIVES ONLY
                 ref_u_map = self.exper_handler.referral_umaps[patient_id]
+                ref_u_map_blobs = self.exper_handler.ref_map_blobs[patient_id]
                 self.test_set.b_pred_labels = copy.deepcopy(pred_labels)
                 self.test_set.filter_referrals(u_maps=ref_u_map, ref_positives_only=self.pos_only,
                                                referral_threshold=referral_threshold)
@@ -162,6 +163,9 @@ class ReferralHandler(object):
                 self.det_results.org_acc_slices.append(copy.deepcopy(self.test_set.b_acc_slices))
                 self.det_results.org_hd_slices.append(copy.deepcopy(self.test_set.b_hd_slices))
                 self.det_results.referral_stats.append(copy.deepcopy(self.test_set.referral_stats))
+                # ref_u_map_blobs has shape [2, #slices, config.num_of_umap_blobs (5)]
+                self.det_results.umap_blobs_per_slice.append(ref_u_map_blobs)
+                print(self.det_results.umap_blobs_per_slice[-1].astype(np.int))
                 # get referral accuracy & hausdorff
                 # IMPORTANT: we don't filter the referred labels a 2nd time, because we encountered undesirable
                 # problems doing that (somehow it happened that we lost connectivity to upper/lower slices
@@ -173,7 +177,6 @@ class ReferralHandler(object):
                 # self.det_results.acc_slices.append(acc_slices_ref)
                 # print("After ES-RV ", acc_slices_ref[1, :])
                 self.det_results.hd_slices.append(np.reshape(hd_slices_ref, (2, 4, -1)))
-
                 b_ref_acc_slices = self.det_results.acc_slices[-1]
                 b_acc_slices = self.det_results.org_acc_slices[-1]
                 # b_ref_acc_slices = acc_slices_ref, (2, 4, -1)
@@ -207,6 +210,19 @@ class ReferralHandler(object):
                                                                                                 test_accuracy_ref[5],
                                                                                                 test_accuracy_ref[6],
                                                                                                 test_accuracy_ref[7]))
+                    # ref_u_map_blobs has shape [2, #slices, num_of_blobs(5)]
+                    errors_es_before = np.sum(self.test_set.referral_stats[0, :, 4, :], axis=0)
+                    errors_es_after = np.sum(self.test_set.referral_stats[0, :, 5, :], axis=0)
+                    err_diffs = errors_es_before - errors_es_after
+                    print("Error diff ES")
+                    print(err_diffs)
+                    print("Dice diffs ES")
+                    print(diffs_es)
+                    print("Largest blob per slice ES")
+                    print(np.max(ref_u_map_blobs[0], axis=1))
+                    # print(ref_u_map_blobs[0, 0])
+                    print(ref_u_map_blobs[0, 6])
+                    print(b_acc_slices[0, 1:, 6])
 
                 self.ref_dice[idx] = np.reshape(test_accuracy_ref, (2, -1))
                 self.ref_hd[idx] = np.reshape(test_hd_ref, (2, -1))
@@ -330,12 +346,14 @@ class ReferralResults(object):
         self.hd = OrderedDict()
         self.dice_slices = OrderedDict()
         self.hd_slices = OrderedDict()
+        self.slice_blobs = OrderedDict()
         self.referral_stats = OrderedDict()
         self.org_dice_slices = OrderedDict()
         self.org_hd_slices = OrderedDict()
         self.org_dice_img = OrderedDict()
         self.org_hd_img = OrderedDict()
         self.img_slice_improvements = OrderedDict()
+        self.img_slice_seg_error_improvements = OrderedDict()
         self.es_mean_slice_improvements = OrderedDict()
         self.ed_mean_slice_improvements = OrderedDict()
         # slice frequencies e.g. #slice=10 with freq=13
@@ -460,6 +478,7 @@ class ReferralResults(object):
         referral_stats = OrderedDict()
         dice_slices = OrderedDict()
         hd_slices = OrderedDict()
+        slice_blobs = OrderedDict()
         org_dice_slices = OrderedDict()
         org_hd_slices = OrderedDict()
         org_acc = OrderedDict()
@@ -469,6 +488,7 @@ class ReferralResults(object):
                 referral_stats[patient_id] = det_result_obj.referral_stats[idx]
                 dice_slices[patient_id] = det_result_obj.acc_slices[idx]
                 hd_slices[patient_id] = det_result_obj.hd_slices[idx]
+                slice_blobs[patient_id] = det_result_obj.umap_blobs_per_slice[idx]
                 org_dice_slices[patient_id] = det_result_obj.org_acc_slices[idx]
                 org_hd_slices[patient_id] = det_result_obj.org_hd_slices[idx]
                 org_acc[patient_id] = det_result_obj.org_acc[idx]
@@ -477,6 +497,7 @@ class ReferralResults(object):
         self.referral_stats[referral_threshold] = referral_stats
         self.dice_slices[referral_threshold] = dice_slices
         self.hd_slices[referral_threshold] = hd_slices
+        self.slice_blobs[referral_threshold] = slice_blobs
         self.org_dice_slices[referral_threshold] = org_dice_slices
         self.org_hd_slices[referral_threshold] = org_hd_slices
         self.org_dice_img[referral_threshold] = org_acc
@@ -490,10 +511,12 @@ class ReferralResults(object):
             mean_slice_stats_ed = OrderedDict()
             # note: slice_stats with key patient_id, will contain numpy array of shape [2, #slices] 0=ES; 1=ED
             img_slice_improvements = OrderedDict()
+            img_slice_seg_error_improvements = OrderedDict()
             num_of_slices_es = OrderedDict()
             num_of_slices_ed = OrderedDict()
             dict_ref_dice_slices = self.dice_slices[referral_threshold]
             dict_org_dice_slices = self.org_dice_slices[referral_threshold]
+            dict_referral_stats = self.referral_stats[referral_threshold]
             for patient_id, dice_slices in dict_ref_dice_slices.iteritems():
                 org_dice_slices = dict_org_dice_slices[patient_id]
                 phase = 0  # ES
@@ -507,6 +530,17 @@ class ReferralResults(object):
                                                                   mean_slice_stats_ed, phase=1)  # ES
                 img_slice_improvements[patient_id] = np.concatenate((np.expand_dims(diffs_es, axis=0),
                                                                     np.expand_dims(diffs_ed, axis=0)))
+                # compute segmentation error reductions
+                patient_referral_stats = dict_referral_stats[patient_id]
+                errors_es_before = np.sum(patient_referral_stats[0, :, 4, :], axis=0)
+                errors_es_after = np.sum(patient_referral_stats[0, :, 5, :], axis=0)
+                errors_ed_before = np.sum(patient_referral_stats[1, :, 4, :], axis=0)
+                errors_ed_after = np.sum(patient_referral_stats[1, :, 5, :], axis=0)
+                seg_errors_diffs_es = errors_es_before - errors_es_after
+                seg_errors_diffs_ed = errors_ed_before - errors_ed_after
+                img_slice_seg_error_improvements[patient_id] = \
+                    np.concatenate((np.expand_dims(seg_errors_diffs_es, axis=0),
+                                    np.expand_dims(seg_errors_diffs_ed, axis=0)))
 
             # average improvements, by dividing through frequency
             for num_slices in slice_stats_es.keys():
@@ -517,6 +551,7 @@ class ReferralResults(object):
             self.es_slice_freqs[referral_threshold] = num_of_slices_es
             self.ed_slice_freqs[referral_threshold] = num_of_slices_ed
             self.img_slice_improvements[referral_threshold] = img_slice_improvements
+            self.img_slice_seg_error_improvements[referral_threshold] = img_slice_seg_error_improvements
 
 
 class ReferralDetailedResults(object):
@@ -528,6 +563,7 @@ class ReferralDetailedResults(object):
         self.org_hd = []
         self.org_acc_slices = []
         self.org_hd_slices = []
+        self.umap_blobs_per_slice = []
         """ 
             Remember: referral_stats has shape [2, 3classes, 13values, #slices]
             1) for positive-only: % referred pixels; 2) % errors reduced; 3) #true labels 4) #pixels above threshold;
