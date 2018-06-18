@@ -24,6 +24,7 @@ from common.acquisition_functions import bald_function
 from plotting.uncertainty_plots import analyze_slices
 from plotting.main_seg_results import plot_seg_erros_uncertainties
 from in_out.load_data import ACDC2017DataSet
+from in_out.patient_classification import Patients
 
 
 class ExperimentHandler(object):
@@ -42,6 +43,7 @@ class ExperimentHandler(object):
         self.saved_model_state_dict = None
         self.ensemble_models = OrderedDict()
         self.test_set_ids = {}
+        self.patients = None
         if logger is None:
             self.logger = create_logger(self.exper, file_handler=use_logfile)
         else:
@@ -703,6 +705,7 @@ class ExperimentHandler(object):
         if len(files) == 0:
             raise ImportError("ERROR - no referral u-maps found in {}".format(search_path))
         self.referral_umaps = OrderedDict()
+        self.ref_map_blobs = OrderedDict()
         for fname in glob.glob(search_path):
             file_basename = os.path.splitext(os.path.basename(fname))[0]
             patientID = file_basename[:file_basename.find("_")]
@@ -716,7 +719,7 @@ class ExperimentHandler(object):
                 # this is the one we use during referral at the moment
                 self.referral_umaps[patientID] = data["filtered_umap"]
             try:
-                self.rep_map_blobs[patientID] = data["filtered_stddev_blobs"]
+                self.ref_map_blobs[patientID] = data["filtered_stddev_blobs"]
             except KeyError:
                 print("WARNING - filtered_stddev_blobs object does not exist for {}".format(patientID))
 
@@ -842,6 +845,16 @@ class ExperimentHandler(object):
                                              model_name=model_name, info_type="uncertainty",
                                              do_save=True, slice_range=None, errors_only=False,
                                              load_base_model_pred_labels=True)
+
+    def get_patients(self):
+        """
+        loading the complete set of patient_ids with the corresponding disease classification
+
+        :return:
+        """
+        patients = Patients()
+        patients.load(self.exper.config.data_dir)
+        self.patients = patients.category
 
     def info(self, message):
         if self.logger is None:

@@ -67,6 +67,10 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
     image = image[:, config.pad_size:-config.pad_size, config.pad_size:-config.pad_size, :]
     image_num = test_set.trans_dict[patient_id]
     image_name = patient_id
+    if exper_handler.patients is None:
+        exper_handler.get_patients()
+    # get disease category
+    patient_category = exper_handler.patients[patient_id]
 
     if test_results is not None:
         pred_labels = test_results.pred_labels[image_num]
@@ -149,8 +153,9 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
     for img_slice in slice_range:
         if referral_threshold > 0.:
             # rank = np.where(sorted_u_value_list == total_uncertainty_per_slice[img_slice])[0][0]
-            main_title = r"Model {} - Test image: {} - slice: {}" "\n" \
-                         r"$\sigma_{{Tr}}={:.2f}$".format(model_name, image_name, img_slice + 1, referral_threshold)
+            main_title = r"Model {} - Test image: {} ({}) - slice: {}" "\n" \
+                         r"$\sigma_{{Tr}}={:.2f}$".format(model_name, image_name, patient_category,
+                                                          img_slice + 1, referral_threshold)
         else:
             main_title = "Model {} - Test image: {} - slice: {} \n".format(model_name, image_name, img_slice + 1)
 
@@ -319,9 +324,9 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
                     structure = np.ones((config.erosion_rank_structure, config.erosion_rank_structure))
                     # structure = np.ones((3, 3))
                     patch_sizes, remaining_patch = detect_larget_umap_areas_slice(mean_slice_stddev, structure)
-                    patch_sizes = patch_sizes[patch_sizes != 0]
-                    remaining_patch = remaining_patch[remaining_patch != 0]
                     if len(patch_sizes) != 0:
+                        patch_sizes = patch_sizes[patch_sizes != 0]
+                        remaining_patch = remaining_patch[remaining_patch != 0]
                         blobs = ", ".join([str(a) for a in patch_sizes])
                         blobs_remaining = ", ".join([str(a) for a in remaining_patch])
                         ax4a.text(20, 20, "u-blobs: {}".format(blobs_remaining), bbox={'facecolor': 'white', 'pad': 18})

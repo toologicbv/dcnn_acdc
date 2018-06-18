@@ -7,6 +7,8 @@ from collections import OrderedDict
 from common.common import load_pred_labels
 from utils.test_handler import ACDC2017TestHandler
 from config.config import config
+from in_out.patient_classification import Patients
+from utils.uncertainty_blobs import UncertaintyBlobStats
 
 
 def get_dice_diffs(diffs, num_of_slices, slice_stats, phase):
@@ -39,14 +41,49 @@ def get_dice_diffs(diffs, num_of_slices, slice_stats, phase):
     return num_of_slices, slice_stats
 
 
+def determine_referral_slices(u_map_blobs, referral_threshold, ublob_stats):
+    """
+
+    :param u_map_blobs: has shape [2, #slices, config.num_of_umap_blobs]
+    :param referral_threshold
+    :param ublob_stats: is an UncertaintyBlobStats object that holds u-statistics for each referral threshold
+    :return:
+    """
+    slice_blobs_es = u_map_blobs[0]  # ES
+    slice_blobs_ed = u_map_blobs[1]  # ED
+    # filter the blob area values, get rid off really tiny ones > 10 and then sum areas of all blobs in a slice
+    slice_blobs_es = (slice_blobs_es * (slice_blobs_es > config.min_size_blob_area)).sum(axis=1)
+    slice_blobs_ed = (slice_blobs_ed * (slice_blobs_ed > config.min_size_blob_area)).sum(axis=1)
+
+    ref_slices_idx_es = np.argwhere(slice_blobs_es >= ublob_stats.min_area_size[referral_threshold][0])[:, 0]
+    ref_slices_idx_ed = np.argwhere(slice_blobs_ed >= ublob_stats.min_area_size[referral_threshold][1])[:, 0]
+
+    return slice_blobs_es, slice_blobs_ed, ref_slices_idx_es, ref_slices_idx_ed
+
+
 class ReferralHandler(object):
 
     def __init__(self, exper_handler, referral_thresholds=None, test_set=None, verbose=False, do_save=False,
-                 num_of_images=None, pos_only=False, aggregate_func="max", patients=None):
+                 num_of_images=None, pos_only=False, aggregate_func="max", patients=None,
+                 do_filter_slices=False):
+        """
+
+        :param exper_handler:
+        :param referral_thresholds:
+        :param test_set:
+        :param verbose:
+        :param do_save:
+        :param num_of_images:
+        :param pos_only:
+        :param aggregate_func:
+        :param patients:
+        :param do_filter_slices: if true we only refer certain slices of an 3D image (mimick clinical workflow)
+        """
         # Overrule!
         if patients is not None:
             num_of_images = None
 
+        self.do_filter_slices = do_filter_slices
         self.exper_handler = exper_handler
         self.aggregate_func = aggregate_func
         self.referral_threshold = None
@@ -91,7 +128,7 @@ class ReferralHandler(object):
         self.dice_mean = None
         self.dice_std = None
         self.outfile = None
-        self.det_results = ReferralDetailedResults(exper_handler)
+        self.det_results = ReferralDetailedResults(exper_handler, do_filter_slices=do_filter_slices)
 
     def __load_pred_labels(self, patient_id):
 
@@ -107,14 +144,29 @@ class ReferralHandler(object):
             self.hd = np.zeros((self.num_of_images, 2, 4))
         if referral_threshold is not None:
             self.referral_thresholds = [referral_threshold]
+        # load patient disease categorization, NOTE: hold ALL patient_ids not just the 25 validation patients
+        # seems odd but is the easiest this way
+        self.exper_handler.get_patients()
+        # get UncertaintyBlobStats object that is essential for slice referral (contains min_area_size) used in
+        # procedure "determine_referral_slices"
+        if self.do_filter_slices:
+            path_to_root_fold = os.path.join(self.exper_handler.exper.config.root_dir, config.data_dir)
+            ublob_stats = UncertaintyBlobStats.load(path_to_root_fold)
+            ublob_stats.set_min_area_size(filter_type="M")
+            self.det_results.ublob_stats = ublob_stats
+            # print("Min are size ", ublob_stats.min_area_size)
+        else:
+            ublob_stats = None
 
         for referral_threshold in self.referral_thresholds:
             self.referral_threshold = referral_threshold
             self.str_referral_threshold = str(referral_threshold).replace(".", "_")
             print("INFO - Running evaluation with referral for threshold {}"
-                  " (pos-only={})".format(self.str_referral_threshold, self.pos_only))
+                  " (do-filter-slices={})".format(self.str_referral_threshold, self.do_filter_slices))
             for idx, image_num in enumerate(self.image_range):
                 patient_id = self.test_set.img_file_names[image_num]
+                # disease classification NOR, ARV...
+                patient_cat = self.exper_handler.patients[patient_id]
                 self.det_results.patient_ids.append(patient_id)
                 pred_labels = self.__load_pred_labels(patient_id)
                 # when we call method test_set.filter_referrals which will alter the b_labels object
@@ -152,10 +204,22 @@ class ReferralHandler(object):
                                                          aggregate_func=self.aggregate_func)
                 # generate prediction with referral OF UNCERTAIN, POSITIVES ONLY
                 ref_u_map = self.exper_handler.referral_umaps[patient_id]
+                # get original uncertainty blob values for all slices ES/ED. These will be essential for referral
+                # in case we do this based on slice filtering...
                 ref_u_map_blobs = self.exper_handler.ref_map_blobs[patient_id]
+                # filter uncertainty blobs in slices
+                if self.do_filter_slices:
+                    slice_blobs_es, slice_blobs_ed, ref_slices_idx_es, ref_slices_idx_ed = \
+                        determine_referral_slices(ref_u_map_blobs, referral_threshold, ublob_stats)
+                    print(ref_slices_idx_es + 1)
+                    print(ref_slices_idx_ed + 1)
+                    arr_slice_referrals = [ref_slices_idx_es, ref_slices_idx_ed]
+                else:
+                    arr_slice_referrals = None
                 self.test_set.b_pred_labels = copy.deepcopy(pred_labels)
                 self.test_set.filter_referrals(u_maps=ref_u_map, ref_positives_only=self.pos_only,
-                                               referral_threshold=referral_threshold)
+                                               referral_threshold=referral_threshold,
+                                               arr_slice_referrals=arr_slice_referrals)
                 # collect original accuracy/hd on slices for predictions without referral
                 # Note: because the self.test_set.property alters each iteration (image) but the object (test_set)
                 # is always the same, we need to make a deepcopy of the numpy array, otherwise we end up with the
@@ -165,7 +229,7 @@ class ReferralHandler(object):
                 self.det_results.referral_stats.append(copy.deepcopy(self.test_set.referral_stats))
                 # ref_u_map_blobs has shape [2, #slices, config.num_of_umap_blobs (5)]
                 self.det_results.umap_blobs_per_slice.append(ref_u_map_blobs)
-                print(self.det_results.umap_blobs_per_slice[-1].astype(np.int))
+                # print(self.det_results.umap_blobs_per_slice[-1].astype(np.int))
                 # get referral accuracy & hausdorff
                 # IMPORTANT: we don't filter the referred labels a 2nd time, because we encountered undesirable
                 # problems doing that (somehow it happened that we lost connectivity to upper/lower slices
@@ -335,6 +399,7 @@ class ReferralResults(object):
             self.exper_dict = exper_dict
         self.num_of_folds = float(len(self.exper_dict))
         self.fold = fold
+        self.patients = None
         self.search_prefix = "ref_test_results_25imgs*"
         self.print_results = print_results
         self.print_latex_string = print_latex_string
@@ -375,6 +440,9 @@ class ReferralResults(object):
             overall_hd, std_hd = np.zeros((2, 4)), np.zeros((2, 4))
             results = []
             for fold_id, exper_id in self.exper_dict.iteritems():
+                # the patient disease classification if we have not done so already
+                if self.patients is None:
+                    self._get_patient_classification()
                 input_dir = os.path.join(self.log_dir, os.path.join(exper_id, config.stats_path))
                 if self.pos_only:
                     search_path = os.path.join(input_dir, self.search_prefix + "utr" + str_referral_threshold +
@@ -553,10 +621,19 @@ class ReferralResults(object):
             self.img_slice_improvements[referral_threshold] = img_slice_improvements
             self.img_slice_seg_error_improvements[referral_threshold] = img_slice_seg_error_improvements
 
+    def _get_patient_classification(self):
+        p = Patients()
+        p.load(config.data_dir)
+        self.patients = p.category
+
 
 class ReferralDetailedResults(object):
 
-    def __init__(self, exper_handler):
+    """
+        We save one of these objects for each referral threshold
+    """
+
+    def __init__(self, exper_handler, do_filter_slices=False):
         self.acc_slices = []
         self.hd_slices = []
         self.org_acc = []
@@ -575,6 +652,13 @@ class ReferralDetailedResults(object):
         self.fold_id = exper_handler.exper.run_args.fold_ids[0]
         self.dices = []
         self.hds = []
+        self.total_blob_uncertainty_es = {'NOR': [0, 0], 'DCM': [0, 0], 'MINF': [0, 0], 'ARV': [0, 0], 'HCM': [0, 0]}
+        self.total_num_of_slices = {'NOR': 0, 'DCM': 0, 'MINF': 0, 'ARV': 0, 'HCM': 0}
+        self.num_of_slices_referred = {'NOR': [0, 0], 'DCM': [0, 0], 'MINF': [0, 0], 'ARV': [0, 0], 'HCM': [0, 0]}
+        self.patient_slices_referred = {}
+        self.ublob_stats = None  # UncertaintyBlobStats object. holds important property min_area_size
+        # which is calculated based on property filter_type can be M=mean; MD=median or MS=mean+stddev
+        self.do_filter_slices = do_filter_slices
         self.save_output_dir = os.path.join(exper_handler.exper.config.root_dir,
                                             os.path.join(exper_handler.exper.output_dir,
                                                          exper_handler.exper.config.stats_path))

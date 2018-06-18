@@ -521,7 +521,7 @@ class ACDC2017TestHandler(object):
                                   num_of_objects])
 
     def filter_referrals(self, u_maps, referral_threshold=0., ref_positives_only=False,
-                         apply_to_cls=[1, 2, 3], verbose=False):
+                         apply_to_cls=[1, 2, 3], arr_slice_referrals=None, verbose=False):
         """
         Based on the uncertainty maps (probably produced before inference time) we "refer" pixels with
         high uncertainty (above referral_threshold) to an expert who corrects the pixels. Hence we compute
@@ -533,6 +533,9 @@ class ACDC2017TestHandler(object):
         :param apply_to_cls: array specifying the classes to which referral should be applied
         :param ref_positives_only: we only refer pixels with high uncertainties that we predicted as positive
                 i.e. belonging to the specific class
+        :param arr_slice_referrals: is an array of two arrays (ES/ED) or NONE if we refer all slices.
+               If not NONE, we refer only slices of ES/ED which indices are contained in the arrays.
+               Is only applied for pred_labels object, for the rest all statistics are computed for all slices.
         :param verbose:
         :return:
         """
@@ -550,6 +553,9 @@ class ACDC2017TestHandler(object):
             # set all uncertainties (pixels) to zero where we didn't predict a positive label
             u_maps[0][ref_positive_mask[0]] = 0
             u_maps[1][ref_positive_mask[1]] = 0
+        if arr_slice_referrals is not None:
+            refer_slices_es = arr_slice_referrals[0]
+            refer_slices_ed = arr_slice_referrals[1]
 
         total_pixels_positive, total_pixels_referred = 0, 0
         # we call this method during referral procedure i.e. without calling first the batch_generator method
@@ -626,11 +632,29 @@ class ACDC2017TestHandler(object):
                     slice_total_pixels_ref_ed += num_pixel_above_threshold_ed
                     # temporary, number of all pixels equal to 0
                     # IMPORTANT: this is the EXPERT, setting the high uncertainty pixels to the ground truth labels
+                    if slice_id not in refer_slices_es:
+                        # we don't refer this slice, hence we compute everything as though we would refer
+                        # but then set the previous predicted labels back. Looks awkward but we want the refer
+                        # statistics for all slices for evaluation purposes.
+                        saved_slice_pred_labels_es = copy.deepcopy(pred_labels_es[cls, :, :, slice_id])
+                    if slice_id not in refer_slices_ed:
+                        saved_slice_pred_labels_ed = copy.deepcopy(pred_labels_ed[cls, :, :, slice_id])
                     pred_labels_es[cls, uncertain_es_idx, slice_id] = true_labels_cls_es[uncertain_es_idx]
                     pred_labels_ed[cls, uncertain_ed_idx, slice_id] = true_labels_cls_ed[uncertain_ed_idx]
                     errors_es_filtered = np.count_nonzero(pred_labels_cls_es != true_labels_cls_es)
                     errors_ed_filtered = np.count_nonzero(pred_labels_cls_ed != true_labels_cls_ed)
-
+                    if slice_id not in refer_slices_es:
+                        pred_labels_es[cls, :, :, slice_id] = saved_slice_pred_labels_es
+                    else:
+                        if verbose:
+                            print("ES: refer slice {}. #improvements {}".format(slice_id + 1,
+                                                                                errors_es-errors_es_filtered))
+                    if slice_id not in refer_slices_ed:
+                        pred_labels_ed[cls, :, :, slice_id] = saved_slice_pred_labels_ed
+                    else:
+                        if verbose:
+                            print("ED: refer slice {}. #improvements {}".format(slice_id + 1,
+                                                                                errors_ed-errors_ed_filtered))
                     # how many seg-errors did we improve (can't be negative)
                     # print("Error before/after {}  {}".format(errors_es, errors_es_filtered))
                     try:
@@ -712,9 +736,8 @@ class ACDC2017TestHandler(object):
             self.b_ref_acc_slices[0, :, slice_id] = slice_acc_after[:self.num_of_classes]  # ES
             self.b_ref_acc_slices[1, :, slice_id] = slice_acc_after[self.num_of_classes:]  # ED
 
-        # although this shouldn't be necessary because the object pred_labels_cls_es are no copies
-        # of the original objects, hence they will alter by reference, but for clarity we perform the
-        # action anyway.
+        # pred_labels_es and ed are deepcopies of self.b_pred_labels. we changed them based on the uncertainty
+        # maps. in the final step we "copy" the adjusted pred_labels_es/ed back
         self.b_pred_labels[:self.num_of_classes, :, :, :] = pred_labels_es
         self.b_pred_labels[self.num_of_classes:, :, :, :] = pred_labels_ed
         # referral_stats with shape [2, 4classes, 12, #slices]. We average over slices

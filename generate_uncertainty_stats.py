@@ -30,7 +30,7 @@ def do_parse_args():
     parser.add_argument('--cuda', action='store_true', default=False, help='use GPU')
     parser.add_argument('--reuse_maps', action='store_true', default=False, help='use existing U-maps')
     parser.add_argument('--save_actual_maps', action='store_true', default=False, help='save detailed u-maps')
-
+    parser.add_argument('--do_filter_slices', action='store_true', default=False, help='filter slices for referral')
     parser.add_argument('--referral_thresholds', nargs='+', default=0.1, help="Referral thresholds used for figures.")
     parser.add_argument('--verbose', action='store_true', default=False, help='show debug messages')
     parser.add_argument('--generate_plots', action='store_true', default=False, help='generate plots for analysis')
@@ -136,7 +136,7 @@ def main():
         # Refer all uncertain pixels
         ref_handler = ReferralHandler(exper_handler, test_set=ref_test_set,
                                       referral_thresholds=args.referral_thresholds,
-                                      aggregate_func=args.aggregate_func,
+                                      aggregate_func=args.aggregate_func, do_filter_slices=args.do_filter_slices,
                                       verbose=True, do_save=True, num_of_images=None, pos_only=False,
                                       patients=None)  # ["patient005", "patient062", "patient045"])
         ref_handler.test(without_referral=True, verbose=False)

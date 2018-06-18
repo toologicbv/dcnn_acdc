@@ -75,9 +75,10 @@ class BaseConfig(object):
         # padding to left and right of the image in order to reach the final image size for classification
         self.pad_size = 65
 
-        #
+        # config values for uncertainty map blob filtering
         self.erosion_rank_structure = 3
         self.num_of_umap_blobs = 5
+        self.min_size_blob_area = 10
 
         # class labels
         self.class_lbl_background = 0
