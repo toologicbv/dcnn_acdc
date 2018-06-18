@@ -1,6 +1,7 @@
 import os
 import dill
 import numpy as np
+from tqdm import tqdm
 from config.config import config
 from utils.experiment import ExperimentHandler
 
@@ -8,7 +9,7 @@ from utils.experiment import ExperimentHandler
 class UncertaintyBlobStats(object):
 
     """
-        Usage:
+        Usage when CREATING a new object:
         referral_thresholds = [0.1, 0.12, 0.14, 0.16]
         ublob = UncertaintyBlobStats(exper_dict, referral_thresholds)
     """
@@ -16,7 +17,7 @@ class UncertaintyBlobStats(object):
     epsilon_blob_area = 10
     save_file_name = "UncertaintyBlobStats.dll"
 
-    def __init__(self, exper_dict, referral_thresholds, filter_type="MS", root_dir=None):
+    def __init__(self, exper_dict, referral_thresholds, filter_type="M", root_dir=None):
         self.exper_dict = exper_dict
         self.referral_thresholds = referral_thresholds
         if root_dir is None:
@@ -30,6 +31,7 @@ class UncertaintyBlobStats(object):
         self.median = {}
         self.mean = {}
         self.std = {}
+        self.statistics_per_group = {'NOR': [], 'DCM': [], 'MINF': [], 'ARV': [], 'HCM': []}
         self.min_area_size = {}
         # first load the experiment handlers
         self._load_exper_handlers()
@@ -74,30 +76,57 @@ class UncertaintyBlobStats(object):
 
         :return:
         """
-        for referral_threshold in self.referral_thresholds:
+        patients = None
+        for referral_threshold in tqdm(self.referral_thresholds):
             blob_values_es = []
             blob_values_ed = []
+            statistics_per_group = {'NOR': [], 'DCM': [], 'MINF': [], 'ARV': [], 'HCM': []}
+            blob_values_per_group_es = {'NOR': [], 'DCM': [], 'MINF': [], 'ARV': [], 'HCM': []}
+            blob_values_per_group_ed = {'NOR': [], 'DCM': [], 'MINF': [], 'ARV': [], 'HCM': []}
             total_blobs_es = 0
             total_blobs_ed = 0
             for exper_handler in self.exper_handlers.values():
                 exper_handler.get_referral_maps(referral_threshold, per_class=False, )
+                if patients is None:
+                    exper_handler.get_patients()
+                    patients = exper_handler.patients
                 filtered_u_maps = exper_handler.referral_umaps
                 for patient_id, u_map in filtered_u_maps.iteritems():
+                    patient_gp = patients[patient_id]
                     u_blobs = exper_handler.ref_map_blobs[patient_id]
                     slice_blobs_es = u_blobs[0]
                     slice_blobs_ed = u_blobs[1]
                     total_blobs_es += np.count_nonzero(slice_blobs_es)
                     total_blobs_ed += np.count_nonzero(slice_blobs_ed)
-
                     blob_values_es.append((slice_blobs_es * (slice_blobs_es > UncertaintyBlobStats.epsilon_blob_area)).sum(axis=1))
                     blob_values_ed.append((slice_blobs_ed * (slice_blobs_ed > UncertaintyBlobStats.epsilon_blob_area)).sum(axis=1))
+                    blob_values_per_group_es[patient_gp].extend(blob_values_es[-1])
+                    blob_values_per_group_ed[patient_gp].extend(blob_values_ed[-1])
 
             blob_values_es = np.concatenate(blob_values_es, axis=0)
             blob_values_ed = np.concatenate(blob_values_ed, axis=0)
             self.median[referral_threshold] = [np.median(np.array(blob_values_es)), np.median(np.array(blob_values_ed))]
             self.mean[referral_threshold] = [np.mean(np.array(blob_values_es)), np.mean(np.array(blob_values_ed))]
             self.std[referral_threshold] = [np.std(np.array(blob_values_es)), np.std(np.array(blob_values_ed))]
+            # compute statistics per patient group
+            for pgroup, blobs_es in blob_values_per_group_es.iteritems():
+                blobs_ed = blob_values_per_group_ed[pgroup]
+                blobs_es = np.array(blobs_es)
+                blobs_ed = np.array(blobs_ed)
+                mean_es, median_es, std_es = np.mean(blobs_es), np.median(blobs_es), np.std(blobs_es)
+                mean_ed, median_ed, std_ed = np.mean(blobs_ed), np.median(blobs_ed), np.std(blobs_ed)
+                statistics_per_group[pgroup] = np.array([[mean_es, median_es, std_es],
+                                                              [mean_ed, median_ed, std_ed]])
+            # dictionary (referral_threshold) of dictionaries (patient groups)
+            self.statistics_per_group[referral_threshold] = statistics_per_group
         self.set_min_area_size()
+        del blob_values_es
+        del total_blobs_ed
+        del patients
+        del blob_values_per_group_ed
+        del blob_values_per_group_es
+        del statistics_per_group
+        self.exper_handlers = []
         self.save()
 
     def save(self):

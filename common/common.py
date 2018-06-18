@@ -205,16 +205,8 @@ def prepare_referrals(image_name, referral_threshold, umap_dir, pred_labels_inpu
         referral_pred_labels = load_pred_labels(search_path)
     except IOError:
         referral_pred_labels = None
-    referral_threshold += "_pos_only"
-    # predicted labels we obtained after referral with this threshold
-    search_path = os.path.join(pred_labels_input_dir,
-                               image_name + "_filtered_pred_labels_mc" + referral_threshold + ".npz")
-    try:
-        referral_pred_labels_pos_only = load_pred_labels(search_path)
-    except IOError:
-        referral_pred_labels_pos_only = None
 
-    return filtered_cls_std_map, filtered_std_map, referral_pred_labels_pos_only, referral_pred_labels
+    return filtered_cls_std_map, filtered_std_map, referral_pred_labels
 
 
 def load_referral_umap(search_path, per_class=True):
@@ -235,7 +227,7 @@ def load_referral_umap(search_path, per_class=True):
         return data["filtered_umap"]
 
 
-def load_pred_labels(search_path):
+def load_pred_labels(search_path, get_slice_referral=False):
 
     files = glob.glob(search_path)
     if len(files) == 0:
@@ -253,7 +245,16 @@ def load_pred_labels(search_path):
         # for backward compatibility
         pred_labels = data["filtered_pred_label"]
 
-    return pred_labels
+    if get_slice_referral:
+        try:
+            referred_slices = data["referred_slices"]
+        except KeyError:
+            print("WARNING - common.load_pred_labels - Archive does not contain object referred_slices")
+
+    if get_slice_referral:
+        return pred_labels, referred_slices
+    else:
+        return pred_labels
 
 
 def detect_seg_contours(img, lbls, cls_offset):

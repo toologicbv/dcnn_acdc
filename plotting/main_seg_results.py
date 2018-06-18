@@ -4,8 +4,6 @@ from pylab import MaxNLocator
 import numpy as np
 import os
 import copy
-from utils.post_processing import detect_larget_umap_areas_slice
-from scipy.ndimage.morphology import generate_binary_structure, binary_erosion
 
 from matplotlib import cm
 from common.common import to_rgb1a, set_error_pixels, create_mask_uncertainties, detect_seg_contours
@@ -15,7 +13,7 @@ from common.common import get_exper_objects
 
 
 def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=None, width=16,
-                                 test_results=None,
+                                 test_results=None, slice_filter_type=None,
                                  info_type=None, referral_threshold=0., do_show=False, model_name="",
                                  do_save=False, slice_range=None, errors_only=False,
                                  load_base_model_pred_labels=False):
@@ -23,7 +21,8 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
 
     :param patient_id:
     :param width:
-    :param height:
+    :param slice_filter_type: None or M, MD, MS. If not None implies that we referred only specific slices
+            during referral.
     :param test_set:
     :param exper_handler:
     :param info_type: default is None. Only used if we want extra histogram figures related to softmax probabilities
@@ -69,6 +68,19 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
     image_name = patient_id
     if exper_handler.patients is None:
         exper_handler.get_patients()
+    if exper_handler.referral_umaps is None:
+        exper_handler.get_referral_maps(referral_threshold, per_class=False, aggregate_func="max")
+    # get the matrix of shape [2, #slices] that indicates which slices were referred for this image (ES/ED)
+    if exper_handler.referred_slices is None:
+        referred_slices = exper_handler.get_referred_slices(referral_threshold, patient_id=patient_id,
+                                                            slice_filter_type=slice_filter_type)
+    elif patient_id in exper_handler.referred_slices.keys():
+        referred_slices = exper_handler.referred_slices[patient_id]
+    else:
+        referred_slices = exper_handler.get_referred_slices(referral_threshold, patient_id=patient_id,
+                                                                slice_filter_type=slice_filter_type)
+
+    ref_u_map_blobs = exper_handler.ref_map_blobs[patient_id]
     # get disease category
     patient_category = exper_handler.patients[patient_id]
 
@@ -92,7 +104,9 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
     columns = half_classes
     # ------------------------------- Referral preparations --------------------------------------
     if referral_threshold != 0.:
-        filtered_cls_std_map, filtered_std_map, referral_pred_labels_pos_only, referral_pred_labels = \
+        # formerly we used object "referral_pred_labels_filter_slices" where we only referred positive segmented voxes
+        # we dropped this functionality but haven't eliminated all references to it. hence we set it here to None
+        filtered_cls_std_map, filtered_std_map, referral_pred_labels = \
             prepare_referrals(image_name, referral_threshold, umap_dir, pred_labels_input_dir)
     else:
         # Normal non-referral functionality
@@ -110,18 +124,19 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
     else:
         pred_labels_base_model = None
     # ---------------------------- If REFERRAL and we only want to refer pos-labels we filter here ------------
-    if referral_threshold != 0.:
-        mask = pred_labels == 0
-        overall_mask = create_mask_uncertainties(pred_labels)
-        overall_mask_es = overall_mask[0]
-        overall_mask_ed = overall_mask[1]
-        filtered_std_map_pos_only = copy.deepcopy(filtered_std_map)
-        filtered_cls_std_map_pos_only = copy.deepcopy(filtered_cls_std_map)
-        filtered_std_map_pos_only[0][overall_mask_es] = 0.
-        filtered_std_map_pos_only[1][overall_mask_ed] = 0.
-        filtered_cls_std_map_pos_only[mask] = 0
-    else:
-        filtered_std_map_pos_only = None
+    # if referral_threshold != 0.:
+    #     mask = pred_labels == 0
+    #     overall_mask = create_mask_uncertainties(pred_labels)
+    #     overall_mask_es = overall_mask[0]
+    #     overall_mask_ed = overall_mask[1]
+    #     filtered_std_map_pos_only = copy.deepcopy(filtered_std_map)
+    #     filtered_cls_std_map_pos_only = copy.deepcopy(filtered_cls_std_map)
+    #     filtered_std_map_pos_only[0][overall_mask_es] = 0.
+    #     filtered_std_map_pos_only[1][overall_mask_ed] = 0.
+    #     filtered_cls_std_map_pos_only[mask] = 0
+    # else:
+    # we don't use this functionality (referral of pos-only voxes) anymore
+    filtered_std_map_pos_only = None
 
     if referral_threshold != 0:
         filtered_stddev_bin_edges, filtered_stddev_bin_values = \
@@ -247,30 +262,37 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
             # ------------------- Next two figures are only plotted in case of REFERRAL -----------------------
             # show the remaining seg-errors after referral only positive uncertain pixels and another to the right
             # with remaining seg-errors after referral of all uncertain pixels
-            if referral_pred_labels_pos_only is not None:
+            if not errors_only:
+                # plot unfiltered or filtered u-map (for all uncertain pixels) to the right of the u-map
+                # We plot the filtered u-map WHICH ALL UNCERTAIN PIXELS not just the positive-ones only
                 row += 2
-                rgb_img = copy.deepcopy(rgb_img_saved)
-                slice_pred_labels_referred_pos_only = referral_pred_labels_pos_only[:, :, :, img_slice]
-                ax_pred_ref = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
-                rgb_img_ref_pred_pos_only, cls_errors_ref_pos_only = \
-                    set_error_pixels(rgb_img, slice_pred_labels_referred_pos_only, slice_true_labels, cls_offset)
+                mean_slice_stddev = filtered_std_map[phase, :, :, img_slice]
+                total_uncertainty = np.count_nonzero(mean_slice_stddev)
+                sub_title = "Slice {} {}: Filtered U-map (#u={})".format(img_slice + 1, str_phase,
+                                                                                    total_uncertainty)
+                ax4a = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
+                if referral_threshold != 0:
+                    u_map_blobs_after_erosion = ref_u_map_blobs[phase, img_slice]
+                    u_map_blobs_after_erosion = u_map_blobs_after_erosion[u_map_blobs_after_erosion != 0]
+                    # patch_sizes, remaining_patch = detect_largest_umap_areas_slice(mean_slice_stddev, structure)
+                    print(u_map_blobs_after_erosion)
+                    if len(u_map_blobs_after_erosion) != 0:
+                        blobs_remaining = ", ".join([str(a) for a in u_map_blobs_after_erosion])
+                        ax4a.text(20, 20, "u-blobs: {}".format(blobs_remaining), bbox={'facecolor': 'white', 'pad': 18})
 
-                ax_pred_ref.text(20, 20, 'yellow: RV ({}), blue: Myo ({}), '
-                                         'red: LV ({}), green: Myo/LV ({})'.format(cls_errors_ref_pos_only[1],
-                                                                                   cls_errors_ref_pos_only[2],
-                                                                                   cls_errors_ref_pos_only[3],
-                                                                                   cls_errors_ref_pos_only[0]),
-                                 bbox={'facecolor': 'white', 'pad': 18})
-                ax_pred_ref.imshow(rgb_img_ref_pred_pos_only, interpolation='nearest')
-                ax_pred_ref.set_aspect('auto')
-                ax_pred_ref.set_title("Prediction errors after referral (pos-only)", **config.title_font_medium)
+                max_mean_stddev = np.max(mean_slice_stddev)
+                ax4a.imshow(img, cmap=cm.gray)
+                ax4aplot = ax4a.imshow(mean_slice_stddev, cmap=mycmap,
+                                       vmin=0., vmax=max_mean_stddev)
+                ax4a.set_aspect('auto')
+                fig.colorbar(ax4aplot, ax=ax4a, fraction=0.046, pad=0.04)
+                ax4a.set_title(sub_title, **config.title_font_small)
                 plt.axis('off')
 
             if referral_pred_labels is not None:
                 rgb_img = copy.deepcopy(rgb_img_saved)
                 slice_pred_labels_referred = referral_pred_labels[:, :, :, img_slice]
-                if referral_pred_labels_pos_only is None:
-                    row += 2
+                slice_referred = referred_slices[phase, img_slice]
                 ax_pred_ref = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
                 rgb_img_ref_pred, cls_errors_ref = set_error_pixels(rgb_img, slice_pred_labels_referred,
                                                                     slice_true_labels, cls_offset)
@@ -281,7 +303,8 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
                                  bbox={'facecolor': 'white', 'pad': 18})
                 ax_pred_ref.imshow(rgb_img_ref_pred, interpolation='nearest')
                 ax_pred_ref.set_aspect('auto')
-                ax_pred_ref.set_title("Prediction errors after referral (all)", **config.title_font_medium)
+                ax_pred_ref.set_title("Prediction errors after referral (referred={})".format(slice_referred),
+                                      **config.title_font_medium)
                 plt.axis('off')
             # ARE WE SHOWING THE FILTERED (Positive-only) HEAT MAP?
             if filtered_std_map_pos_only is not None:
@@ -301,46 +324,6 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
                               **config.title_font_small)
                 plt.axis('off')
 
-            if not errors_only:
-                # plot unfiltered or filtered u-map (for all uncertain pixels) to the right of the u-map
-                # see "filtered_std_map_pos_only is not None" above
-                # get the stddev value for the first 4 or last 4 classes (ES/ED) and average over classes (dim0)
-                if filtered_std_map_pos_only is None:
-                    # means referral_threshold is None!
-                    row += 2
-                    sub_title = "Slice {} {}: MEAN stddev-values".format(img_slice + 1, str_phase)
-                    if phase == 0:
-                        mean_slice_stddev = np.mean(slice_stddev[:half_classes], axis=0)
-                    else:
-                        mean_slice_stddev = np.mean(slice_stddev[half_classes:], axis=0)
-                else:
-                    # We plot the filtered u-map WHICH ALL UNCERTAIN PIXELS not just the positive-ones only
-                    mean_slice_stddev = filtered_std_map[phase, :, :, img_slice]
-                    total_uncertainty = np.count_nonzero(mean_slice_stddev)
-                    sub_title = "Slice {} {}: Filtered U-map (#u={})".format(img_slice + 1, str_phase,
-                                                                                    total_uncertainty)
-                ax4a = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
-                if referral_threshold != 0:
-                    structure = np.ones((config.erosion_rank_structure, config.erosion_rank_structure))
-                    # structure = np.ones((3, 3))
-                    patch_sizes, remaining_patch = detect_larget_umap_areas_slice(mean_slice_stddev, structure)
-                    if len(patch_sizes) != 0:
-                        patch_sizes = patch_sizes[patch_sizes != 0]
-                        remaining_patch = remaining_patch[remaining_patch != 0]
-                        blobs = ", ".join([str(a) for a in patch_sizes])
-                        blobs_remaining = ", ".join([str(a) for a in remaining_patch])
-                        ax4a.text(20, 20, "u-blobs: {}".format(blobs_remaining), bbox={'facecolor': 'white', 'pad': 18})
-                        print(blobs)
-                        print(remaining_patch)
-
-                max_mean_stddev = np.max(mean_slice_stddev)
-                ax4a.imshow(img, cmap=cm.gray)
-                ax4aplot = ax4a.imshow(mean_slice_stddev, cmap=mycmap,
-                                       vmin=0., vmax=max_mean_stddev)
-                ax4a.set_aspect('auto')
-                fig.colorbar(ax4aplot, ax=ax4a, fraction=0.046, pad=0.04)
-                ax4a.set_title(sub_title, **config.title_font_small)
-                plt.axis('off')
 
             if info_type is not None:
                 # Last two rows: histogram of uncertainties (pos-only or raw ones). Covers 2 rows/columns

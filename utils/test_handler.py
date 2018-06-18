@@ -556,6 +556,10 @@ class ACDC2017TestHandler(object):
         if arr_slice_referrals is not None:
             refer_slices_es = arr_slice_referrals[0]
             refer_slices_ed = arr_slice_referrals[1]
+        else:
+            slice_range = np.arange(num_of_slices)
+            refer_slices_es = slice_range
+            refer_slices_ed = slice_range
 
         total_pixels_positive, total_pixels_referred = 0, 0
         # we call this method during referral procedure i.e. without calling first the batch_generator method
@@ -632,28 +636,17 @@ class ACDC2017TestHandler(object):
                     slice_total_pixels_ref_ed += num_pixel_above_threshold_ed
                     # temporary, number of all pixels equal to 0
                     # IMPORTANT: this is the EXPERT, setting the high uncertainty pixels to the ground truth labels
-                    if slice_id not in refer_slices_es:
-                        # we don't refer this slice, hence we compute everything as though we would refer
-                        # but then set the previous predicted labels back. Looks awkward but we want the refer
-                        # statistics for all slices for evaluation purposes.
-                        saved_slice_pred_labels_es = copy.deepcopy(pred_labels_es[cls, :, :, slice_id])
-                    if slice_id not in refer_slices_ed:
-                        saved_slice_pred_labels_ed = copy.deepcopy(pred_labels_ed[cls, :, :, slice_id])
-                    pred_labels_es[cls, uncertain_es_idx, slice_id] = true_labels_cls_es[uncertain_es_idx]
-                    pred_labels_ed[cls, uncertain_ed_idx, slice_id] = true_labels_cls_ed[uncertain_ed_idx]
+                    if slice_id in refer_slices_es:
+                        pred_labels_es[cls, uncertain_es_idx, slice_id] = true_labels_cls_es[uncertain_es_idx]
+                    if slice_id in refer_slices_ed:
+                        pred_labels_ed[cls, uncertain_ed_idx, slice_id] = true_labels_cls_ed[uncertain_ed_idx]
                     errors_es_filtered = np.count_nonzero(pred_labels_cls_es != true_labels_cls_es)
                     errors_ed_filtered = np.count_nonzero(pred_labels_cls_ed != true_labels_cls_ed)
-                    if slice_id not in refer_slices_es:
-                        pred_labels_es[cls, :, :, slice_id] = saved_slice_pred_labels_es
-                    else:
-                        if verbose:
-                            print("ES: refer slice {}. #improvements {}".format(slice_id + 1,
+                    if verbose:
+                        print("ES: refer slice {}. #improvements {}".format(slice_id + 1,
                                                                                 errors_es-errors_es_filtered))
-                    if slice_id not in refer_slices_ed:
-                        pred_labels_ed[cls, :, :, slice_id] = saved_slice_pred_labels_ed
-                    else:
-                        if verbose:
-                            print("ED: refer slice {}. #improvements {}".format(slice_id + 1,
+                    if verbose:
+                        print("ED: refer slice {}. #improvements {}".format(slice_id + 1,
                                                                                 errors_ed-errors_ed_filtered))
                     # how many seg-errors did we improve (can't be negative)
                     # print("Error before/after {}  {}".format(errors_es, errors_es_filtered))
@@ -950,14 +943,15 @@ class ACDC2017TestHandler(object):
         except IOError:
             print("ERROR - Unable to save filtered umaps file {}".format(file_name))
 
-    def save_pred_labels(self, output_dir, u_threshold=0., ref_positives_only=False, mc_dropout=False,
+    def save_pred_labels(self, output_dir, u_threshold=0., mc_dropout=False,
                          forced_save=True):
         """
 
         :param output_dir: is actually the exper_id e.g. 20180503_13_22_18_dcnn_mc_f2p005....
         :param u_threshold: indicating whether we store a filtered label mask...if <> 0
-        :param ref_positives_only: we referred only positive labels (=1) and skipped the uncertain 0-labels
+
         :param mc_dropout: boolean indicating whether we obtained the predictions by means of mc-dropout
+
         :return: saves the predicted label maps for an image. shape [8classes, width, height, #slices]
         """
         pred_lbl_output_dir = os.path.join(self.config.root_dir, os.path.join(output_dir, config.pred_lbl_dir))
@@ -967,8 +961,7 @@ class ACDC2017TestHandler(object):
             u_threshold = str(u_threshold).replace(".", "_")
             if mc_dropout:
                 u_threshold = "_mc" + u_threshold
-            if ref_positives_only:
-                u_threshold += "_pos_only"
+
             file_name = self.b_image_name + "_filtered_pred_labels" + u_threshold + ".npz"
         else:
             if mc_dropout:
@@ -982,6 +975,31 @@ class ACDC2017TestHandler(object):
                 np.savez(file_name, pred_labels=self.b_pred_labels)
             except IOError:
                 print("ERROR - Unable to save predicted labels file {}".format(file_name))
+
+    def save_referred_slices(self, output_dir, referral_threshold=0., slice_filter_type=None,
+                             referred_slices=None):
+        """
+
+        :param output_dir:
+        :param referral_threshold:
+        :param slice_filter_type: if not None (but M,MD or MS) this means we're only referring specific slices
+        :param referred_slices: vector of shape #slices, boolean indicated whether that slice was referred yes/no
+        :return:
+        """
+        output_dir = os.path.join(self.config.root_dir, os.path.join(output_dir, config.pred_lbl_dir))
+        if not os.path.isdir(output_dir):
+            os.makedirs(output_dir)
+        str_referral_threshold = str(referral_threshold).replace(".", "_")
+        str_referral_threshold = "_mc" + str_referral_threshold
+        if slice_filter_type is not None:
+            str_referral_threshold += "_" + slice_filter_type
+        file_name = self.b_image_name + "_referred_slices" + str_referral_threshold + ".npz"
+        file_name = os.path.join(output_dir, file_name)
+        # we don't overwrite existing predictions we obtained with the base model, so the non-referral predictions!
+        try:
+            np.savez(file_name, referred_slices=referred_slices)
+        except IOError:
+            print("ERROR - Unable to save predicted labels file {}".format(file_name))
 
     def save_batch_img_to_files(self, slice_range=None, save_dir=None, wo_padding=True):
 

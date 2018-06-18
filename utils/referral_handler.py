@@ -51,6 +51,7 @@ def determine_referral_slices(u_map_blobs, referral_threshold, ublob_stats):
     """
     slice_blobs_es = u_map_blobs[0]  # ES
     slice_blobs_ed = u_map_blobs[1]  # ED
+
     # filter the blob area values, get rid off really tiny ones > 10 and then sum areas of all blobs in a slice
     slice_blobs_es = (slice_blobs_es * (slice_blobs_es > config.min_size_blob_area)).sum(axis=1)
     slice_blobs_ed = (slice_blobs_ed * (slice_blobs_ed > config.min_size_blob_area)).sum(axis=1)
@@ -61,11 +62,33 @@ def determine_referral_slices(u_map_blobs, referral_threshold, ublob_stats):
     return slice_blobs_es, slice_blobs_ed, ref_slices_idx_es, ref_slices_idx_ed
 
 
+def create_slice_referral_matrix(es_idx, ed_idx, num_of_slices):
+    """
+    based on the 2 input arrays es_idx and ed_idx which contain the indices of the image slices that were
+    or will be referred, we construct 2 boolean vectors of length #slices indicating which slices were referred.
+    Later we'll concatenate those vectors and save them to disk in order to use them during evaluation.
+    :param es_idx:
+    :param ed_idx:
+    :param num_of_slices:
+    :return:
+    """
+    es_referred_slices = np.zeros(num_of_slices).astype(np.bool)
+    ed_referred_slices = np.zeros(num_of_slices).astype(np.bool)
+    if es_idx is not None and len(es_idx) != 0:
+        es_referred_slices[es_idx] = True
+    if ed_idx is not None and len(ed_idx) != 0:
+        ed_referred_slices[ed_idx] = True
+    return es_referred_slices, ed_referred_slices
+
+
+def compute_ref_results_per_pgroup(ref_dice, ref_hd, org_dice, org_hd, patient_cats):
+    pass
+
+
 class ReferralHandler(object):
 
     def __init__(self, exper_handler, referral_thresholds=None, test_set=None, verbose=False, do_save=False,
-                 num_of_images=None, pos_only=False, aggregate_func="max", patients=None,
-                 do_filter_slices=False):
+                 num_of_images=None, aggregate_func="max", patients=None):
         """
 
         :param exper_handler:
@@ -74,16 +97,19 @@ class ReferralHandler(object):
         :param verbose:
         :param do_save:
         :param num_of_images:
-        :param pos_only:
         :param aggregate_func:
         :param patients:
-        :param do_filter_slices: if true we only refer certain slices of an 3D image (mimick clinical workflow)
+
         """
         # Overrule!
         if patients is not None:
             num_of_images = None
 
-        self.do_filter_slices = do_filter_slices
+        # we will set do_filter_slices and referral_only and slice_filter_type later in the test method
+        self.do_filter_slices = False
+        self.slice_filter_type = None
+        self.referral_only = False
+
         self.exper_handler = exper_handler
         self.aggregate_func = aggregate_func
         self.referral_threshold = None
@@ -95,7 +121,7 @@ class ReferralHandler(object):
         self.verbose = verbose
         self.do_save = do_save
         self.test_set = test_set
-        self.pos_only = pos_only
+        self.pos_only = False  # currently not in use!
         if self.test_set is None:
             self.test_set = ACDC2017TestHandler.get_testset_instance(exper_handler.exper.config,
                                                                      exper_handler.exper.run_args.fold_ids,
@@ -128,7 +154,7 @@ class ReferralHandler(object):
         self.dice_mean = None
         self.dice_std = None
         self.outfile = None
-        self.det_results = ReferralDetailedResults(exper_handler, do_filter_slices=do_filter_slices)
+        self.det_results = None
 
     def __load_pred_labels(self, patient_id):
 
@@ -138,12 +164,29 @@ class ReferralHandler(object):
 
         return pred_labels  # , ref_pred_labels
 
-    def test(self, without_referral=False, verbose=False, referral_threshold=None):
-        if without_referral:
-            self.dice = np.zeros((self.num_of_images, 2, 4))
-            self.hd = np.zeros((self.num_of_images, 2, 4))
+    def test(self, referral_threshold=None, referral_only=False, do_filter_slices=False,
+             slice_filter_type=None, verbose=False):
+        """
+
+        :param slice_filter_type: M=mean; MD=median; MS=mean+stddev
+        :param do_filter_slices: if True we only refer certain slices of an 3D image (mimick clinical workflow)
+                                 if False we refer ALL image slices to medical expert (only for comparison)
+        :param verbose:
+        :param referral_threshold:
+        :param referral_only: If True => then we load filtered u-maps from disk otherwise we create them on the fly
+        :return:
+        """
+        self.do_filter_slices = do_filter_slices
+        if self.do_filter_slices:
+            self.slice_filter_type = slice_filter_type
+        else:
+            self.slice_filter_type = None
+        self.det_results = ReferralDetailedResults(self.exper_handler, do_filter_slices=self.do_filter_slices)
+        self.dice = np.zeros((self.num_of_images, 2, 4))
+        self.hd = np.zeros((self.num_of_images, 2, 4))
         if referral_threshold is not None:
             self.referral_thresholds = [referral_threshold]
+
         # load patient disease categorization, NOTE: hold ALL patient_ids not just the 25 validation patients
         # seems odd but is the easiest this way
         self.exper_handler.get_patients()
@@ -152,7 +195,7 @@ class ReferralHandler(object):
         if self.do_filter_slices:
             path_to_root_fold = os.path.join(self.exper_handler.exper.config.root_dir, config.data_dir)
             ublob_stats = UncertaintyBlobStats.load(path_to_root_fold)
-            ublob_stats.set_min_area_size(filter_type="M")
+            ublob_stats.set_min_area_size(filter_type=self.slice_filter_type)
             self.det_results.ublob_stats = ublob_stats
             # print("Min are size ", ublob_stats.min_area_size)
         else:
@@ -160,9 +203,15 @@ class ReferralHandler(object):
 
         for referral_threshold in self.referral_thresholds:
             self.referral_threshold = referral_threshold
+            if referral_only:
+                # load the filtered u-maps from disk
+                self.exper_handler.get_referral_maps(referral_threshold, per_class=False,
+                                                     aggregate_func=self.aggregate_func)
             self.str_referral_threshold = str(referral_threshold).replace(".", "_")
-            print("INFO - Running evaluation with referral for threshold {}"
-                  " (do-filter-slices={})".format(self.str_referral_threshold, self.do_filter_slices))
+            print("INFO - Running evaluation with referral for threshold {} (referral-only={}/"
+                  "do-filter-slices={}/filter_type={})".format(self.str_referral_threshold, referral_only,
+                                                               self.do_filter_slices,
+                                                               self.slice_filter_type))
             for idx, image_num in enumerate(self.image_range):
                 patient_id = self.test_set.img_file_names[image_num]
                 # disease classification NOR, ARV...
@@ -174,6 +223,7 @@ class ReferralHandler(object):
                 # altered as well
                 self.test_set.b_labels = copy.deepcopy(self.test_set.labels[image_num])
                 self.test_set.b_image = self.test_set.images[image_num]
+                num_of_slices = self.test_set.b_image.shape[3]
                 self.test_set.b_image_name = patient_id
                 self.test_set.b_orig_spacing = self.test_set.spacings[image_num]
                 self.test_set.b_new_spacing = tuple((ACDC2017TestHandler.new_voxel_spacing,
@@ -183,25 +233,27 @@ class ReferralHandler(object):
                 self.test_set.b_seg_errors = np.zeros((self.test_set.b_image.shape[3],
                                                        self.test_set.num_of_classes * 2)).astype(np.int)
                 self.test_set.b_pred_labels = pred_labels
-                if without_referral:
-                    test_accuracy, test_hd, seg_errors = \
-                        self.test_set.get_accuracy(compute_hd=True, compute_seg_errors=True, do_filter=False,
-                                                   compute_slice_metrics=False)
-                    self.det_results.org_acc.append(test_accuracy)
-                    self.det_results.org_hd.append(test_hd)
-                    self.dice[idx] = np.reshape(test_accuracy, (2, -1))
-                    self.hd[idx] = np.reshape(test_hd, (2, -1))
-                    if verbose:
-                        print("ES/ED without: {:.2f} {:.2f} {:.2f} / "
-                              "{:.2f} {:.2f} {:.2f} ".format(test_accuracy[1], test_accuracy[2], test_accuracy[3],
-                                                             test_accuracy[5], test_accuracy[6], test_accuracy[7]))
-                    if verbose:
-                        self._show_results(test_accuracy, image_num, msg="wo referral\t")
+                # --------------- get dice and hd for patient without referral (for comparison) ---------------
+                test_accuracy, test_hd, seg_errors = \
+                    self.test_set.get_accuracy(compute_hd=True, compute_seg_errors=True, do_filter=False,
+                                               compute_slice_metrics=False)
+                self.det_results.org_acc.append(test_accuracy)
+                self.det_results.org_hd.append(test_hd)
+                self.dice[idx] = np.reshape(test_accuracy, (2, -1))
+                self.hd[idx] = np.reshape(test_hd, (2, -1))
+                if verbose:
+                    print("ES/ED without: {:.2f} {:.2f} {:.2f} / "
+                          "{:.2f} {:.2f} {:.2f} ".format(test_accuracy[1], test_accuracy[2], test_accuracy[3],
+                                                         test_accuracy[5], test_accuracy[6], test_accuracy[7]))
+                if verbose:
+                    self._show_results(test_accuracy, image_num, msg="wo referral\t")
 
                 # filter original b_labels based on the u-map with this specific referral threshold
-                self.exper_handler.create_filtered_umaps(u_threshold=referral_threshold,
-                                                         patient_id=patient_id,
-                                                         aggregate_func=self.aggregate_func)
+                if not referral_only:
+                    # we need to create the filtered u-maps first
+                    self.exper_handler.create_filtered_umaps(u_threshold=referral_threshold,
+                                                             patient_id=patient_id,
+                                                             aggregate_func=self.aggregate_func)
                 # generate prediction with referral OF UNCERTAIN, POSITIVES ONLY
                 ref_u_map = self.exper_handler.referral_umaps[patient_id]
                 # get original uncertainty blob values for all slices ES/ED. These will be essential for referral
@@ -214,8 +266,15 @@ class ReferralHandler(object):
                     print(ref_slices_idx_es + 1)
                     print(ref_slices_idx_ed + 1)
                     arr_slice_referrals = [ref_slices_idx_es, ref_slices_idx_ed]
+                    referred_slices_es, referred_slices_ed = \
+                        create_slice_referral_matrix(ref_slices_idx_es, ref_slices_idx_ed, num_of_slices)
+                    referred_slices = np.concatenate((np.expand_dims(referred_slices_es, axis=0),
+                                                      np.expand_dims(referred_slices_ed, axis=0)))
                 else:
+                    # we set the slice indices array to None, but in the method filter_referrals we make
+                    # sure we refer ALL SLICES then.
                     arr_slice_referrals = None
+                    referred_slices = None
                 self.test_set.b_pred_labels = copy.deepcopy(pred_labels)
                 self.test_set.filter_referrals(u_maps=ref_u_map, ref_positives_only=self.pos_only,
                                                referral_threshold=referral_threshold,
@@ -237,6 +296,8 @@ class ReferralHandler(object):
                 test_accuracy_ref, test_hd_ref, seg_errors_ref, acc_slices_ref, hd_slices_ref = \
                     self.test_set.get_accuracy(compute_hd=True, compute_seg_errors=True, do_filter=False,
                                                compute_slice_metrics=True)
+                self.det_results.dices.append(np.reshape(test_accuracy_ref, (2, 4, -1)))
+                self.det_results.hds.append(np.reshape(test_hd_ref, (2, 4, -1)))
                 self.det_results.acc_slices.append(np.reshape(acc_slices_ref, (2, 4, -1)))
                 # self.det_results.acc_slices.append(acc_slices_ref)
                 # print("After ES-RV ", acc_slices_ref[1, :])
@@ -263,8 +324,14 @@ class ReferralHandler(object):
                     print("Diffs")
                     print(diffs_ed)
                 # save the referred labels
-                self.test_set.save_pred_labels(self.exper_handler.exper.output_dir, u_threshold=referral_threshold,
-                                               ref_positives_only=self.pos_only, mc_dropout=True)
+                if self.do_filter_slices:
+                    self.test_set.save_referred_slices(self.exper_handler.exper.output_dir,
+                                                       referral_threshold=referral_threshold,
+                                                       slice_filter_type=self.slice_filter_type,
+                                                       referred_slices=referred_slices)
+                else:
+                    self.test_set.save_pred_labels(self.exper_handler.exper.output_dir, u_threshold=referral_threshold,
+                                                   mc_dropout=True)
                 if verbose:
                     print("INFO - {} with referral (pos-only={}) using "
                           "threshold {:.2f}".format(patient_id, self.pos_only, referral_threshold))
@@ -333,8 +400,12 @@ class ReferralHandler(object):
             self.hd_std = np.std(self.hd, axis=0)
 
     def save_results(self):
+
         self.outfile = "ref_test_results_{}imgs_fold{}".format(self.num_of_images, self.fold_id)
-        self.outfile += "_utr{}".format(self.str_referral_threshold)
+        if self.slice_filter_type is not None:
+            self.outfile += "_utr{}_{}".format(self.str_referral_threshold, self.slice_filter_type)
+        else:
+            self.outfile += "_utr{}".format(self.str_referral_threshold)
         if self.pos_only:
             self.outfile += "_pos_only"
         outfile = os.path.join(self.save_output_dir, self.outfile)
@@ -381,7 +452,7 @@ class ReferralResults(object):
     results_dice_wo_referral = np.array([[0, 0.85, 0.88, 0.91], [0, 0.92, 0.86, 0.96]])
 
     def __init__(self, exper_dict, referral_thresholds, pos_only=False, print_latex_string=False,
-                 print_results=True, fold=None):
+                 print_results=True, fold=None, slice_filter_type="M"):
         """
 
         :param exper_dict:
@@ -390,8 +461,10 @@ class ReferralResults(object):
         :param print_latex_string:
         :param print_results:
         :param fold: to load only a specific fold, testing purposes
+        :param slice_filter_type: M=mean; MD=median; MS=mean+stddev
         """
         self.referral_thresholds = referral_thresholds
+        self.slice_filter_type = slice_filter_type
         if fold is not None:
             self.exper_dict = {fold: exper_dict[fold]}
             print("WARNING - only loading results for fold {}".format(fold))
@@ -407,8 +480,13 @@ class ReferralResults(object):
         self.root_dir = config.root_dir
         self.log_dir = os.path.join(self.root_dir, "logs")
         # for all dictionaries the referral_threshold is used as key
+
+        # self.dice and self.hd hold the overall referral results. SO NOT PER PATIENT_ID!
         self.dice = OrderedDict()
         self.hd = OrderedDict()
+        # dictionary (referral threshold) of dictionaries (patient_id). SO EVERYTHING SAVED BASE ON PATIENT_ID!
+        self.ref_dice = OrderedDict()
+        self.ref_hd = OrderedDict()
         self.dice_slices = OrderedDict()
         self.hd_slices = OrderedDict()
         self.slice_blobs = OrderedDict()
@@ -444,16 +522,17 @@ class ReferralResults(object):
                 if self.patients is None:
                     self._get_patient_classification()
                 input_dir = os.path.join(self.log_dir, os.path.join(exper_id, config.stats_path))
+                file_name = self.search_prefix + "utr" + str_referral_threshold + "_" + self.slice_filter_type
                 if self.pos_only:
-                    search_path = os.path.join(input_dir, self.search_prefix + "utr" + str_referral_threshold +
-                                               "_pos_only.npz")
+                    search_path = os.path.join(input_dir, file_name + "_pos_only.npz")
 
                 else:
-                    search_path = os.path.join(input_dir, self.search_prefix + "utr" + str_referral_threshold + ".npz")
+                    search_path = os.path.join(input_dir, file_name + ".npz")
                 filenames = glob.glob(search_path)
                 if len(filenames) != 1:
-                    raise ValueError("ERROR - Found {} result files for this {} experiment (pos-only={}). "
-                                     "Must be 1.".format(len(filenames), exper_id, self.pos_only))
+                    raise ValueError("ERROR - Found {} result files for this {} experiment (pos-only={},"
+                                     "slice-filter={}). Must be 1.".format(len(filenames), exper_id,
+                                                                           self.pos_only, self.slice_filter_type))
                 # ref_dice_results is a list with 2 objects
                 # 1st object: ref_dice_mean has shape [2 (ES/ED), 4 classes],
                 # 2nd object: ref_dice_std has shape [2 (ES/ED), 4 classes]
@@ -551,9 +630,13 @@ class ReferralResults(object):
         org_hd_slices = OrderedDict()
         org_acc = OrderedDict()
         org_hd = OrderedDict()
+        ref_dice = OrderedDict()
+        ref_hd = OrderedDict()
         for det_result_obj in self.detailed_results:
             for idx, patient_id in enumerate(det_result_obj.patient_ids):
                 referral_stats[patient_id] = det_result_obj.referral_stats[idx]
+                ref_dice[patient_id] = det_result_obj.dices[idx]
+                ref_hd[patient_id] = det_result_obj.hds[idx]
                 dice_slices[patient_id] = det_result_obj.acc_slices[idx]
                 hd_slices[patient_id] = det_result_obj.hd_slices[idx]
                 slice_blobs[patient_id] = det_result_obj.umap_blobs_per_slice[idx]
@@ -563,6 +646,8 @@ class ReferralResults(object):
                 org_hd[patient_id] = det_result_obj.org_hd[idx]
         # reset temporary object
         self.referral_stats[referral_threshold] = referral_stats
+        self.ref_dice[referral_threshold] = ref_dice
+        self.ref_hd[referral_threshold] = ref_hd
         self.dice_slices[referral_threshold] = dice_slices
         self.hd_slices[referral_threshold] = hd_slices
         self.slice_blobs[referral_threshold] = slice_blobs

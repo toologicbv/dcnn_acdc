@@ -55,7 +55,7 @@ def filter_connected_components(pred_labels, cls=None, verbose=False, threshold=
     return pred_labels
 
 
-def detect_larget_umap_areas_slice(slice_u_map, structure):
+def detect_largest_umap_areas_slice(slice_u_map, structure):
 
     binary_map = np.zeros(slice_u_map.shape).astype(np.bool)
     mask = slice_u_map != 0

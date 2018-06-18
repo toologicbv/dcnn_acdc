@@ -44,6 +44,7 @@ class ExperimentHandler(object):
         self.ensemble_models = OrderedDict()
         self.test_set_ids = {}
         self.patients = None
+        self.referred_slices = None
         if logger is None:
             self.logger = create_logger(self.exper, file_handler=use_logfile)
         else:
@@ -447,7 +448,7 @@ class ExperimentHandler(object):
             # save the referred labels
             if save_pred_labels:
                 test_set.save_pred_labels(self.exper.output_dir, u_threshold=referral_threshold,
-                                          ref_positives_only=ref_positives_only, mc_dropout=mc_dropout)
+                                          mc_dropout=mc_dropout)
 
         print("Image {} - test loss {:.3f} "
               " dice(RV/Myo/LV):\tES {:.2f}/{:.2f}/{:.2f}\t"
@@ -721,7 +722,42 @@ class ExperimentHandler(object):
             try:
                 self.ref_map_blobs[patientID] = data["filtered_stddev_blobs"]
             except KeyError:
-                print("WARNING - filtered_stddev_blobs object does not exist for {}".format(patientID))
+                print("WARNING - ExperimentHandler.get_referral_maps - filtered_stddev_blobs "
+                      "object does not exist for {}".format(patientID))
+
+    def get_referred_slices(self, referral_threshold, slice_filter_type=None, patient_id=None):
+
+        input_dir = os.path.join(self.exper.config.root_dir,
+                                 os.path.join(self.exper.output_dir, config.pred_lbl_dir))
+
+        if patient_id is None:
+            search_mask = "patient_id*_referred_slices_mc"
+        else:
+            search_mask = patient_id + "_referred_slices_mc"
+
+        search_mask = search_mask + str(referral_threshold).replace(".", "_")
+        if slice_filter_type is not None:
+            search_mask += "_" + slice_filter_type
+        search_mask = search_mask + ".npz"
+        file_name = os.path.join(input_dir, search_mask)
+        if self.referred_slices is None:
+            self.referred_slices = OrderedDict()
+
+        print(file_name)
+        for fname in glob.glob(file_name):
+            file_basename = os.path.splitext(os.path.basename(fname))[0]
+            f_patient_id = file_basename[:file_basename.find("_")]
+            try:
+                np_archive = np.load(file_name)
+                referred_slices = np_archive["referred_slices"]
+                self.referred_slices[f_patient_id] = referred_slices
+            except IOError:
+                print("ERROR - Unable to load data from numpy file {}".format(file_name))
+            except KeyError:
+                print("ERROR - Archive referred_slices does not exist.")
+
+        if patient_id is not None:
+            return referred_slices
 
     def create_filtered_umaps(self, u_threshold, verbose=False, patient_id=None, aggregate_func="max",
                               filter_per_slice=False):
@@ -825,7 +861,8 @@ class ExperimentHandler(object):
             patient_id = file_name[:file_name.find("_")]
             self.test_set_ids[patient_id] = int(patient_id.strip("patient"))
 
-    def generate_figures(self, test_set, image_range=None, referral_thresholds=[0.], patients=None):
+    def generate_figures(self, test_set, image_range=None, referral_thresholds=[0.], patients=None,
+                         slice_type_filter=None):
         if patients is not None:
             image_range = [test_set.trans_dict[p_id] for p_id in patients]
 
@@ -840,7 +877,7 @@ class ExperimentHandler(object):
                 if isinstance(referral_threshold, str):
                     referral_threshold = float(referral_threshold)
                 plot_seg_erros_uncertainties(self, test_set, patient_id=patient_id,
-                                             test_results=None,
+                                             test_results=None, slice_filter_type=slice_type_filter,
                                              referral_threshold=referral_threshold, do_show=False,
                                              model_name=model_name, info_type="uncertainty",
                                              do_save=True, slice_range=None, errors_only=False,
