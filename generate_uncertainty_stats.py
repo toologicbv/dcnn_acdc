@@ -39,7 +39,9 @@ from config.config import config
         --do_filter_slices --slice_filter_type=M
         
     And finally if you want to generate the figures use:
-    
+    python generate_uncertainty_stats.py --exper_id=20180426_14_13_46_dcnn_mc_f1p01_brier_150KE_lr2e02 
+    --run_mode="figures_only" --referral_thresholds 0.08 0.1 --slice_filter_type=M
+
 """
 ROOT_DIR = os.getenv("REPO_PATH", "/home/jorg/repo/dcnn_acdc/")
 LOG_DIR = os.path.join(ROOT_DIR, "logs")

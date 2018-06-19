@@ -816,7 +816,8 @@ class ExperimentHandler(object):
                 if aggregate_func == "mean":
                     filtered_stddev_map[phase] = filter_connected_components(filtered_stddev_map[phase],
                                                                              threshold=u_threshold)
-            u_map_c_areas, _ = detect_largest_umap_areas(filtered_stddev_map, rank_structure=3,
+            u_map_c_areas, _ = detect_largest_umap_areas(filtered_stddev_map,
+                                                         rank_structure=config.erosion_rank_structure,
                                                          max_objects=config.num_of_umap_blobs)
             # save map
             umap_output_dir = os.path.join(self.exper.config.root_dir, os.path.join(self.exper.output_dir,

@@ -80,6 +80,13 @@ class BaseConfig(object):
         self.num_of_umap_blobs = 5
         self.min_size_blob_area = 10
 
+        # disease categories, often used as keys in dictionaries for result evaluation
+        self.disease_categories = {'NOR': "Normal",
+                                   'DCM': "Dilated Cardiomyopathy",
+                                   'MINF': "Systolic heart failure with infarction",
+                                   'ARV': "Abnormal right ventricle",
+                                   'HCM': "Hypertrophic Cardiomyopathy"}
+
         # class labels
         self.class_lbl_background = 0
         self.class_lbl_RV = 1

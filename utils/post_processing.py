@@ -98,7 +98,7 @@ def detect_largest_umap_areas(filtered_umap, rank_structure=5, max_objects=5):
     for slice_id in np.arange(num_of_slices):
         for phase in np.arange(2):
             slice_u_map = filtered_umap[phase, :, :, slice_id]
-            blob_area_sizes, blob_after_erosion_sizes = detect_larget_umap_areas_slice(slice_u_map, structure)
+            blob_area_sizes, blob_after_erosion_sizes = detect_largest_umap_areas_slice(slice_u_map, structure)
             if len(blob_area_sizes) != 0:
                 # print(blob_after_erosion_sizes)
                 size_detected_areas[phase, slice_id, :blob_area_sizes.shape[0]] = blob_area_sizes[:max_objects]

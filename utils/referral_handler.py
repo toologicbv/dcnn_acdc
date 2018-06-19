@@ -82,7 +82,40 @@ def create_slice_referral_matrix(es_idx, ed_idx, num_of_slices):
 
 
 def compute_ref_results_per_pgroup(ref_dice, ref_hd, org_dice, org_hd, patient_cats):
-    pass
+    """
+    Compute referral hd and dice increase for different disease groups.
+    ref and org objects are dicts with key patient_id
+    value np.array with shape [2, 4 classes].
+    :param ref_dice:
+    :param ref_hd:
+    :param org_dice:
+    :param org_hd:
+    :param patient_cats: dictionary key patient_id, value disease category
+    :return:
+    """
+    # create return dicts
+    org_dice_per_dcat = dict([(disease_cat, np.zeros((2, 4))) for disease_cat in config.disease_categories.keys()])
+    org_hd_per_dcat = dict([(disease_cat, np.zeros((2, 4))) for disease_cat in config.disease_categories.keys()])
+    ref_dice_per_dcat = dict([(disease_cat, np.zeros((2, 4))) for disease_cat in config.disease_categories.keys()])
+    ref_hd_per_dcat = dict([(disease_cat, np.zeros((2, 4))) for disease_cat in config.disease_categories.keys()])
+    num_per_category = dict([(disease_cat, 0) for disease_cat in config.disease_categories.keys()])
+    for patient_id, disease_cat in patient_cats.iteritems():
+        ref_dice_per_dcat[disease_cat] += ref_dice[patient_id]
+        ref_hd_per_dcat[disease_cat] += ref_hd[patient_id]
+        org_dice_per_dcat[disease_cat] += org_dice[patient_id]
+        org_hd_per_dcat[disease_cat] += org_hd[patient_id]
+        num_per_category[disease_cat] += 1
+
+    for disease_cat, num_of_cases in num_per_category.keys():
+        if num_of_cases != 20:
+            raise ValueError("ERROR - Number of patients in group {} should be 20 not {}".format(disease_cat,
+                                                                                                 num_of_cases))
+        ref_dice_per_dcat[disease_cat] = ref_dice_per_dcat[disease_cat] * 1./float(num_of_cases)
+        ref_hd_per_dcat[disease_cat] = ref_hd_per_dcat[disease_cat] * 1./float(num_of_cases)
+        org_dice_per_dcat[disease_cat] = org_dice_per_dcat[disease_cat] * 1./float(num_of_cases)
+        org_hd_per_dcat[disease_cat] = org_hd_per_dcat[disease_cat] * 1./float(num_of_cases)
+
+    return ref_dice_per_dcat, ref_hd_per_dcat, org_dice_per_dcat, org_hd_per_dcat
 
 
 class ReferralHandler(object):
@@ -237,7 +270,7 @@ class ReferralHandler(object):
                 test_accuracy, test_hd, seg_errors = \
                     self.test_set.get_accuracy(compute_hd=True, compute_seg_errors=True, do_filter=False,
                                                compute_slice_metrics=False)
-                self.det_results.org_acc.append(test_accuracy)
+                self.det_results.org_dice.append(test_accuracy)
                 self.det_results.org_hd.append(test_hd)
                 self.dice[idx] = np.reshape(test_accuracy, (2, -1))
                 self.hd[idx] = np.reshape(test_hd, (2, -1))
@@ -270,6 +303,8 @@ class ReferralHandler(object):
                         create_slice_referral_matrix(ref_slices_idx_es, ref_slices_idx_ed, num_of_slices)
                     referred_slices = np.concatenate((np.expand_dims(referred_slices_es, axis=0),
                                                       np.expand_dims(referred_slices_ed, axis=0)))
+                    self.det_results.patient_slices_referred.append(referred_slices)
+                    self.det_results.patient_slice_blobs_filtered.append([slice_blobs_es, slice_blobs_ed])
                 else:
                     # we set the slice indices array to None, but in the method filter_referrals we make
                     # sure we refer ALL SLICES then.
@@ -283,7 +318,7 @@ class ReferralHandler(object):
                 # Note: because the self.test_set.property alters each iteration (image) but the object (test_set)
                 # is always the same, we need to make a deepcopy of the numpy array, otherwise we end up with the
                 # same slice results for all images (error I already ran into).
-                self.det_results.org_acc_slices.append(copy.deepcopy(self.test_set.b_acc_slices))
+                self.det_results.org_dice_slices.append(copy.deepcopy(self.test_set.b_acc_slices))
                 self.det_results.org_hd_slices.append(copy.deepcopy(self.test_set.b_hd_slices))
                 self.det_results.referral_stats.append(copy.deepcopy(self.test_set.referral_stats))
                 # ref_u_map_blobs has shape [2, #slices, config.num_of_umap_blobs (5)]
@@ -296,14 +331,17 @@ class ReferralHandler(object):
                 test_accuracy_ref, test_hd_ref, seg_errors_ref, acc_slices_ref, hd_slices_ref = \
                     self.test_set.get_accuracy(compute_hd=True, compute_seg_errors=True, do_filter=False,
                                                compute_slice_metrics=True)
-                self.det_results.dices.append(np.reshape(test_accuracy_ref, (2, 4, -1)))
-                self.det_results.hds.append(np.reshape(test_hd_ref, (2, 4, -1)))
+                self.det_results.dices.append(np.reshape(test_accuracy_ref, (2, 4)))
+                self.det_results.hds.append(np.reshape(test_hd_ref, (2, 4)))
                 self.det_results.acc_slices.append(np.reshape(acc_slices_ref, (2, 4, -1)))
                 # self.det_results.acc_slices.append(acc_slices_ref)
                 # print("After ES-RV ", acc_slices_ref[1, :])
                 self.det_results.hd_slices.append(np.reshape(hd_slices_ref, (2, 4, -1)))
                 b_ref_acc_slices = self.det_results.acc_slices[-1]
-                b_acc_slices = self.det_results.org_acc_slices[-1]
+                b_acc_slices = self.det_results.org_dice_slices[-1]
+                # add the patient ref and org results to the (not per slice but per patient/image) to the
+                # statistics per disease category
+                self.det_results.process_patient(patient_id, idx, patient_cat)
                 # b_ref_acc_slices = acc_slices_ref, (2, 4, -1)
                 diffs_es = np.sum(b_ref_acc_slices[0, 1:] - b_acc_slices[0, 1:], axis=0)
                 diffs_ed = np.sum(b_ref_acc_slices[1, 1:] - b_acc_slices[1, 1:], axis=0)
@@ -360,13 +398,14 @@ class ReferralHandler(object):
                 if verbose:
                     self._show_results(test_accuracy_ref, image_num, msg="with referral")
             self._compute_result()
-            self._show_results()
+            self.det_results.compute_results_per_group()
+            self._show_results(per_disease_cat=True)
             if self.do_save:
                 self.save_results()
                 self.det_results.save(self.outfile)
         print("INFO - Done")
 
-    def _show_results(self, test_accuracy=None, image_num=None, msg=""):
+    def _show_results(self, test_accuracy=None, image_num=None, msg="", per_disease_cat=False):
         if image_num is not None:
             print("Image {} ({}) - "
                   " dice(RV/Myo/LV):\tES {:.2f}/{:.2f}/{:.2f}\t"
@@ -387,6 +426,8 @@ class ReferralHandler(object):
                   "ED {:.2f}/{:.2f}/{:.2f}".format(self.ref_dice_mean[0, 1], self.ref_dice_mean[0, 2],
                                                    self.ref_dice_mean[0, 3], self.ref_dice_mean[1, 1],
                                                    self.ref_dice_mean[1, 2], self.ref_dice_mean[1, 3]))
+            if per_disease_cat:
+                self.det_results.show_results_per_disease_category()
 
     def _compute_result(self):
         self.ref_dice_mean = np.mean(self.ref_dice, axis=0)
@@ -451,7 +492,7 @@ class ReferralResults(object):
     """
     results_dice_wo_referral = np.array([[0, 0.85, 0.88, 0.91], [0, 0.92, 0.86, 0.96]])
 
-    def __init__(self, exper_dict, referral_thresholds, pos_only=False, print_latex_string=False,
+    def __init__(self, exper_dict, referral_thresholds, print_latex_string=False,
                  print_results=True, fold=None, slice_filter_type="M"):
         """
 
@@ -476,7 +517,7 @@ class ReferralResults(object):
         self.search_prefix = "ref_test_results_25imgs*"
         self.print_results = print_results
         self.print_latex_string = print_latex_string
-        self.pos_only = pos_only
+        self.pos_only = False
         self.root_dir = config.root_dir
         self.log_dir = os.path.join(self.root_dir, "logs")
         # for all dictionaries the referral_threshold is used as key
@@ -502,6 +543,20 @@ class ReferralResults(object):
         # slice frequencies e.g. #slice=10 with freq=13
         self.es_slice_freqs = OrderedDict()
         self.ed_slice_freqs = OrderedDict()
+        # dictionaries key referral_threshold for holding per disease group statistics
+        self.mean_blob_uvalue_per_slice = {}
+        self.summed_blob_uvalue_per_slice = {}
+        self.total_num_of_slices = {}
+        self.num_of_slices_referred = {}
+        self.patient_slices_referred = {}
+        self.patient_slice_blobs_filtered = {}
+        # results per disease category
+        self.org_dice_per_dcat = {}
+        self.org_hd_per_dcat = {}
+        self.ref_dice_per_dcat = {}
+        self.ref_hd_per_dcat = {}
+        self.num_per_category = {}
+        self.perc_slices_referred = {}
         # only used temporally, will be reset after all detailed results have been loaded and processed
         self.detailed_results = []
         self.load_all_ref_results()
@@ -517,6 +572,33 @@ class ReferralResults(object):
             overall_dice, std_dice = np.zeros((2, 4)), np.zeros((2, 4))
             overall_hd, std_hd = np.zeros((2, 4)), np.zeros((2, 4))
             results = []
+            # Initialize all dictionaries for this referral threshold. We collect the data for these
+            # dictionaries over all FOLDS.
+            self.mean_blob_uvalue_per_slice[referral_threshold] = dict(
+                [(disease_cat, np.zeros((2, 3))) for disease_cat in config.disease_categories.keys()])
+            self.summed_blob_uvalue_per_slice[referral_threshold] = dict(
+                [(disease_cat, [[], []]) for disease_cat in config.disease_categories.keys()])
+            self.total_num_of_slices[referral_threshold] = dict(
+                [(disease_cat, 0) for disease_cat in config.disease_categories.keys()])
+            self.num_of_slices_referred[referral_threshold] = dict(
+                [(disease_cat, np.zeros(2)) for disease_cat in config.disease_categories.keys()])
+            # contains per patient np.array of bool with shape [2, #slices]
+            self.patient_slices_referred[referral_threshold] = []
+            self.patient_slice_blobs_filtered[referral_threshold] = []
+            # results per disease category
+            self.org_dice_per_dcat[referral_threshold] = dict(
+                [(disease_cat, np.zeros((2, 4))) for disease_cat in config.disease_categories.keys()])
+            self.org_hd_per_dcat[referral_threshold] = dict(
+                [(disease_cat, np.zeros((2, 4))) for disease_cat in config.disease_categories.keys()])
+            self.ref_dice_per_dcat[referral_threshold] = dict(
+                [(disease_cat, np.zeros((2, 4))) for disease_cat in config.disease_categories.keys()])
+            self.ref_hd_per_dcat[referral_threshold] = dict(
+                [(disease_cat, np.zeros((2, 4))) for disease_cat in config.disease_categories.keys()])
+            self.num_per_category[referral_threshold] = dict(
+                [(disease_cat, 0) for disease_cat in config.disease_categories.keys()])
+            self.perc_slices_referred[referral_threshold] = dict(
+                [(disease_cat, np.zeros(2)) for disease_cat in config.disease_categories.keys()])
+            # ok, start looping over FOLDS aka experiments
             for fold_id, exper_id in self.exper_dict.iteritems():
                 # the patient disease classification if we have not done so already
                 if self.patients is None:
@@ -559,6 +641,9 @@ class ReferralResults(object):
                 std_hd += ref_hd_std
             # first process the detailed result objects (merge the four objects, one for each fold)
             self._process_detailed_results(referral_threshold)
+            # compute the statistics (dice, hd, mean u-value/slice, % referred slices etc) for each disease category
+            # for THIS referral threshold
+            self._compute_statistics_per_disease_category(referral_threshold)
             overall_dice *= 1. / self.num_of_folds
             std_dice *= 1. / self.num_of_folds
             overall_hd *= 1. / self.num_of_folds
@@ -633,6 +718,7 @@ class ReferralResults(object):
         ref_dice = OrderedDict()
         ref_hd = OrderedDict()
         for det_result_obj in self.detailed_results:
+            self._process_disease_categories(det_result_obj, referral_threshold)
             for idx, patient_id in enumerate(det_result_obj.patient_ids):
                 referral_stats[patient_id] = det_result_obj.referral_stats[idx]
                 ref_dice[patient_id] = det_result_obj.dices[idx]
@@ -640,9 +726,9 @@ class ReferralResults(object):
                 dice_slices[patient_id] = det_result_obj.acc_slices[idx]
                 hd_slices[patient_id] = det_result_obj.hd_slices[idx]
                 slice_blobs[patient_id] = det_result_obj.umap_blobs_per_slice[idx]
-                org_dice_slices[patient_id] = det_result_obj.org_acc_slices[idx]
+                org_dice_slices[patient_id] = det_result_obj.org_dice_slices[idx]
                 org_hd_slices[patient_id] = det_result_obj.org_hd_slices[idx]
-                org_acc[patient_id] = det_result_obj.org_acc[idx]
+                org_acc[patient_id] = det_result_obj.org_dice[idx]
                 org_hd[patient_id] = det_result_obj.org_hd[idx]
         # reset temporary object
         self.referral_stats[referral_threshold] = referral_stats
@@ -656,6 +742,42 @@ class ReferralResults(object):
         self.org_dice_img[referral_threshold] = org_acc
         self.org_hd_img[referral_threshold] = org_hd
         self.detailed_results = []
+
+    def _process_disease_categories(self, det_result_obj, referral_threshold):
+
+        for disease_cat in det_result_obj.num_per_category.keys():
+            self.ref_dice_per_dcat[referral_threshold][disease_cat] += det_result_obj.ref_dice_per_dcat[disease_cat]
+            self.ref_hd_per_dcat[referral_threshold][disease_cat] += det_result_obj.ref_hd_per_dcat[disease_cat]
+            self.org_dice_per_dcat[referral_threshold][disease_cat] += det_result_obj.org_dice_per_dcat[disease_cat]
+            self.org_hd_per_dcat[referral_threshold][disease_cat] += det_result_obj.org_hd_per_dcat[disease_cat]
+            self.num_per_category[referral_threshold][disease_cat] += det_result_obj.num_per_category[disease_cat]
+            self.total_num_of_slices[referral_threshold][disease_cat] += det_result_obj.total_num_of_slices[disease_cat]
+            self.num_of_slices_referred[referral_threshold][disease_cat] += det_result_obj.num_of_slices_referred[disease_cat]
+            self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][0].extend(
+                det_result_obj.summed_blob_uvalue_per_slice[disease_cat][0])
+            self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][1].extend(
+                det_result_obj.summed_blob_uvalue_per_slice[disease_cat][1])
+
+    def _compute_statistics_per_disease_category(self, referral_threshold):
+        for disease_cat, num_of_cases in self.num_per_category[referral_threshold].iteritems():
+            # compute statistics for each group
+            self.mean_blob_uvalue_per_slice[referral_threshold][disease_cat][0] = \
+                [np.mean(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][0]),
+                 np.median(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][0]),
+                 np.std(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][0])]
+            self.mean_blob_uvalue_per_slice[referral_threshold][disease_cat][1] = \
+                [np.mean(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][1]),
+                 np.median(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][1]),
+                 np.std(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][1])]
+
+            self.ref_dice_per_dcat[referral_threshold][disease_cat] = self.ref_dice_per_dcat[referral_threshold][disease_cat] * 1. / float(num_of_cases)
+            self.ref_hd_per_dcat[referral_threshold][disease_cat] = self.ref_hd_per_dcat[referral_threshold][disease_cat] * 1. / float(num_of_cases)
+            self.org_dice_per_dcat[referral_threshold][disease_cat] = self.org_dice_per_dcat[referral_threshold][disease_cat] * 1. / float(num_of_cases)
+            self.org_hd_per_dcat[referral_threshold][disease_cat] = self.org_hd_per_dcat[referral_threshold][disease_cat] * 1. / float(num_of_cases)
+
+            self.perc_slices_referred[referral_threshold] = \
+                np.nan_to_num(self.num_of_slices_referred[referral_threshold][disease_cat] *
+                              100. / float(self.total_num_of_slices[referral_threshold][disease_cat])).astype(np.int)
 
     def _compute_improvement_per_img_slice(self):
 
@@ -721,11 +843,15 @@ class ReferralDetailedResults(object):
     def __init__(self, exper_handler, do_filter_slices=False):
         self.acc_slices = []
         self.hd_slices = []
-        self.org_acc = []
-        self.org_hd = []
-        self.org_acc_slices = []
+        self.org_dice_slices = []
         self.org_hd_slices = []
+        # these are the original blobs per slice not filtered by  ublob_stats.min_area_size[referral_threshold]
+        # or config.min_size_blob_area. The obj self.patient_slice_blobs_filtered contains the filtered blob area sizes
+        # which can never be more than 5 at the moment (see config.py)
         self.umap_blobs_per_slice = []
+        # original dice & hd per patient
+        self.org_dice = []
+        self.org_hd = []
         """ 
             Remember: referral_stats has shape [2, 3classes, 13values, #slices]
             1) for positive-only: % referred pixels; 2) % errors reduced; 3) #true labels 4) #pixels above threshold;
@@ -735,18 +861,82 @@ class ReferralDetailedResults(object):
         self.referral_stats = []
         self.patient_ids = []
         self.fold_id = exper_handler.exper.run_args.fold_ids[0]
+        # referral results dice and hd per patient
         self.dices = []
         self.hds = []
-        self.total_blob_uncertainty_es = {'NOR': [0, 0], 'DCM': [0, 0], 'MINF': [0, 0], 'ARV': [0, 0], 'HCM': [0, 0]}
-        self.total_num_of_slices = {'NOR': 0, 'DCM': 0, 'MINF': 0, 'ARV': 0, 'HCM': 0}
-        self.num_of_slices_referred = {'NOR': [0, 0], 'DCM': [0, 0], 'MINF': [0, 0], 'ARV': [0, 0], 'HCM': [0, 0]}
-        self.patient_slices_referred = {}
+        # we first initialize mean_blob_uvalue_per_slice with two empty lists to collect the sum of u-values per slice.
+        # later we compute per disease category the following statistics [mean, median, stddev] and hence for each key
+        # mean_blob_uvalue_per_slice will contain a numpy array of shape [2, 3values]
+        self.mean_blob_uvalue_per_slice = dict([(disease_cat, np.zeros((2, 3))) for disease_cat in config.disease_categories.keys()])
+        self.summed_blob_uvalue_per_slice = dict(
+            [(disease_cat, [[], []]) for disease_cat in config.disease_categories.keys()])
+        self.total_num_of_slices = dict([(disease_cat, 0) for disease_cat in config.disease_categories.keys()])
+        self.num_of_slices_referred = dict([(disease_cat, np.zeros(2)) for disease_cat in config.disease_categories.keys()])
+        # contains per patient np.array of bool with shape [2, #slices]
+        self.patient_slices_referred = []
+        self.patient_slice_blobs_filtered = []
+        # results per disease category
+        self.org_dice_per_dcat = dict([(disease_cat, np.zeros((2, 4))) for disease_cat in config.disease_categories.keys()])
+        self.org_hd_per_dcat = dict([(disease_cat, np.zeros((2, 4))) for disease_cat in config.disease_categories.keys()])
+        self.ref_dice_per_dcat = dict([(disease_cat, np.zeros((2, 4))) for disease_cat in config.disease_categories.keys()])
+        self.ref_hd_per_dcat = dict([(disease_cat, np.zeros((2, 4))) for disease_cat in config.disease_categories.keys()])
+        # mean values per category
+        self.mean_org_dice_per_dcat = dict(
+            [(disease_cat, np.zeros((2, 4))) for disease_cat in config.disease_categories.keys()])
+        self.mean_org_hd_per_dcat = dict(
+            [(disease_cat, np.zeros((2, 4))) for disease_cat in config.disease_categories.keys()])
+        self.mean_ref_dice_per_dcat = dict(
+            [(disease_cat, np.zeros((2, 4))) for disease_cat in config.disease_categories.keys()])
+        self.mean_ref_hd_per_dcat = dict(
+            [(disease_cat, np.zeros((2, 4))) for disease_cat in config.disease_categories.keys()])
+        self.num_per_category = dict([(disease_cat, 0) for disease_cat in config.disease_categories.keys()])
         self.ublob_stats = None  # UncertaintyBlobStats object. holds important property min_area_size
         # which is calculated based on property filter_type can be M=mean; MD=median or MS=mean+stddev
         self.do_filter_slices = do_filter_slices
         self.save_output_dir = os.path.join(exper_handler.exper.config.root_dir,
                                             os.path.join(exper_handler.exper.output_dir,
                                                          exper_handler.exper.config.stats_path))
+
+    def process_patient(self, patient_id, arr_idx, patient_disease_cat):
+        if patient_id != self.patient_ids[arr_idx]:
+            raise ValueError("ERROR - ReferralDetailedResults.process_patient. Different patient "
+                             "IDs {} != {} with arr_idx {}".format(patient_id, self.patient_ids[arr_idx], arr_idx))
+        self.ref_dice_per_dcat[patient_disease_cat] += self.dices[arr_idx]
+        self.ref_hd_per_dcat[patient_disease_cat] += self.hds[arr_idx]
+        self.org_dice_per_dcat[patient_disease_cat] += np.reshape(self.org_dice[arr_idx], (2, 4))
+        self.org_hd_per_dcat[patient_disease_cat] += np.reshape(self.org_hd[arr_idx], (2, 4))
+        self.num_per_category[patient_disease_cat] += 1
+        self.total_num_of_slices[patient_disease_cat] += self.acc_slices[arr_idx].shape[2]  # number of slices
+        self.num_of_slices_referred[patient_disease_cat] += np.count_nonzero(self.patient_slices_referred[arr_idx], axis=1)
+        # umap_blobs_per_slice has shape: [2, #slices, config.num_of_umap_blobs (5)]
+        # first sum over num_of_umap_blobs dim, we'll average later over the number of slices per category
+        slice_blobs_es = self.umap_blobs_per_slice[arr_idx][0]
+        slice_blobs_ed = self.umap_blobs_per_slice[arr_idx][1]
+        self.summed_blob_uvalue_per_slice[patient_disease_cat][0].extend(np.sum(slice_blobs_es, axis=1))
+        self.summed_blob_uvalue_per_slice[patient_disease_cat][1].extend(np.sum(slice_blobs_ed, axis=1))
+
+    def compute_results_per_group(self):
+        for disease_cat, num_of_cases in self.num_per_category.iteritems():
+            if num_of_cases != 20:
+                pass
+                # raise ValueError("ERROR - Number of patients in group {} should be 20 not {}".format(disease_cat,
+                #                                                                                     num_of_cases))
+            if num_of_cases != 0:
+                self.mean_ref_dice_per_dcat[disease_cat] = self.ref_dice_per_dcat[disease_cat] * 1. / float(num_of_cases)
+                self.mean_ref_hd_per_dcat[disease_cat] = self.ref_hd_per_dcat[disease_cat] * 1. / float(num_of_cases)
+                self.mean_org_dice_per_dcat[disease_cat] = self.org_dice_per_dcat[disease_cat] * 1. / float(num_of_cases)
+                self.mean_org_hd_per_dcat[disease_cat] = self.org_hd_per_dcat[disease_cat] * 1. / float(num_of_cases)
+                self.mean_blob_uvalue_per_slice[disease_cat][0] = \
+                    [np.mean(self.summed_blob_uvalue_per_slice[disease_cat][0]),
+                     np.median(self.summed_blob_uvalue_per_slice[disease_cat][0]),
+                     np.std(self.summed_blob_uvalue_per_slice[disease_cat][0])]
+                self.mean_blob_uvalue_per_slice[disease_cat][1] = \
+                    [np.mean(self.summed_blob_uvalue_per_slice[disease_cat][1]),
+                     np.median(self.summed_blob_uvalue_per_slice[disease_cat][1]),
+                     np.std(self.summed_blob_uvalue_per_slice[disease_cat][1])]
+            else:
+                self.mean_blob_uvalue_per_slice[disease_cat][0] = np.zeros(3)
+                self.mean_blob_uvalue_per_slice[disease_cat][1] = np.zeros(3)
 
     def save(self, filename):
 
@@ -776,3 +966,44 @@ class ReferralDetailedResults(object):
         if verbose:
             print("INFO - Successfully loaded ReferralDetailedResults object.")
         return detailed_referral_results
+
+    def show_results_per_disease_category(self):
+
+        for disease_cat in self.num_per_category.keys():
+            org_dice = self.mean_org_dice_per_dcat[disease_cat]
+            print("------------------------------ Results for class {} -----------------"
+                  "-----------------".format(disease_cat))
+
+            perc_slices_referred = np.nan_to_num(self.num_of_slices_referred[disease_cat] *
+                                   100./float(self.total_num_of_slices[disease_cat])).astype(np.int)
+
+            print("ES & ED Mean/median u-value {:.2f}/{:.2f} & {:.2f}/{:.2f}"
+                  "\t % slices referred {:.2f} & {:.2f}".format(self.mean_blob_uvalue_per_slice[disease_cat][0][0],
+                                                                self.mean_blob_uvalue_per_slice[disease_cat][0][1],
+                                                                self.mean_blob_uvalue_per_slice[disease_cat][1][0],
+                                                                self.mean_blob_uvalue_per_slice[disease_cat][1][1],
+                                                                perc_slices_referred[0],
+                                                                perc_slices_referred[1]))
+            print("without referral - "
+                  "dice(RV/Myo/LV):\tES {:.2f}/{:.2f}/{:.2f}\t"
+                  "ED {:.2f}/{:.2f}/{:.2f}".format(org_dice[0, 1], org_dice[0, 2],
+                                                   org_dice[0, 3], org_dice[1, 1],
+                                                   org_dice[1, 2], org_dice[1, 3]))
+            ref_dice = self.mean_ref_dice_per_dcat[disease_cat]
+            print("   with referral - "
+                  "dice(RV/Myo/LV):\tES {:.2f}/{:.2f}/{:.2f}\t"
+                  "ED {:.2f}/{:.2f}/{:.2f}".format(ref_dice[0, 1], ref_dice[0, 2],
+                                                   ref_dice[0, 3], ref_dice[1, 1],
+                                                   ref_dice[1, 2], ref_dice[1, 3]))
+            org_hd = self.mean_org_hd_per_dcat[disease_cat]
+            print("without referral - HD (RV/Myo/LV):\tES {:.2f}/{:.2f}/{:.2f}\t"
+                  "ED {:.2f}/{:.2f}/{:.2f}".format(org_hd[0, 1], org_hd[0, 2],
+                                                   org_hd[0, 3], org_hd[1, 1],
+                                                   org_hd[1, 2], org_hd[1, 3]))
+
+            ref_hd = self.mean_ref_hd_per_dcat[disease_cat]
+            print("   with referral - HD (RV/Myo/LV):\tES {:.2f}/{:.2f}/{:.2f}\t"
+                  "ED {:.2f}/{:.2f}/{:.2f}".format(ref_hd[0, 1], ref_hd[0, 2],
+                                                   ref_hd[0, 3], ref_hd[1, 1],
+                                                   ref_hd[1, 2], ref_hd[1, 3]))
+            print(" ")
