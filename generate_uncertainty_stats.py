@@ -29,14 +29,14 @@ from config.config import config
         step when we refer only certain slices of the image to mimick realistic clinical workflow.
         
         Example:
-        python generate_uncertainty_stats.py --cuda --exper_id=20180418_15_02_05_dcnn_mcv1_150000E_lr2e02 
-        --run_mode="test_referrals" --aggregate_func="max" --referral_thresholds 0.08 0.1 0.12 0.14 0.16
- 
+        python generate_uncertainty_stats.py --cuda --run_mode="test_referrals" 
+        --aggregate_func="max" --referral_thresholds 0.08 0.1 0.12 0.14 0.16
+        --exper_id=20180418_15_02_05_dcnn_mcv1_150000E_lr2e02 
         
     (4) Run with run_mode=
-        python generate_uncertainty_stats.py --cuda --exper_id=20180426_14_14_57_dcnn_mc_f3p01_brier_150KE_lr2e02 
+        python generate_uncertainty_stats.py --cuda 
         --run_mode="test_referrals" --aggregate_func="max" --referral_thresholds 0.08 0.1 0.12 0.14 0.16
-        --do_filter_slices --slice_filter_type=M
+        --do_filter_slices --slice_filter_type=M --exper_id=20180426_14_14_57_dcnn_mc_f3p01_brier_150KE_lr2e02 
         
     And finally if you want to generate the figures use:
     python generate_uncertainty_stats.py --exper_id=20180426_14_13_46_dcnn_mc_f1p01_brier_150KE_lr2e02 
@@ -173,30 +173,66 @@ def main():
         args.referral_thresholds.sort()
         if args.referral_thresholds[0] <= 0.:
             raise ValueError("ERROR - argument referral_threshold needs to be greater than 0.")
-        test_set = ACDC2017TestHandler.get_testset_instance(exper_handler.exper.config,
-                                                            exper_handler.exper.run_args.fold_ids,
-                                                            load_train=False, load_val=True,
-                                                            batch_size=None, use_cuda=True)
-        # in this case image_range REALLY must be a list e.g. [1, 3, 10] in order to select specific images
-        exper_handler.generate_figures(test_set, image_range=None, slice_type_filter=args.slice_filter_type,
-                                       referral_thresholds=args.referral_thresholds,
-                                       patients=None)  # ["patient005", "patient022"])
+
+        str_referral_thresholds = ", ".join([str(r) for r in args.referral_thresholds])
+        exper_handlers = []
+        if args.exper_id is None:
+            for exper_id in exp_mc01_brier.values():
+                exp_model_path = os.path.join(LOG_DIR, exper_id)
+                exper = ExperimentHandler.load_experiment(exp_model_path)
+                exper_handler = ExperimentHandler(exper, use_logfile=False)
+                exper_handler.set_root_dir(ROOT_DIR)
+                exper_handlers.append(exper_handler)
+        else:
+            exper_handlers.append(exper_handler)
+        print("INFO - Generate figures for referral thresholds {}".format(str_referral_thresholds))
+        for e_handler in exper_handlers:
+            exper_args = e_handler.exper.run_args
+            info_str = "{} p={:.2f} fold={} loss={}".format(exper_args.model, exper_args.drop_prob,
+                                                            exper_args.fold_ids[0],
+                                                            exper_args.loss_function)
+            print("INFO - Experimental details: " + info_str)
+            test_set = ACDC2017TestHandler.get_testset_instance(e_handler.exper.config,
+                                                                e_handler.exper.run_args.fold_ids,
+                                                                load_train=False, load_val=True,
+                                                                batch_size=None, use_cuda=True)
+            # in this case image_range REALLY must be a list e.g. [1, 3, 10] in order to select specific images
+            exper_handler.generate_figures(test_set, image_range=None, slice_type_filter=args.slice_filter_type,
+                                           referral_thresholds=args.referral_thresholds,
+                                           patients=None)  # ["patient005", "patient022"])
 
     elif args.run_mode == "test_referrals":
-
-        ref_test_set = ACDC2017TestHandler(exper_config=exper_handler.exper.config,
-                                           search_mask=config.dflt_image_name + ".mhd", fold_ids=exper_args.fold_ids,
-                                           debug=False, batch_size=25, use_cuda=True, load_train=False,
-                                           load_val=True,
-                                           use_iso_path=True)
-        # Refer all uncertain pixels
-        ref_handler = ReferralHandler(exper_handler, test_set=ref_test_set,
-                                      referral_thresholds=args.referral_thresholds,
-                                      aggregate_func=args.aggregate_func,
-                                      verbose=True, do_save=True, num_of_images=None,
-                                      patients=None)  # ["patient082", "patient084"])
-        ref_handler.test(referral_only=True, do_filter_slices=args.do_filter_slices,
-                         slice_filter_type=args.slice_filter_type, verbose=False)
+        str_referral_thresholds = ", ".join([str(r) for r in args.referral_thresholds])
+        exper_handlers = []
+        if args.exper_id is None:
+            for exper_id in exp_mc01_brier.values():
+                exp_model_path = os.path.join(LOG_DIR, exper_id)
+                exper = ExperimentHandler.load_experiment(exp_model_path)
+                exper_handler = ExperimentHandler(exper, use_logfile=False)
+                exper_handler.set_root_dir(ROOT_DIR)
+                exper_handlers.append(exper_handler)
+        else:
+            exper_handlers.append(exper_handler)
+        print("INFO - Test referrals with referral thresholds {}".format(str_referral_thresholds))
+        for e_handler in exper_handlers:
+            exper_args = e_handler.exper.run_args
+            info_str = "{} p={:.2f} fold={} loss={}".format(exper_args.model, exper_args.drop_prob,
+                                                            exper_args.fold_ids[0],
+                                                            exper_args.loss_function)
+            print("INFO - Experimental details: " + info_str)
+            ref_test_set = ACDC2017TestHandler(exper_config=e_handler.exper.config,
+                                               search_mask=config.dflt_image_name + ".mhd", fold_ids=exper_args.fold_ids,
+                                               debug=False, batch_size=25, use_cuda=True, load_train=False,
+                                               load_val=True,
+                                               use_iso_path=True)
+            # Refer all uncertain pixels
+            ref_handler = ReferralHandler(e_handler, test_set=ref_test_set,
+                                          referral_thresholds=args.referral_thresholds,
+                                          aggregate_func=args.aggregate_func,
+                                          verbose=True, do_save=True, num_of_images=None,
+                                          patients=None)  # ["patient082", "patient084"])
+            ref_handler.test(referral_only=True, do_filter_slices=args.do_filter_slices,
+                             slice_filter_type=args.slice_filter_type, verbose=False)
 
 
 if __name__ == '__main__':

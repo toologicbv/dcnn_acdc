@@ -5,27 +5,41 @@ import os
 from utils.referral_handler import ReferralResults
 
 
-def plot_referral_results(dice_ref, model_name, dice_ref_pos_only=None, width=16, height=14,
-                          do_save=False, do_show=True):
+def plot_referral_results(ref_result_obj, ref_slice_results=None, width=16, height=14,
+                          do_save=False, do_show=True, model_name="Main title"):
     """
-    :param dice_ref: OrderedDict with key referral_threshold
+    :param dice_ref: OrderedDict with key referral_threshold. Holds the referral results in which we refer
+                     ALL SLICES.
+    :param dice_slices_ref: OrderedDict with key referral_threshold. Holds the DICE referral results in which
+                    we refer ONLY SPECIFIC SLICES.
 
+                    shape of the values [
+
+    :param model_name
+    :param do_show
+    :param do_save
+    :param width
+    :param height
     """
-    if dice_ref_pos_only is not None:
-        pos_only = True
-        X_pos = np.vstack(dice_ref_pos_only.values())
+
+    if ref_slice_results is not None:
+        slice_referral = True
+        dice_slices_ref = ref_slice_results.get_dice_referral_dict()
+        X_pos = np.vstack(dice_slices_ref.values())
         X_pos = np.reshape(X_pos, (-1, 8))
         X_pos[:, 0], X_pos[:, 4] = 0, 0
     else:
-        pos_only = False
+        slice_referral = False
     rows = 2
     columns = 4
     dice_wo_ref = ReferralResults.results_dice_wo_referral
     class_lbls = ["BG", "RV", "MYO", "LV"]
     color_code = ['b', 'r', 'g', 'b']
 
-    xs = np.array(dice_ref.keys() )
+    dice_ref = ref_result_obj.get_dice_referral_dict()
+    xs = np.array(dice_ref.keys())
     X = np.vstack(dice_ref.values())
+    # dice_ref-values has shape [2, 4], but we
     X = np.reshape(X, (-1, 8))
     # actually we don't want the BG class to interfere with min/max, so set to zero
     X[:, 0], X[:, 4] = 0, 0
@@ -44,12 +58,11 @@ def plot_referral_results(dice_ref, model_name, dice_ref_pos_only=None, width=16
             # will the baseline scalar over all thresholds for comparison
             wo_ref.fill(dice_wo_ref[0, cls])
             # plot class-dice for all thresholds
-            ax1.plot(xs, X[:, cls], label="with ref {}".format(class_lbls[cls]), c=color_code[cls], marker="*",
+            ax1.plot(xs, X[:, cls], label="ref all slices {}".format(class_lbls[cls]), c=color_code[cls], marker="*",
                      linestyle="--", alpha=0.6)
             # plot our baseline performance
-            if cls == 1:
-                print(wo_ref)
-            ax1.plot(xs, wo_ref, label="wo ref {}".format(class_lbls[cls]), c=color_code[cls],
+
+            ax1.plot(xs, wo_ref, label="no referral {}".format(class_lbls[cls]), c=color_code[cls],
                      linestyle="-", alpha=0.2)
             ax1.set_ylabel("dice", **config.axis_font)
             ax1.set_xlabel("referral threshold", **config.axis_font)
@@ -58,23 +71,23 @@ def plot_referral_results(dice_ref, model_name, dice_ref_pos_only=None, width=16
             ax1.set_xticks(xs)
             ax1.legend(loc="best")
             ax1.set_title("ES", **config.title_font_small)
-            if pos_only:
-                ax1.plot(xs, X_pos[:, cls], label="ref pos-only {}".format(class_lbls[cls]),
+            if slice_referral:
+                ax1.plot(xs, X_pos[:, cls], label="slice-referral {}".format(class_lbls[cls]),
                          c=color_code[cls], marker="D",
                          linestyle=":", alpha=0.6)
         if cls == 4:
             ax2 = plt.subplot2grid((rows, columns), (0, 2), rowspan=2, colspan=2)
         if 4 < cls <= 7:
             class_idx = cls - 4
-            ax2.plot(xs, X[:, cls], label="with ref {}".format(class_lbls[class_idx]),
+            ax2.plot(xs, X[:, cls], label="ref all slices {}".format(class_lbls[class_idx]),
                      c=color_code[class_idx], marker="*",
                      linestyle="--", alpha=0.6)
             wo_ref.fill(dice_wo_ref[1, class_idx])
             # plot our baseline performance
-            ax2.plot(xs, wo_ref, label="wo ref {}".format(class_lbls[class_idx]), c=color_code[class_idx],
+            ax2.plot(xs, wo_ref, label="no referral {}".format(class_lbls[class_idx]), c=color_code[class_idx],
                      linestyle="-", alpha=0.2)
-            if pos_only:
-                ax2.plot(xs, X_pos[:, cls], label="ref pos-only {}".format(class_lbls[class_idx]),
+            if slice_referral:
+                ax2.plot(xs, X_pos[:, cls], label="slice-referral {}".format(class_lbls[class_idx]),
                          c=color_code[class_idx], marker="D",
                          linestyle=":", alpha=0.6)
             ax2.set_ylabel("dice", **config.axis_font)

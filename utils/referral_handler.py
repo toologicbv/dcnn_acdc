@@ -214,27 +214,31 @@ class ReferralHandler(object):
             self.slice_filter_type = slice_filter_type
         else:
             self.slice_filter_type = None
-        self.det_results = ReferralDetailedResults(self.exper_handler, do_filter_slices=self.do_filter_slices)
-        self.dice = np.zeros((self.num_of_images, 2, 4))
-        self.hd = np.zeros((self.num_of_images, 2, 4))
         if referral_threshold is not None:
             self.referral_thresholds = [referral_threshold]
 
         # load patient disease categorization, NOTE: hold ALL patient_ids not just the 25 validation patients
         # seems odd but is the easiest this way
         self.exper_handler.get_patients()
-        # get UncertaintyBlobStats object that is essential for slice referral (contains min_area_size) used in
-        # procedure "determine_referral_slices"
-        if self.do_filter_slices:
-            path_to_root_fold = os.path.join(self.exper_handler.exper.config.root_dir, config.data_dir)
-            ublob_stats = UncertaintyBlobStats.load(path_to_root_fold)
-            ublob_stats.set_min_area_size(filter_type=self.slice_filter_type)
-            self.det_results.ublob_stats = ublob_stats
-            # print("Min are size ", ublob_stats.min_area_size)
-        else:
-            ublob_stats = None
-
+        ublob_stats = None
         for referral_threshold in self.referral_thresholds:
+            # initialize numpy arrays for computation of dice and hd for results WITH and WITHOUT referral
+            self.dice = np.zeros((self.num_of_images, 2, 4))
+            self.hd = np.zeros((self.num_of_images, 2, 4))
+            self.ref_dice = np.zeros((self.num_of_images, 2, 4))
+            self.ref_hd = np.zeros((self.num_of_images, 2, 4))
+            self.det_results = ReferralDetailedResults(self.exper_handler, do_filter_slices=self.do_filter_slices)
+            # get UncertaintyBlobStats object that is essential for slice referral (contains min_area_size) used in
+            # procedure "determine_referral_slices"
+            if self.do_filter_slices:
+                if ublob_stats is None:
+                    path_to_root_fold = os.path.join(self.exper_handler.exper.config.root_dir, config.data_dir)
+                    ublob_stats = UncertaintyBlobStats.load(path_to_root_fold)
+                    ublob_stats.set_min_area_size(filter_type=self.slice_filter_type)
+                    self.det_results.ublob_stats = ublob_stats
+                # print("Min are size ", ublob_stats.min_area_size)
+            else:
+                ublob_stats = None
             self.referral_threshold = referral_threshold
             if referral_only:
                 # load the filtered u-maps from disk
@@ -341,7 +345,7 @@ class ReferralHandler(object):
                 b_acc_slices = self.det_results.org_dice_slices[-1]
                 # add the patient ref and org results to the (not per slice but per patient/image) to the
                 # statistics per disease category
-                self.det_results.process_patient(patient_id, idx, patient_cat)
+                self.det_results.process_patient(patient_id, idx, patient_cat, do_refer_slices=self.do_filter_slices)
                 # b_ref_acc_slices = acc_slices_ref, (2, 4, -1)
                 diffs_es = np.sum(b_ref_acc_slices[0, 1:] - b_acc_slices[0, 1:], axis=0)
                 diffs_ed = np.sum(b_ref_acc_slices[1, 1:] - b_acc_slices[1, 1:], axis=0)
@@ -397,7 +401,9 @@ class ReferralHandler(object):
                 self.ref_hd[idx] = np.reshape(test_hd_ref, (2, -1))
                 if verbose:
                     self._show_results(test_accuracy_ref, image_num, msg="with referral")
+            print("_compute_result")
             self._compute_result()
+            print("det_results.compute_results_per_group")
             self.det_results.compute_results_per_group()
             self._show_results(per_disease_cat=True)
             if self.do_save:
@@ -493,7 +499,7 @@ class ReferralResults(object):
     results_dice_wo_referral = np.array([[0, 0.85, 0.88, 0.91], [0, 0.92, 0.86, 0.96]])
 
     def __init__(self, exper_dict, referral_thresholds, print_latex_string=False,
-                 print_results=True, fold=None, slice_filter_type="M"):
+                 print_results=True, fold=None, slice_filter_type=None):
         """
 
         :param exper_dict:
@@ -503,6 +509,9 @@ class ReferralResults(object):
         :param print_results:
         :param fold: to load only a specific fold, testing purposes
         :param slice_filter_type: M=mean; MD=median; MS=mean+stddev
+                IMPORTANT: if slice_filter_type is NONE we load the referral results in which WE REFER
+                           ALL SLICES!
+
         """
         self.referral_thresholds = referral_thresholds
         self.slice_filter_type = slice_filter_type
@@ -522,9 +531,15 @@ class ReferralResults(object):
         self.log_dir = os.path.join(self.root_dir, "logs")
         # for all dictionaries the referral_threshold is used as key
 
-        # self.dice and self.hd hold the overall referral results. SO NOT PER PATIENT_ID!
-        self.dice = OrderedDict()
-        self.hd = OrderedDict()
+        # self.ref_dice_stats and self.ref_hd_stats hold the overall referral results. SO NOT PER PATIENT_ID!
+        # same is applicable for org_dice stats
+        # key of dictionaries is referral threshold. Values is numpy array of shape [2, 2, 4]
+        # where dim0=2 :: index0=ES, index1=stddev
+        # where dim1=2 :: index0=mean per class, index1=std per class (BG, RV, MYO, LV)
+        self.ref_dice_stats = OrderedDict()
+        self.ref_hd_stats = OrderedDict()
+        self.org_dice_stats = OrderedDict()
+        self.org_hd_stats = OrderedDict()
         # dictionary (referral threshold) of dictionaries (patient_id). SO EVERYTHING SAVED BASE ON PATIENT_ID!
         self.ref_dice = OrderedDict()
         self.ref_hd = OrderedDict()
@@ -601,15 +616,17 @@ class ReferralResults(object):
             # ok, start looping over FOLDS aka experiments
             for fold_id, exper_id in self.exper_dict.iteritems():
                 # the patient disease classification if we have not done so already
+                # print("Main loop Fold-{}".format(fold_id))
                 if self.patients is None:
                     self._get_patient_classification()
                 input_dir = os.path.join(self.log_dir, os.path.join(exper_id, config.stats_path))
-                file_name = self.search_prefix + "utr" + str_referral_threshold + "_" + self.slice_filter_type
-                if self.pos_only:
-                    search_path = os.path.join(input_dir, file_name + "_pos_only.npz")
-
+                if self.slice_filter_type is not None:
+                    file_name = self.search_prefix + "utr" + str_referral_threshold + "_" + self.slice_filter_type
                 else:
-                    search_path = os.path.join(input_dir, file_name + ".npz")
+                    # loading referral results when ALL SLICES ARE REFERRED!
+                    file_name = self.search_prefix + "utr" + str_referral_threshold
+
+                search_path = os.path.join(input_dir, file_name + ".npz")
                 filenames = glob.glob(search_path)
                 if len(filenames) != 1:
                     raise ValueError("ERROR - Found {} result files for this {} experiment (pos-only={},"
@@ -644,11 +661,17 @@ class ReferralResults(object):
             # compute the statistics (dice, hd, mean u-value/slice, % referred slices etc) for each disease category
             # for THIS referral threshold
             self._compute_statistics_per_disease_category(referral_threshold)
-            overall_dice *= 1. / self.num_of_folds
-            std_dice *= 1. / self.num_of_folds
-            overall_hd *= 1. / self.num_of_folds
-            std_hd *= 1. / self.num_of_folds
+
             if self.print_results:
+                # ref_dice_stats has shape [2, 2, 4] dim0=ES/ED; dim1=4means/4stddevs
+                overall_dice = np.concatenate((np.expand_dims(self.ref_dice_stats[referral_threshold][0][0], axis=0),
+                                               np.expand_dims(self.ref_dice_stats[referral_threshold][1][0], axis=0)))
+                std_dice = np.concatenate((np.expand_dims(self.ref_dice_stats[referral_threshold][0][1], axis=0),
+                                               np.expand_dims(self.ref_dice_stats[referral_threshold][1][1], axis=0)))
+                overall_hd = np.concatenate((np.expand_dims(self.ref_hd_stats[referral_threshold][0][0], axis=0),
+                                               np.expand_dims(self.ref_hd_stats[referral_threshold][1][0], axis=0)))
+                std_hd = np.concatenate((np.expand_dims(self.ref_hd_stats[referral_threshold][0][1], axis=0),
+                                               np.expand_dims(self.ref_hd_stats[referral_threshold][1][1], axis=0)))
                 print("Evaluation with referral threshold {:.2f}".format(referral_threshold))
                 print("Overall:\t"
                       "dice(RV/Myo/LV): ES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})\t"
@@ -688,9 +711,6 @@ class ReferralResults(object):
                                         overall_hd[1, 3],
                                         std_hd[1, 3]))
 
-            self.dice[referral_threshold] = overall_dice
-            self.hd[referral_threshold] = overall_hd
-
     def _process_detailed_results(self, referral_threshold):
         """
         self.detailed_results (list) contains for a specific referral threshold the 4 ReferralDetailedResults objects.
@@ -717,8 +737,12 @@ class ReferralResults(object):
         org_hd = OrderedDict()
         ref_dice = OrderedDict()
         ref_hd = OrderedDict()
+        # print("--------------------- {:.2f} --------------".format(referral_threshold))
         for det_result_obj in self.detailed_results:
+            # print("_process_detailed_results - len(self.summed_blob_uvalue_per_slice[referral_threshold][ARV][0]")
+            # print(len(self.summed_blob_uvalue_per_slice[referral_threshold]["ARV"][0]))
             self._process_disease_categories(det_result_obj, referral_threshold)
+            # print(len(self.summed_blob_uvalue_per_slice[referral_threshold]["ARV"][0]))
             for idx, patient_id in enumerate(det_result_obj.patient_ids):
                 referral_stats[patient_id] = det_result_obj.referral_stats[idx]
                 ref_dice[patient_id] = det_result_obj.dices[idx]
@@ -728,8 +752,8 @@ class ReferralResults(object):
                 slice_blobs[patient_id] = det_result_obj.umap_blobs_per_slice[idx]
                 org_dice_slices[patient_id] = det_result_obj.org_dice_slices[idx]
                 org_hd_slices[patient_id] = det_result_obj.org_hd_slices[idx]
-                org_acc[patient_id] = det_result_obj.org_dice[idx]
-                org_hd[patient_id] = det_result_obj.org_hd[idx]
+                org_acc[patient_id] = np.reshape(det_result_obj.org_dice[idx], (2, 4))
+                org_hd[patient_id] = np.reshape(det_result_obj.org_hd[idx], (2, 4))
         # reset temporary object
         self.referral_stats[referral_threshold] = referral_stats
         self.ref_dice[referral_threshold] = ref_dice
@@ -741,7 +765,45 @@ class ReferralResults(object):
         self.org_hd_slices[referral_threshold] = org_hd_slices
         self.org_dice_img[referral_threshold] = org_acc
         self.org_hd_img[referral_threshold] = org_hd
+        self._compute_dice_hd_statistics(referral_threshold)
         self.detailed_results = []
+
+    def _compute_dice_hd_statistics(self, referral_threshold):
+
+        arr_ref_dices_es, arr_ref_dices_ed = [], []
+        arr_ref_hds_es, arr_ref_hds_ed = [], []
+        arr_org_dices_es, arr_org_dices_ed = [], []
+        arr_org_hds_es, arr_org_hds_ed = [], []
+        for patient_id, ref_dice in self.ref_dice[referral_threshold].iteritems():
+            arr_ref_dices_es.extend(np.expand_dims(ref_dice[0], axis=0))
+            arr_ref_dices_ed.extend(np.expand_dims(ref_dice[1], axis=0))
+            arr_ref_hds_es.extend(np.expand_dims(self.ref_hd[referral_threshold][patient_id][0], axis=0))
+            arr_ref_hds_ed.extend(np.expand_dims(self.ref_hd[referral_threshold][patient_id][1], axis=0))
+            arr_org_dices_es.extend(np.expand_dims(self.org_dice_img[referral_threshold][patient_id][0], axis=0))
+            arr_org_dices_ed.extend(np.expand_dims(self.org_dice_img[referral_threshold][patient_id][1], axis=0))
+            arr_org_hds_es.extend(np.expand_dims(self.org_hd_img[referral_threshold][patient_id][0], axis=0))
+            arr_org_hds_ed.extend(np.expand_dims(self.org_hd_img[referral_threshold][patient_id][1], axis=0))
+
+        arr_ref_dices_es, arr_ref_dices_ed = np.vstack(arr_ref_dices_es), np.vstack(arr_ref_dices_ed)
+        arr_ref_hds_es, arr_ref_hds_ed = np.vstack(arr_ref_hds_es), np.vstack(arr_ref_hds_ed)
+        arr_org_dices_es, arr_org_dices_ed = np.vstack(arr_org_dices_es), np.vstack(arr_org_dices_ed)
+        arr_org_hds_es, arr_org_hds_ed = np.vstack(arr_org_hds_es), np.vstack(arr_org_hds_ed)
+        ref_dice_stats_es = np.array([np.mean(arr_ref_dices_es, axis=0), np.std(arr_ref_dices_es, axis=0)])
+        ref_dice_stats_ed = np.array([np.mean(arr_ref_dices_ed, axis=0), np.std(arr_ref_dices_ed, axis=0)])
+        self.ref_dice_stats[referral_threshold] = np.concatenate((np.expand_dims(ref_dice_stats_es, axis=0),
+                                                                  np.expand_dims(ref_dice_stats_ed, axis=0)))
+        org_dice_stats_es = np.array([np.mean(arr_org_dices_es, axis=0), np.std(arr_org_dices_es, axis=0)])
+        org_dice_stats_ed = np.array([np.mean(arr_org_dices_ed, axis=0), np.std(arr_org_dices_ed, axis=0)])
+        self.org_dice_stats[referral_threshold] = np.concatenate((np.expand_dims(org_dice_stats_es, axis=0),
+                                                                  np.expand_dims(org_dice_stats_ed, axis=0)))
+        ref_hd_stats_es = np.array([np.mean(arr_ref_hds_es, axis=0), np.std(arr_ref_hds_es, axis=0)])
+        ref_hd_stats_ed = np.array([np.mean(arr_ref_hds_ed, axis=0), np.std(arr_ref_hds_ed, axis=0)])
+        self.ref_hd_stats[referral_threshold] = np.concatenate((np.expand_dims(ref_hd_stats_es, axis=0),
+                                                                np.expand_dims(ref_hd_stats_ed, axis=0)))
+        org_hd_stats_es = np.array([np.mean(arr_org_hds_es, axis=0), np.std(arr_org_hds_es, axis=0)])
+        org_hd_stats_ed = np.array([np.mean(arr_org_hds_ed, axis=0), np.std(arr_org_hds_ed, axis=0)])
+        self.ref_hd_stats[referral_threshold] = np.concatenate((np.expand_dims(org_hd_stats_es, axis=0),
+                                                                np.expand_dims(org_hd_stats_ed, axis=0)))
 
     def _process_disease_categories(self, det_result_obj, referral_threshold):
 
@@ -759,25 +821,30 @@ class ReferralResults(object):
                 det_result_obj.summed_blob_uvalue_per_slice[disease_cat][1])
 
     def _compute_statistics_per_disease_category(self, referral_threshold):
+        # print("----------------- referral_threshold {:.2f} -------------------".format(referral_threshold))
         for disease_cat, num_of_cases in self.num_per_category[referral_threshold].iteritems():
             # compute statistics for each group
-            self.mean_blob_uvalue_per_slice[referral_threshold][disease_cat][0] = \
-                [np.mean(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][0]),
-                 np.median(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][0]),
-                 np.std(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][0])]
-            self.mean_blob_uvalue_per_slice[referral_threshold][disease_cat][1] = \
-                [np.mean(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][1]),
-                 np.median(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][1]),
-                 np.std(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][1])]
+            if self.slice_filter_type is not None:
+                # print(disease_cat)
+                # print(np.mean(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][0]))
+                self.mean_blob_uvalue_per_slice[referral_threshold][disease_cat][0] = \
+                    [np.mean(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][0]),
+                     np.median(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][0]),
+                     np.std(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][0])]
+                self.mean_blob_uvalue_per_slice[referral_threshold][disease_cat][1] = \
+                    [np.mean(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][1]),
+                     np.median(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][1]),
+                     np.std(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][1])]
+
+                self.perc_slices_referred[referral_threshold] = \
+                    np.nan_to_num(self.num_of_slices_referred[referral_threshold][disease_cat] *
+                                  100. / float(self.total_num_of_slices[referral_threshold][disease_cat])).astype(
+                        np.int)
 
             self.ref_dice_per_dcat[referral_threshold][disease_cat] = self.ref_dice_per_dcat[referral_threshold][disease_cat] * 1. / float(num_of_cases)
             self.ref_hd_per_dcat[referral_threshold][disease_cat] = self.ref_hd_per_dcat[referral_threshold][disease_cat] * 1. / float(num_of_cases)
             self.org_dice_per_dcat[referral_threshold][disease_cat] = self.org_dice_per_dcat[referral_threshold][disease_cat] * 1. / float(num_of_cases)
             self.org_hd_per_dcat[referral_threshold][disease_cat] = self.org_hd_per_dcat[referral_threshold][disease_cat] * 1. / float(num_of_cases)
-
-            self.perc_slices_referred[referral_threshold] = \
-                np.nan_to_num(self.num_of_slices_referred[referral_threshold][disease_cat] *
-                              100. / float(self.total_num_of_slices[referral_threshold][disease_cat])).astype(np.int)
 
     def _compute_improvement_per_img_slice(self):
 
@@ -828,6 +895,14 @@ class ReferralResults(object):
             self.img_slice_improvements[referral_threshold] = img_slice_improvements
             self.img_slice_seg_error_improvements[referral_threshold] = img_slice_seg_error_improvements
 
+    def get_dice_referral_dict(self):
+        self.referral_thresholds.sort()
+        ref_dice = OrderedDict()
+        for referral_threshold in self.referral_thresholds:
+            ref_dice[referral_threshold] = np.concatenate((np.expand_dims(self.ref_dice_stats[referral_threshold][0][0], axis=0),
+                                                           np.expand_dims(self.ref_dice_stats[referral_threshold][1][0], axis=0)))
+        return ref_dice
+
     def _get_patient_classification(self):
         p = Patients()
         p.load(config.data_dir)
@@ -856,7 +931,7 @@ class ReferralDetailedResults(object):
             Remember: referral_stats has shape [2, 3classes, 13values, #slices]
             1) for positive-only: % referred pixels; 2) % errors reduced; 3) #true labels 4) #pixels above threshold;
             5) #errors before referral 6) #errors after referral 7) F1-value; 8) Precision; 9) Recall; 
-            10) #true positives; 11) #false positives; 12) #false negatives 13) #referred pixels 
+            10) #true positives; 11) #false positives; 12) #false negatives 13) #referred pixels (same as (4))
         """
         self.referral_stats = []
         self.patient_ids = []
@@ -897,7 +972,7 @@ class ReferralDetailedResults(object):
                                             os.path.join(exper_handler.exper.output_dir,
                                                          exper_handler.exper.config.stats_path))
 
-    def process_patient(self, patient_id, arr_idx, patient_disease_cat):
+    def process_patient(self, patient_id, arr_idx, patient_disease_cat, do_refer_slices=False):
         if patient_id != self.patient_ids[arr_idx]:
             raise ValueError("ERROR - ReferralDetailedResults.process_patient. Different patient "
                              "IDs {} != {} with arr_idx {}".format(patient_id, self.patient_ids[arr_idx], arr_idx))
@@ -907,20 +982,20 @@ class ReferralDetailedResults(object):
         self.org_hd_per_dcat[patient_disease_cat] += np.reshape(self.org_hd[arr_idx], (2, 4))
         self.num_per_category[patient_disease_cat] += 1
         self.total_num_of_slices[patient_disease_cat] += self.acc_slices[arr_idx].shape[2]  # number of slices
-        self.num_of_slices_referred[patient_disease_cat] += np.count_nonzero(self.patient_slices_referred[arr_idx], axis=1)
-        # umap_blobs_per_slice has shape: [2, #slices, config.num_of_umap_blobs (5)]
-        # first sum over num_of_umap_blobs dim, we'll average later over the number of slices per category
-        slice_blobs_es = self.umap_blobs_per_slice[arr_idx][0]
-        slice_blobs_ed = self.umap_blobs_per_slice[arr_idx][1]
-        self.summed_blob_uvalue_per_slice[patient_disease_cat][0].extend(np.sum(slice_blobs_es, axis=1))
-        self.summed_blob_uvalue_per_slice[patient_disease_cat][1].extend(np.sum(slice_blobs_ed, axis=1))
+        if do_refer_slices:
+            self.num_of_slices_referred[patient_disease_cat] += np.count_nonzero(self.patient_slices_referred[arr_idx], axis=1)
+            # umap_blobs_per_slice has shape: [2, #slices, config.num_of_umap_blobs (5)]
+            # first sum over num_of_umap_blobs dim, we'll average later over the number of slices per category
+            slice_blobs_es = self.umap_blobs_per_slice[arr_idx][0]
+            slice_blobs_ed = self.umap_blobs_per_slice[arr_idx][1]
+            self.summed_blob_uvalue_per_slice[patient_disease_cat][0].extend(np.sum(slice_blobs_es, axis=1))
+            self.summed_blob_uvalue_per_slice[patient_disease_cat][1].extend(np.sum(slice_blobs_ed, axis=1))
 
     def compute_results_per_group(self):
         for disease_cat, num_of_cases in self.num_per_category.iteritems():
-            if num_of_cases != 20:
-                pass
-                # raise ValueError("ERROR - Number of patients in group {} should be 20 not {}".format(disease_cat,
-                #                                                                                     num_of_cases))
+            if num_of_cases != 5:
+                raise ValueError("ERROR - Number of patients in group {} should be 20 not {}".format(disease_cat,
+                                                                                                     num_of_cases))
             if num_of_cases != 0:
                 self.mean_ref_dice_per_dcat[disease_cat] = self.ref_dice_per_dcat[disease_cat] * 1. / float(num_of_cases)
                 self.mean_ref_hd_per_dcat[disease_cat] = self.ref_hd_per_dcat[disease_cat] * 1. / float(num_of_cases)
