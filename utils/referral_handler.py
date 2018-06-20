@@ -572,6 +572,7 @@ class ReferralResults(object):
         self.ref_hd_per_dcat = {}
         self.num_per_category = {}
         self.perc_slices_referred = {}
+        self.total_num_of_slices_referred = {}
         # only used temporally, will be reset after all detailed results have been loaded and processed
         self.detailed_results = []
         self.load_all_ref_results()
@@ -613,6 +614,7 @@ class ReferralResults(object):
                 [(disease_cat, 0) for disease_cat in config.disease_categories.keys()])
             self.perc_slices_referred[referral_threshold] = dict(
                 [(disease_cat, np.zeros(2)) for disease_cat in config.disease_categories.keys()])
+            self.total_num_of_slices_referred[referral_threshold] = np.zeros(2)
             # ok, start looping over FOLDS aka experiments
             for fold_id, exper_id in self.exper_dict.iteritems():
                 # the patient disease classification if we have not done so already
@@ -819,6 +821,7 @@ class ReferralResults(object):
                 det_result_obj.summed_blob_uvalue_per_slice[disease_cat][0])
             self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][1].extend(
                 det_result_obj.summed_blob_uvalue_per_slice[disease_cat][1])
+            self.total_num_of_slices_referred[referral_threshold] += det_result_obj.num_of_slices_referred[disease_cat]
 
     def _compute_statistics_per_disease_category(self, referral_threshold):
         # print("----------------- referral_threshold {:.2f} -------------------".format(referral_threshold))
@@ -836,7 +839,7 @@ class ReferralResults(object):
                      np.median(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][1]),
                      np.std(self.summed_blob_uvalue_per_slice[referral_threshold][disease_cat][1])]
 
-                self.perc_slices_referred[referral_threshold] = \
+                self.perc_slices_referred[referral_threshold][disease_cat] = \
                     np.nan_to_num(self.num_of_slices_referred[referral_threshold][disease_cat] *
                                   100. / float(self.total_num_of_slices[referral_threshold][disease_cat])).astype(
                         np.int)
