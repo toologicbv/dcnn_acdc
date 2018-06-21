@@ -224,7 +224,7 @@ def show_referral_results(ref_result_obj, referral_threshold, per_disease=False)
         num_per_category = ref_result_obj.num_per_category[referral_threshold]
         mean_org_dice_per_dcat = ref_result_obj.org_dice_per_dcat[referral_threshold]
         num_of_slices_referred = ref_result_obj.num_of_slices_referred[referral_threshold]
-        total_num_of_slices = ref_result_obj.total_num_of_slices[referral_threshold]
+        perc_slices_referred_per_dcat = ref_result_obj.perc_slices_referred_per_dcat[referral_threshold]
         mean_blob_uvalue_per_slice = ref_result_obj.mean_blob_uvalue_per_slice[referral_threshold]
         mean_ref_dice_per_dcat = ref_result_obj.ref_dice_per_dcat[referral_threshold]
         mean_org_hd_per_dcat = ref_result_obj.org_hd_per_dcat[referral_threshold]
@@ -234,10 +234,7 @@ def show_referral_results(ref_result_obj, referral_threshold, per_disease=False)
             org_dice = mean_org_dice_per_dcat[disease_cat]
             print("------------------------------ Results for class {} -----------------"
                   "-----------------".format(disease_cat))
-
-            perc_slices_referred = np.nan_to_num(num_of_slices_referred[disease_cat] *
-                                                 100. / float(total_num_of_slices[disease_cat])).astype(np.int)
-
+            perc_slices_referred = perc_slices_referred_per_dcat[disease_cat]
             print("ES & ED Mean/median u-value {:.2f}/{:.2f} & {:.2f}/{:.2f}"
                   "\t % slices referred {:.2f} & {:.2f}".format(mean_blob_uvalue_per_slice[disease_cat][0][0],
                                                                 mean_blob_uvalue_per_slice[disease_cat][0][1],

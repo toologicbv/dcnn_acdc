@@ -12,6 +12,36 @@ from skimage import exposure
 import matplotlib.pyplot as plt
 
 
+def get_dice_diffs(diffs, num_of_slices, slice_stats, phase):
+    """
+
+    :param org_dice_slices:
+    :param ref_dice_slices:
+    :param phase: can be 0=ES or 1=ED
+    :param num_of_slices: OrderedDict with key #slices, value frequency
+    :param slice_stats: OrderedDict with key #slices, value mean dice increase between org - ref dice coeff.
+    :return:
+    """
+
+    if np.any(diffs < 0.):
+        print("------------------ WRONG negative diff between ref and org slice dice ---------------------")
+        print("Ref dice phase={}".format(phase))
+        print(diffs[phase, 1:])
+        print("Original")
+        print(diffs[phase, 1:])
+        print("Diffs")
+        print(diffs)
+    slices = diffs.shape[0]
+    if slices in slice_stats.keys():
+        num_of_slices[slices] += 1
+        slice_stats[slices] += diffs
+    else:
+        num_of_slices[slices] = 1
+        slice_stats[slices] = diffs
+
+    return num_of_slices, slice_stats
+
+
 def generate_std_hist_corr_err(img_stds, labels, pred_labels, referral_threshold=None):
     """
 
