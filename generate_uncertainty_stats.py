@@ -34,9 +34,9 @@ from config.config import config
         --exper_id=20180418_15_02_05_dcnn_mcv1_150000E_lr2e02 
         
     (4) Run with run_mode=
-        python generate_uncertainty_stats.py --cuda 
+        python generate_uncertainty_stats.py 
         --run_mode="test_referrals" --aggregate_func="max" --referral_thresholds 0.08 0.1 0.12 0.14 0.16
-        --do_filter_slices --slice_filter_type=M --exper_id=20180426_14_14_57_dcnn_mc_f3p01_brier_150KE_lr2e02 
+        --slice_filter_type=M --exper_id=20180426_14_14_57_dcnn_mc_f3p01_brier_150KE_lr2e02 
         
     And finally if you want to generate the figures use:
     python generate_uncertainty_stats.py --exper_id=20180426_14_13_46_dcnn_mc_f1p01_brier_150KE_lr2e02 
@@ -58,10 +58,9 @@ def do_parse_args():
     parser.add_argument('--exper_id', default=None)
     parser.add_argument('--run_mode', choices=['outliers', 'u_maps_and_preds', 'figures_only', 'test_referrals',
                                                "filtered_umaps_only"], default="u_maps_only")
-    parser.add_argument('--do_filter_slices', action='store_true', default=False, help='filter slices for referral')
-    parser.add_argument('--slice_filter_type', choices=['M', 'MD', 'MS'],
+    parser.add_argument('--slice_filter_type', choices=['M', 'MD', 'MS', 'R'],
                         default="M",
-                        help="M=mean; MD=median; MS=mean+stddev. Only necessary in combination with do_filter_slices")
+                        help="M=mean; MD=median; MS=mean+stddev; R=Random. ")
     parser.add_argument('--aggregate_func', choices=['max', 'mean'], default="max")
     parser.add_argument('--mc_samples', type=int, default=10, help="# of MC samples")
     parser.add_argument('--checkpoints', nargs='+', default=150000, help="Saved checkpoints")
@@ -231,8 +230,7 @@ def main():
                                           aggregate_func=args.aggregate_func,
                                           verbose=True, do_save=True, num_of_images=None,
                                           patients=None)  # ["patient082", "patient084"])
-            ref_handler.test(referral_only=True, do_filter_slices=args.do_filter_slices,
-                             slice_filter_type=args.slice_filter_type, verbose=False)
+            ref_handler.test(referral_only=True, slice_filter_type=args.slice_filter_type, verbose=False)
 
 
 if __name__ == '__main__':

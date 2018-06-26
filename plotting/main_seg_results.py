@@ -324,7 +324,6 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
                               **config.title_font_small)
                 plt.axis('off')
 
-
             if info_type is not None:
                 # Last two rows: histogram of uncertainties (pos-only or raw ones). Covers 2 rows/columns
                 # create histogram

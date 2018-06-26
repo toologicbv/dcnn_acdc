@@ -2,11 +2,11 @@ import os
 import numpy as np
 import copy
 from collections import OrderedDict
-from common.common import load_pred_labels
+from common.common import load_pred_labels, setSeed
 from utils.test_handler import ACDC2017TestHandler
 from config.config import config
 from utils.uncertainty_blobs import UncertaintyBlobStats
-from utils.referral_results import ReferralDetailedResults, ReferralResults
+from utils.referral_results import ReferralDetailedResults, ReferralResults, SliceReferral
 
 
 def determine_referral_slices(u_map_blobs, referral_threshold, ublob_stats):
@@ -26,6 +26,28 @@ def determine_referral_slices(u_map_blobs, referral_threshold, ublob_stats):
 
     ref_slices_idx_es = np.argwhere(slice_blobs_es >= ublob_stats.min_area_size[referral_threshold][0])[:, 0]
     ref_slices_idx_ed = np.argwhere(slice_blobs_ed >= ublob_stats.min_area_size[referral_threshold][1])[:, 0]
+
+    return slice_blobs_es, slice_blobs_ed, ref_slices_idx_es, ref_slices_idx_ed
+
+
+def randomly_determine_referral_slices(refer_percs_slices, num_of_slices):
+    """
+
+    :param refer_percs_slices: numpy array shape [2] for ES/ED slice referral percentages
+    :param num_of_slices:
+    :return:
+    """
+    # get random numbers between 0 and 1 for each slice (ES/ED)
+    p_es = np.random.uniform(size=num_of_slices)
+    p_ed = np.random.uniform(size=num_of_slices)
+    # determine slice indices to be referred
+    p_ref_es = (refer_percs_slices[0] * num_of_slices) / float(num_of_slices)
+    p_ref_ed = (refer_percs_slices[1] * num_of_slices) / float(num_of_slices)
+    ref_slices_idx_es = np.nonzero(p_es < p_ref_es)[0]
+    ref_slices_idx_ed = np.nonzero(p_ed < p_ref_ed)[0]
+    # create dummy slice_blob objects otherwise other stuff will break
+    slice_blobs_es = np.zeros(num_of_slices)
+    slice_blobs_ed = np.zeros(num_of_slices)
 
     return slice_blobs_es, slice_blobs_ed, ref_slices_idx_es, ref_slices_idx_ed
 
@@ -137,7 +159,9 @@ class ReferralHandler(object):
                 self.image_range = [self.test_set.trans_dict[p_id] for p_id in patients]
                 self.num_of_images = len(self.image_range)
                 print("INFO - Running for {} only".format(patients))
+                self.debug = True
             else:
+                self.debug = False
                 self.num_of_images = len(self.test_set.images)
                 self.image_range = np.arange(self.num_of_images)
         self.pred_labels_input_dir = os.path.join(exper_handler.exper.config.root_dir,
@@ -165,23 +189,33 @@ class ReferralHandler(object):
 
         return pred_labels  # , ref_pred_labels
 
-    def test(self, referral_threshold=None, referral_only=False, do_filter_slices=False,
-             slice_filter_type=None, verbose=False):
+    def test(self, referral_threshold=None, referral_only=False, slice_filter_type=None, verbose=False):
         """
 
-        :param slice_filter_type: M=mean; MD=median; MS=mean+stddev
-        :param do_filter_slices: if True we only refer certain slices of an 3D image (mimick clinical workflow)
-                                 if False we refer ALL image slices to medical expert (only for comparison)
+        :param slice_filter_type: M=mean; MD=median; MS=mean+stddev; R=Randomly refer slices!
+                                  based on empirical % computed by means of other methods
+
         :param verbose:
         :param referral_threshold:
         :param referral_only: If True => then we load filtered u-maps from disk otherwise we create them on the fly
         :return:
         """
-        self.do_filter_slices = do_filter_slices
-        if self.do_filter_slices:
-            self.slice_filter_type = slice_filter_type
+
+        self.slice_filter_type = slice_filter_type
+        if self.slice_filter_type is not None:
+            self.do_filter_slices = True
         else:
-            self.slice_filter_type = None
+            self.do_filter_slices = False
+
+        if self.slice_filter_type == "R":
+            # set seed
+            setSeed(4325)
+            # Random referral we need referral percentages
+            for ref in self.referral_thresholds:
+                if ref not in SliceReferral.perc_referred.keys():
+                    raise ValueError("ERROR - slice_filter_type={} but object SliceReferral does not contain"
+                                     " referral % for all referral thresholds "
+                                     "e.g. {:.2f}".format(self.slice_filter_type, ref))
         if referral_threshold is not None:
             self.referral_thresholds = [referral_threshold]
 
@@ -191,15 +225,21 @@ class ReferralHandler(object):
         ublob_stats = None
         self.referral_thresholds.sort()
         for referral_threshold in self.referral_thresholds:
+            if self.slice_filter_type == "R":
+                # get numpy array shape [2] with ES/ED slice referral percentages
+                es_ed_ref_percs = SliceReferral.perc_referred[referral_threshold]
+            else:
+                es_ed_ref_percs = None
             # initialize numpy arrays for computation of dice and hd for results WITH and WITHOUT referral
             self.dice = np.zeros((self.num_of_images, 2, 4))
             self.hd = np.zeros((self.num_of_images, 2, 4))
             self.ref_dice = np.zeros((self.num_of_images, 2, 4))
             self.ref_hd = np.zeros((self.num_of_images, 2, 4))
-            self.det_results = ReferralDetailedResults(self.exper_handler, do_filter_slices=self.do_filter_slices)
+            self.det_results = ReferralDetailedResults(self.exper_handler, do_filter_slices=self.do_filter_slices,
+                                                       debug=self.debug)
             # get UncertaintyBlobStats object that is essential for slice referral (contains min_area_size) used in
             # procedure "determine_referral_slices"
-            if self.do_filter_slices:
+            if self.do_filter_slices and self.slice_filter_type != "R":
                 if ublob_stats is None:
                     path_to_root_fold = os.path.join(self.exper_handler.exper.config.root_dir, config.data_dir)
                     ublob_stats = UncertaintyBlobStats.load(path_to_root_fold)
@@ -267,8 +307,14 @@ class ReferralHandler(object):
                 ref_u_map_blobs = self.exper_handler.ref_map_blobs[patient_id]
                 # filter uncertainty blobs in slices
                 if self.do_filter_slices:
-                    slice_blobs_es, slice_blobs_ed, ref_slices_idx_es, ref_slices_idx_ed = \
-                        determine_referral_slices(ref_u_map_blobs, referral_threshold, ublob_stats)
+                    if self.slice_filter_type == "R":
+                        # we randomly refer slices
+                        slice_blobs_es, slice_blobs_ed, ref_slices_idx_es, ref_slices_idx_ed = \
+                            randomly_determine_referral_slices(es_ed_ref_percs, num_of_slices)
+                    else:
+                        # refer slices based on u-value statistics
+                        slice_blobs_es, slice_blobs_ed, ref_slices_idx_es, ref_slices_idx_ed = \
+                            determine_referral_slices(ref_u_map_blobs, referral_threshold, ublob_stats)
                     print(ref_slices_idx_es + 1)
                     print(ref_slices_idx_ed + 1)
                     arr_slice_referrals = [ref_slices_idx_es, ref_slices_idx_ed]

@@ -31,7 +31,8 @@ class UncertaintyBlobStats(object):
         self.median = {}
         self.mean = {}
         self.std = {}
-        self.statistics_per_group = {'NOR': [], 'DCM': [], 'MINF': [], 'ARV': [], 'HCM': []}
+        # per group: np.array [2, 3], dim0: ES/ED, dim1: mean, median, stddev
+        self.statistics_per_group = {}
         self.min_area_size = {}
         # first load the experiment handlers
         self._load_exper_handlers()
@@ -105,16 +106,35 @@ class UncertaintyBlobStats(object):
 
             blob_values_es = np.concatenate(blob_values_es, axis=0)
             blob_values_ed = np.concatenate(blob_values_ed, axis=0)
-            self.median[referral_threshold] = [np.median(np.array(blob_values_es)), np.median(np.array(blob_values_ed))]
-            self.mean[referral_threshold] = [np.mean(np.array(blob_values_es)), np.mean(np.array(blob_values_ed))]
-            self.std[referral_threshold] = [np.std(np.array(blob_values_es)), np.std(np.array(blob_values_ed))]
+            # blob_values_nonzero_es = blob_values_es[blob_values_es != 0]
+            # blob_values_nonzero_ed = blob_values_es[blob_values_ed != 0]
+            # self.median[referral_threshold] = [np.median(np.array(blob_values_nonzero_es)),
+            #                                   np.median(np.array(blob_values_nonzero_ed))]
+            # self.mean[referral_threshold] = [np.mean(np.array(blob_values_nonzero_es)),
+            #                                   np.mean(np.array(blob_values_nonzero_ed))]
+            # self.std[referral_threshold] = [np.std(np.array(blob_values_nonzero_es)),
+            #                                   np.std(np.array(blob_values_nonzero_ed))]
+            self.median[referral_threshold] = [np.median(np.array(blob_values_es)),
+                                               np.median(np.array(blob_values_ed))]
+            self.mean[referral_threshold] = [np.mean(np.array(blob_values_es)),
+                                             np.mean(np.array(blob_values_ed))]
+            self.std[referral_threshold] = [np.std(np.array(blob_values_es)),
+                                            np.std(np.array(blob_values_ed))]
             # compute statistics per patient group
             for pgroup, blobs_es in blob_values_per_group_es.iteritems():
                 blobs_ed = blob_values_per_group_ed[pgroup]
                 blobs_es = np.array(blobs_es)
                 blobs_ed = np.array(blobs_ed)
-                mean_es, median_es, std_es = np.mean(blobs_es), np.median(blobs_es), np.std(blobs_es)
-                mean_ed, median_ed, std_ed = np.mean(blobs_ed), np.median(blobs_ed), np.std(blobs_ed)
+                # blob_nonzero_es = blobs_es[blobs_es != 0]
+                # blob_nonzero_ed = blobs_ed[blobs_ed != 0]
+                # mean_es, median_es, std_es = np.mean(blob_nonzero_es), np.median(blob_nonzero_es),
+                #                              np.std(blob_nonzero_es)
+                mean_es, median_es, std_es = np.mean(blobs_es), np.median(blobs_es), np.std(
+                    blobs_es)
+                # mean_ed, median_ed, std_ed = np.mean(blob_nonzero_ed), np.median(blob_nonzero_ed),
+                #                               np.std(blob_nonzero_ed)
+                mean_ed, median_ed, std_ed = np.mean(blobs_ed), np.median(blobs_ed), np.std(
+                   blobs_ed)
                 statistics_per_group[pgroup] = np.array([[mean_es, median_es, std_es],
                                                               [mean_ed, median_ed, std_ed]])
             # dictionary (referral_threshold) of dictionaries (patient groups)

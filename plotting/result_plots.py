@@ -6,12 +6,14 @@ from utils.referral_results import ReferralResults
 
 
 def plot_referral_results(ref_result_obj, ref_slice_results=None, width=16, height=14,
-                          do_save=False, do_show=True, model_name="Main title"):
+                          do_save=False, do_show=True, model_name="Main title",
+                          ref_random_obj=None):
     """
     :param ref_result_obj: ReferralResult object for which ALL slices are referred
     :param ref_slice_results:  ReferralResult object for which only SPECIFIC slices are referred
 
                     shape of the values [ ]
+    :param ref_random_obj: ReferralResult object with RANDOM slice referral "slice_refer_type=R"
 
     :param model_name
     :param do_show
@@ -19,6 +21,7 @@ def plot_referral_results(ref_result_obj, ref_slice_results=None, width=16, heig
     :param width
     :param height
     """
+    # % referred slices over ALL classes. Key=referral_threshold, value numpy [2] (for ES/ED)
     dice_ref = ref_result_obj.get_dice_referral_dict()
     xs = np.array(dice_ref.keys())
     X = np.vstack(dice_ref.values())
@@ -27,7 +30,17 @@ def plot_referral_results(ref_result_obj, ref_slice_results=None, width=16, heig
     # actually we don't want the BG class to interfere with min/max, so set to zero
     X[:, 0], X[:, 4] = 0, 0
     num_of_thresholds = xs.shape[0]
-    # % referred slices over ALL classes. Key=referral_threshold, value numpy [2] (for ES/ED)
+    # Random referral object?
+    if ref_random_obj is not None:
+        random_referral = True
+        dice_slices_rnd = ref_random_obj.get_dice_referral_dict()
+        X_rnd = np.vstack(dice_slices_rnd.values())
+        X_rnd = np.reshape(X_rnd, (-1, 8))
+        X_rnd[:, 0], X_rnd[:, 4] = 0, 0
+        total_perc_slices_random = np.vstack(ref_random_obj.perc_slices_referred.values())
+        total_perc_slices_random = np.reshape(total_perc_slices_random, (-1, 2))
+    else:
+        random_referral = False
 
     if ref_slice_results is not None:
         slice_referral = True
@@ -66,6 +79,9 @@ def plot_referral_results(ref_result_obj, ref_slice_results=None, width=16, heig
         rows = 4
     else:
         slice_referral = False
+        if not random_referral:
+            # we only plot the ALL slices referral result, so need not make figure too big
+            height = 10
         rows = 2
 
     columns = 4
@@ -88,13 +104,17 @@ def plot_referral_results(ref_result_obj, ref_slice_results=None, width=16, heig
         if cls < 4:
             # will the baseline scalar over all thresholds for comparison
             wo_ref.fill(dice_wo_ref[0, cls])
-            # plot class-dice for all thresholds
-            ax1.plot(xs, X[:, cls], label="ref all slices {}".format(class_lbls[cls]), c=color_code[cls], marker="o",
-                     linestyle="--", alpha=0.6, markersize=9)
+            if not random_referral:
+                # plot class-dice for all thresholds
+                ax1.plot(xs, X[:, cls], label="ref all slices {}".format(class_lbls[cls]), c=color_code[cls],
+                         marker="o", linestyle="--", alpha=0.6, markersize=9)
+            else:
+                ax1.plot(xs, X_rnd[:, cls], label="random slice referral {}".format(class_lbls[cls]), c=color_code[cls],
+                         marker="o", linestyle="--", alpha=0.13, markersize=9)
             # plot our baseline performance
-
-            ax1.plot(xs, wo_ref, label="no referral {}".format(class_lbls[cls]), c=color_code[cls],
-                     linestyle="-", alpha=0.2)
+            if not random_referral:
+                ax1.plot(xs, wo_ref, label="no referral {}".format(class_lbls[cls]), c=color_code[cls],
+                         linestyle="-", alpha=0.2)
             ax1.set_ylabel("dice", **config.axis_font)
             ax1.set_xlabel("referral threshold", **config.axis_font)
             ax1.set_ylim([min_dice, max_dice])
@@ -105,22 +125,28 @@ def plot_referral_results(ref_result_obj, ref_slice_results=None, width=16, heig
             if slice_referral:
                 ax1.plot(xs, X_pos[:, cls], label="slice-referral {}".format(class_lbls[cls]),
                          c=color_code[cls], marker="D", markersize=9,
-                         linestyle=":", alpha=0.4)
+                         linestyle=":", alpha=0.45)
         if cls == 4:
             ax2 = plt.subplot2grid((rows, columns), (0, 2), rowspan=2, colspan=2)
         if 4 < cls <= 7:
             class_idx = cls - 4
-            ax2.plot(xs, X[:, cls], label="ref all slices {}".format(class_lbls[class_idx]),
-                     c=color_code[class_idx], marker="o", markersize=9,
-                     linestyle="--", alpha=0.6)
+            if not random_referral:
+                ax2.plot(xs, X[:, cls], label="ref all slices {}".format(class_lbls[class_idx]),
+                         c=color_code[class_idx], marker="o", markersize=9,
+                         linestyle="--", alpha=0.6)
+            else:
+                ax2.plot(xs, X_rnd[:, cls], label="random slice referral {}".format(class_lbls[class_idx]),
+                         c=color_code[class_idx], marker="o", markersize=9,
+                         linestyle="--", alpha=0.13)
             wo_ref.fill(dice_wo_ref[1, class_idx])
             # plot our baseline performance
-            ax2.plot(xs, wo_ref, label="no referral {}".format(class_lbls[class_idx]), c=color_code[class_idx],
-                     linestyle="-", alpha=0.2)
+            if not random_referral:
+                ax2.plot(xs, wo_ref, label="no referral {}".format(class_lbls[class_idx]), c=color_code[class_idx],
+                         linestyle="-", alpha=0.2)
             if slice_referral:
                 ax2.plot(xs, X_pos[:, cls], label="slice-referral {}".format(class_lbls[class_idx]),
                          c=color_code[class_idx], marker="D", markersize=9,
-                         linestyle=":", alpha=0.4)
+                         linestyle=":", alpha=0.45)
             # ax2.set_ylabel("dice", **config.axis_font)
             ax2.set_xlabel("referral threshold", **config.axis_font)
             plt.tick_params(axis='both', which='major', labelsize=config.axis_ticks_font_size)
@@ -142,13 +168,21 @@ def plot_referral_results(ref_result_obj, ref_slice_results=None, width=16, heig
                   c='r', marker="*", linestyle="--", alpha=0.6, markersize=12)
         ax3b.tick_params(axis='both', which='major', labelsize=config.axis_ticks_font_size)
         # plot % referral per disease category
-        for disease_cat, idx in d_cat_idx.iteritems():
-            percs_es = perc_slices_referred_per_dcat[:, idx, 0]
-            percs_ed = perc_slices_referred_per_dcat[:, idx, 1]
-            ax3a.plot(xs, percs_es * 100, label="% referred {}".format(disease_cat),
-                      c=dcat_colours[idx], marker="D", linestyle="--", alpha=0.15, markersize=6)
-            ax3b.plot(xs, percs_ed * 100, label="% referred {}".format(disease_cat),
-                      c=dcat_colours[idx], marker="D", linestyle="--", alpha=0.15, markersize=6)
+        if not random_referral:
+            for disease_cat, idx in d_cat_idx.iteritems():
+                percs_es = perc_slices_referred_per_dcat[:, idx, 0]
+                percs_ed = perc_slices_referred_per_dcat[:, idx, 1]
+                ax3a.plot(xs, percs_es * 100, label="% referred {}".format(disease_cat),
+                          c=dcat_colours[idx], marker="D", linestyle="--", alpha=0.15, markersize=6)
+                ax3b.plot(xs, percs_ed * 100, label="% referred {}".format(disease_cat),
+                          c=dcat_colours[idx], marker="D", linestyle="--", alpha=0.15, markersize=6)
+        else:
+            # instead of plotting referral percs per disease cat we plot the random referral percs
+            ax3a.plot(xs, total_perc_slices_random[:, 0] * 100, label="% randomly referred",
+                      c='g', marker="D", linestyle="--", alpha=0.2, markersize=7)
+            ax3b.plot(xs, total_perc_slices_random[:, 1] * 100, label="% randomly referred",
+                      c='g', marker="D", linestyle="--", alpha=0.2, markersize=7)
+
         ax3a.legend(loc="best")
         ax3a.set_ylim([perc_slices_min, perc_slices_max])
         ax3a.set_xlabel("referral threshold", **config.axis_font)
@@ -164,7 +198,14 @@ def plot_referral_results(ref_result_obj, ref_slice_results=None, width=16, heig
         fig_path = os.path.join(config.root_dir, "figures")
         if not os.path.isdir(fig_path):
             os.makedirs(fig_path)
-        fig_name = model_name + "_referral_results"
+        if random_referral:
+            fig_name = model_name + "_random_referral_results"
+        else:
+            if slice_referral:
+                fig_name = model_name + "_referral_results"
+            else:
+                fig_name = model_name + "_referral_results_allslices_only"
+
         fig_name_pdf = os.path.join(fig_path, fig_name + ".pdf")
         fig_name_jpeg = os.path.join(fig_path, fig_name + ".jpeg")
         plt.savefig(fig_name_pdf, bbox_inches='tight')

@@ -9,25 +9,66 @@ from in_out.patient_classification import Patients
 from common.common import get_dice_diffs
 
 
-def rescale_slice_referral_histograms(patient_slices_referred, referral_threshold, max_scale=100.):
+def rescale_slice_ref_improvement_histograms(es_mean_slice_improvements, ed_mean_slice_improvements,
+                                             max_scale=100., do_normalize=True):
     """
 
-    :param patient_slices_referred: dictionary (key ref-threshold) of dictionary (key=#slices)
-    :param referral_threshold
+    :param es_mean_slice_improvements: dictionary (key=#slices) and
+            values = numpy array (shape=#slices) with mean (over classes) dice improvement per slice (in %)
+            (e.g. volumes with 10 slices=key=10: np.array with shape [10] and mean % improvements per slice index
+    :param ed_mean_slice_improvements: see es_mean_slice_improvements
+
     :param max_scale
+    :param do_normalize: mean centered and divided by range
     :return:
     """
-    slices_referred = patient_slices_referred[referral_threshold]
     scaled_hist = np.zeros((2, int(max_scale)))
-    for num_of_slices, org_hist in slices_referred.iteritems():
+    for num_of_slices, es_dice_imp in es_mean_slice_improvements.iteritems():
         # org_hist is np.array with shape [2, #slices] ES/ED
-
+        ed_dice_imp = ed_mean_slice_improvements[num_of_slices]
         zoom_factor = float(max_scale) / float(num_of_slices)
-        scaled_hist[0] += zoom(org_hist[0], zoom=zoom_factor)
-        scaled_hist[1] += zoom(org_hist[0], zoom=zoom_factor)
+        scaled_hist[0] += zoom(es_dice_imp, zoom=zoom_factor, order=1)
+        scaled_hist[1] += zoom(ed_dice_imp, zoom=zoom_factor, order=1)
 
-    scaled_hist = np.multiply(scaled_hist, np.expand_dims(1./np.sum(scaled_hist, axis=1), axis=1))
-    print(np.sum(scaled_hist, axis=1))
+    # scaled_hist = np.multiply(scaled_hist, np.expand_dims(1./np.sum(scaled_hist, axis=1), axis=1))
+    if do_normalize:
+        s_min = np.min(scaled_hist, axis=1)
+        s_max = np.max(scaled_hist, axis=1)
+        denominator = 1./(s_max - s_min)
+        denominator = np.expand_dims(denominator, axis=1)
+        numerator = (scaled_hist - np.expand_dims(s_min, axis=1))
+        scaled_hist = numerator * denominator
+
+    return scaled_hist
+
+
+def rescale_slice_referral_histograms(freq_of_slice_referrals, max_scale=100., do_normalize=True):
+    """
+
+    :param freq_of_slice_referrals: dictionary (key=#slices) and
+            values = numpy array (shape=#slices) with frequency of referral per slice-index
+            (e.g. slice3: 4 times referred)
+
+    :param max_scale
+    :param do_normalize: normalize/scale y-values
+    :return:
+    """
+    scaled_hist = np.zeros((2, int(max_scale)))
+    for num_of_slices, org_hist in freq_of_slice_referrals.iteritems():
+        # org_hist is np.array with shape [2, #slices] ES/ED
+        zoom_factor = float(max_scale) / float(num_of_slices)
+        scaled_hist[0] += zoom(org_hist[0], zoom=zoom_factor, order=1)
+        scaled_hist[1] += zoom(org_hist[1], zoom=zoom_factor, order=1)
+
+    # scaled_hist = np.multiply(scaled_hist, np.expand_dims(1./np.sum(scaled_hist, axis=1), axis=1))
+    if do_normalize:
+        s_min = np.min(scaled_hist, axis=1)
+        s_max = np.max(scaled_hist, axis=1)
+        denominator = 1./(s_max - s_min)
+        denominator = np.expand_dims(denominator, axis=1)
+        numerator = (scaled_hist - np.expand_dims(s_min, axis=1))
+        scaled_hist = numerator * denominator
+
     return scaled_hist
 
 
@@ -76,6 +117,7 @@ class ReferralResults(object):
                            ALL SLICES!
 
         """
+        self.save_output_dir = config.data_dir
         self.referral_thresholds = referral_thresholds
         self.slice_filter_type = slice_filter_type
         if fold is not None:
@@ -116,6 +158,7 @@ class ReferralResults(object):
         self.org_hd_img = OrderedDict()
         self.img_slice_improvements = OrderedDict()
         self.img_slice_seg_error_improvements = OrderedDict()
+        self.img_slice_improvements_per_dcat = OrderedDict()
         self.es_mean_slice_improvements = OrderedDict()
         self.ed_mean_slice_improvements = OrderedDict()
         self.patient_slices_referred = OrderedDict()
@@ -238,53 +281,7 @@ class ReferralResults(object):
             self._compute_statistics_per_disease_category(referral_threshold)
 
             if self.print_results:
-                # ref_dice_stats has shape [2, 2, 4] dim0=ES/ED; dim1=4means/4stddevs
-                overall_dice = np.concatenate((np.expand_dims(self.ref_dice_stats[referral_threshold][0][0], axis=0),
-                                               np.expand_dims(self.ref_dice_stats[referral_threshold][1][0], axis=0)))
-                std_dice = np.concatenate((np.expand_dims(self.ref_dice_stats[referral_threshold][0][1], axis=0),
-                                               np.expand_dims(self.ref_dice_stats[referral_threshold][1][1], axis=0)))
-                overall_hd = np.concatenate((np.expand_dims(self.ref_hd_stats[referral_threshold][0][0], axis=0),
-                                               np.expand_dims(self.ref_hd_stats[referral_threshold][1][0], axis=0)))
-                std_hd = np.concatenate((np.expand_dims(self.ref_hd_stats[referral_threshold][0][1], axis=0),
-                                               np.expand_dims(self.ref_hd_stats[referral_threshold][1][1], axis=0)))
-                print("Evaluation with referral threshold {:.2f}".format(referral_threshold))
-                print("Overall:\t"
-                      "dice(RV/Myo/LV): ES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})\t"
-                      "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(overall_dice[0, 1], std_dice[0, 1],
-                                                                                  overall_dice[0, 2],
-                                                                                  std_dice[0, 2], overall_dice[0, 3],
-                                                                                  std_dice[0, 3],
-                                                                                  overall_dice[1, 1], std_dice[1, 1],
-                                                                                  overall_dice[1, 2],
-                                                                                  std_dice[1, 2], overall_dice[1, 3],
-                                                                                  std_dice[1, 3]))
-                print("Hausdorff(RV/Myo/LV):\t\tES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})\t"
-                      "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(overall_hd[0, 1], std_hd[0, 1],
-                                                                                  overall_hd[0, 2],
-                                                                                  std_hd[0, 2], overall_hd[0, 3],
-                                                                                  std_hd[0, 3],
-                                                                                  overall_hd[1, 1], std_hd[1, 1],
-                                                                                  overall_hd[1, 2],
-                                                                                  std_hd[1, 2], overall_hd[1, 3],
-                                                                                  std_hd[1, 3]))
-            if self.print_latex_string:
-                latex_line = " & {:.2f} $\pm$ {:.2f} & {:.2f}  $\pm$ {:.2f} & {:.2f} $\pm$ {:.2f} &" \
-                             "{:.2f} $\pm$ {:.2f} & {:.2f} $\pm$ {:.2f} & {:.2f} $\pm$ {:.2f} "
-                # print Latex strings
-                print("----------------------------------------------------------------------------------------------")
-                print("INFO - Latex strings")
-                print("Dice coefficients")
-                print(latex_line.format(overall_dice[0, 1], std_dice[0, 1], overall_dice[0, 2], std_dice[0, 2],
-                                        overall_dice[0, 3], std_dice[0, 3],
-                                        overall_dice[1, 1], std_dice[1, 1], overall_dice[1, 2], std_dice[1, 2],
-                                        overall_dice[1, 3], std_dice[1, 3]))
-                print("Hausdorff distance")
-                print(latex_line.format(overall_hd[0, 1], std_hd[0, 1], overall_hd[0, 2],  std_hd[0, 2],
-                                        overall_hd[0, 3],
-                                        std_hd[0, 3],
-                                        overall_hd[1, 1], std_hd[1, 1], overall_hd[1, 2], std_hd[1, 2],
-                                        overall_hd[1, 3],
-                                        std_hd[1, 3]))
+                self._print_results(referral_threshold)
 
     def _process_detailed_results(self, referral_threshold):
         """
@@ -520,6 +517,33 @@ class ReferralResults(object):
             self.ed_slice_freqs[referral_threshold] = num_of_slices_ed
             self.img_slice_improvements[referral_threshold] = img_slice_improvements
             self.img_slice_seg_error_improvements[referral_threshold] = img_slice_seg_error_improvements
+            self._compute_improvements_per_disease_cat_slice(referral_threshold)
+
+    def _compute_improvements_per_disease_cat_slice(self, referral_threshold):
+
+        self.img_slice_improvements_per_dcat[referral_threshold] = dict(
+            [(disease_cat, OrderedDict()) for disease_cat in config.disease_categories.keys()])
+        num_of_slices_per_dcat = dict(
+            [(disease_cat, OrderedDict()) for disease_cat in config.disease_categories.keys()])
+
+        for patient_id, slice_dice_improve in self.img_slice_improvements[referral_threshold].iteritems():
+            # slice_dice_improve is numpy array with shape [2, #slices]
+            disease_cat = self.patients[patient_id]
+            num_of_slices = slice_dice_improve.shape[1]
+            if num_of_slices in self.img_slice_improvements_per_dcat[referral_threshold][disease_cat]:
+                self.img_slice_improvements_per_dcat[referral_threshold][disease_cat][num_of_slices] += \
+                    slice_dice_improve
+                num_of_slices_per_dcat[disease_cat][num_of_slices] += 1
+            else:
+                num_of_slices_per_dcat[disease_cat][num_of_slices] = 1
+                self.img_slice_improvements_per_dcat[referral_threshold][disease_cat][num_of_slices] = \
+                                                        slice_dice_improve
+
+        # compute means
+        for disease_cat, dict_slices in num_of_slices_per_dcat.iteritems():
+            for num_of_slices, freq_slices in dict_slices.iteritems():
+                self.img_slice_improvements_per_dcat[referral_threshold][disease_cat][num_of_slices] *= \
+                        1./freq_slices
 
     def get_dice_referral_dict(self):
         self.referral_thresholds.sort()
@@ -534,6 +558,91 @@ class ReferralResults(object):
         p.load(config.data_dir)
         self.patients = p.category
 
+    def _print_results(self, referral_threshold):
+        # ref_dice_stats has shape [2, 2, 4] dim0=ES/ED; dim1=4means/4stddevs
+        overall_dice = np.concatenate((np.expand_dims(self.ref_dice_stats[referral_threshold][0][0], axis=0),
+                                       np.expand_dims(self.ref_dice_stats[referral_threshold][1][0], axis=0)))
+        std_dice = np.concatenate((np.expand_dims(self.ref_dice_stats[referral_threshold][0][1], axis=0),
+                                   np.expand_dims(self.ref_dice_stats[referral_threshold][1][1], axis=0)))
+        overall_hd = np.concatenate((np.expand_dims(self.ref_hd_stats[referral_threshold][0][0], axis=0),
+                                     np.expand_dims(self.ref_hd_stats[referral_threshold][1][0], axis=0)))
+        std_hd = np.concatenate((np.expand_dims(self.ref_hd_stats[referral_threshold][0][1], axis=0),
+                                 np.expand_dims(self.ref_hd_stats[referral_threshold][1][1], axis=0)))
+        print("Evaluation with referral threshold {:.2f}".format(referral_threshold))
+        print("Overall:\t"
+              "dice(RV/Myo/LV): ES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})\t"
+              "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(overall_dice[0, 1], std_dice[0, 1],
+                                                                          overall_dice[0, 2],
+                                                                          std_dice[0, 2], overall_dice[0, 3],
+                                                                          std_dice[0, 3],
+                                                                          overall_dice[1, 1], std_dice[1, 1],
+                                                                          overall_dice[1, 2],
+                                                                          std_dice[1, 2], overall_dice[1, 3],
+                                                                          std_dice[1, 3]))
+        print("Hausdorff(RV/Myo/LV):\t\tES {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})\t"
+              "ED {:.2f} ({:.2f})/{:.2f} ({:.2f})/{:.2f} ({:.2f})".format(overall_hd[0, 1], std_hd[0, 1],
+                                                                          overall_hd[0, 2],
+                                                                          std_hd[0, 2], overall_hd[0, 3],
+                                                                          std_hd[0, 3],
+                                                                          overall_hd[1, 1], std_hd[1, 1],
+                                                                          overall_hd[1, 2],
+                                                                          std_hd[1, 2], overall_hd[1, 3],
+                                                                          std_hd[1, 3]))
+
+        if self.print_latex_string:
+            latex_line = " & {:.2f} $\pm$ {:.2f} & {:.2f}  $\pm$ {:.2f} & {:.2f} $\pm$ {:.2f} &" \
+                         "{:.2f} $\pm$ {:.2f} & {:.2f} $\pm$ {:.2f} & {:.2f} $\pm$ {:.2f} "
+            # print Latex strings
+            print("----------------------------------------------------------------------------------------------")
+            print("INFO - Latex strings")
+            print("Dice coefficients")
+            print(latex_line.format(overall_dice[0, 1], std_dice[0, 1], overall_dice[0, 2], std_dice[0, 2],
+                                    overall_dice[0, 3], std_dice[0, 3],
+                                    overall_dice[1, 1], std_dice[1, 1], overall_dice[1, 2], std_dice[1, 2],
+                                    overall_dice[1, 3], std_dice[1, 3]))
+            print("Hausdorff distance")
+            print(latex_line.format(overall_hd[0, 1], std_hd[0, 1], overall_hd[0, 2], std_hd[0, 2],
+                                    overall_hd[0, 3],
+                                    std_hd[0, 3],
+                                    overall_hd[1, 1], std_hd[1, 1], overall_hd[1, 2], std_hd[1, 2],
+                                    overall_hd[1, 3],
+                                    std_hd[1, 3]))
+
+    def save(self, filename):
+
+        outfile = os.path.join(self.save_output_dir, filename)
+
+        try:
+            with open(outfile, 'wb') as f:
+                dill.dump(self, f)
+            print("INFO - Saved results to {}".format(outfile))
+        except IOError as e:
+            print "I/O error({0}): {1}".format(e.errno, e.strerror)
+            print("ERROR - can't save results to {}".format(outfile))
+
+    @staticmethod
+    def load_results(path_to_exp, verbose=True):
+        """
+        Loading ReferralResult object
+        :param path_to_exp:
+        :param verbose:
+        :return:
+        """
+        if verbose:
+            print("INFO - Loading ReferralResults object from file {}".format(path_to_exp))
+        try:
+            with open(path_to_exp, 'rb') as f:
+                referral_results = dill.load(f)
+
+        except IOError as e:
+            print "I/O error({0}): {1}".format(e.errno, e.strerror)
+            print("ERROR - Can't open file {}".format(path_to_exp))
+            raise IOError
+
+        if verbose:
+            print("INFO - Successfully loaded ReferralResults object.")
+        return referral_results
+
 
 class ReferralDetailedResults(object):
 
@@ -541,7 +650,8 @@ class ReferralDetailedResults(object):
         We save one of these objects for each referral threshold
     """
 
-    def __init__(self, exper_handler, do_filter_slices=False):
+    def __init__(self, exper_handler, do_filter_slices=False, debug=False):
+        self.debug = debug
         self.acc_slices = []
         self.hd_slices = []
         self.org_dice_slices = []
@@ -599,7 +709,7 @@ class ReferralDetailedResults(object):
                                                          exper_handler.exper.config.stats_path))
 
     def process_patient(self, patient_id, arr_idx, patient_disease_cat, do_refer_slices=False):
-        if patient_id != self.patient_ids[arr_idx]:
+        if patient_id != self.patient_ids[arr_idx] and not self.debug:
             raise ValueError("ERROR - ReferralDetailedResults.process_patient. Different patient "
                              "IDs {} != {} with arr_idx {}".format(patient_id, self.patient_ids[arr_idx], arr_idx))
         self.ref_dice_per_dcat[patient_disease_cat] += self.dices[arr_idx]
@@ -619,8 +729,8 @@ class ReferralDetailedResults(object):
 
     def compute_results_per_group(self):
         for disease_cat, num_of_cases in self.num_per_category.iteritems():
-            if num_of_cases != 5:
-                raise ValueError("ERROR - Number of patients in group {} should be 20 not {}".format(disease_cat,
+            if num_of_cases != 5 and not self.debug:
+                raise ValueError("ERROR - Number of patients in group {} should be 5 not {}".format(disease_cat,
                                                                                                      num_of_cases))
             if num_of_cases != 0:
                 self.mean_ref_dice_per_dcat[disease_cat] = self.ref_dice_per_dcat[disease_cat] * 1. / float(num_of_cases)
@@ -708,3 +818,19 @@ class ReferralDetailedResults(object):
                                                    ref_hd[0, 3], ref_hd[1, 1],
                                                    ref_hd[1, 2], ref_hd[1, 3]))
             print(" ")
+
+
+class SliceReferral(object):
+    """
+        Quick and dirty solution to store the slice referral percentages that we obtained empirically
+        when running referral experiments. Can be improved...
+    """
+
+    perc_referred = {0.08: np.array([0.37, 0.32]),
+                     0.1: np.array([0.35, 0.31]),
+                     0.12: np.array([0.32, 0.29]),
+                     0.14: np.array([0.31, 0.28]),
+                     0.16: np.array([0.3, 0.26]),
+                     0.18: np.array([0.27, 0.23]),
+                     0.2: np.array([0.23, 0.2]),
+                     0.22: np.array([0.2, 0.18])}
