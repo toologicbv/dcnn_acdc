@@ -277,6 +277,7 @@ def load_pred_labels(search_path, get_slice_referral=False):
 
     if get_slice_referral:
         try:
+            # boolean vector indicating which slices were referred
             referred_slices = data["referred_slices"]
         except KeyError:
             print("WARNING - common.load_pred_labels - Archive does not contain object referred_slices")

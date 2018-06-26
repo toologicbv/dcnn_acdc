@@ -35,6 +35,7 @@ class ExperimentHandler(object):
 
         self.exper = exper
         self.u_maps = None
+        self.pred_prob_maps = None
         self.referral_umaps = None
         self.ref_map_blobs = None
         self.test_results = None
@@ -205,9 +206,9 @@ class ExperimentHandler(object):
         del val_batch
 
     def test(self, checkpoints, test_set, image_num=0, mc_samples=1, sample_weights=False, compute_hd=False,
-             use_uncertainty=False, referral_threshold=None, use_seed=False, verbose=False, store_details=False,
-             do_filter=True, u_threshold=0., discard_outliers=False, save_pred_labels=False,
-             ref_positives_only=False, store_test_results=True):
+             use_seed=False, verbose=False, store_details=False,
+             do_filter=True, u_threshold=0., save_pred_labels=False,
+             store_test_results=True):
         """
 
         :param model:
@@ -216,15 +217,12 @@ class ExperimentHandler(object):
         :param mc_samples:
         :param sample_weights:
         :param compute_hd:
-        :param use_uncertainty: Boolean indicating whether we use uncertainty maps (per pixel/class) in order to refer
-         pixels to an EXPERT (meaning setting the pixel to the true value) in case the uncertainty is above a certain
-         threshold (parameter referral_threshold). This is only done for RV at the moment.
+
         :param referral_threshold: see explanation "use_uncertainty". This is the threshold parameter.
-        :param ref_positives_only: we only refer pixels with high uncertainties for which we predicted a positive
+
         label (for a particular class). We're discarding all the negatives that we predicted because there're so
         many of them due to the vast background
-        :param discard_outliers: boolean indicating whether outliers (slice/class) should be discarded when
-        computing the dice coefficient
+
         :param u_threshold: Another threshold! used to compute the uncertainty statistics. We're currently using
         a default value of 0. => NO FILTERING OF INITIAL RAW U-MAPS!
         image slices.
@@ -235,7 +233,7 @@ class ExperimentHandler(object):
         which basically results in a very large object. Should not be used for evaluation of many test images,
                evaluate the performance on the test set. Variable is used in order to indicate this situation
         most certainly only for 1-3 images in order to generate some figures.
-        :param repeated_run: used during ensemble testing. so we use the same model, different checkpoint, to
+
         :param store_test_results:
         :param checkpoints: list of model checkpoints that we use for the ensemble test
         :return:
@@ -248,46 +246,6 @@ class ExperimentHandler(object):
         # if we're lazy and just pass checkpoints as a single number, we convert this here to a list
         if not isinstance(checkpoints, list):
             checkpoints = list(checkpoints)
-        # -------------------------------------- local procedures BEGIN -----------------------------------------
-
-        def format_print_string(outlier_list, phase):
-            # dice_score is a list and will be used to calculate mean-dice after referral
-            f_str = ""
-            str_elem = "{:.2f}"
-            cls_range = np.arange(1, 4)
-
-            for cls in cls_range:
-                if cls in outlier_list:
-                    f_str += "*" + str_elem + "*"
-                    # remove outlier dice score
-                    if phase == 0:
-                        # print("Remove-es {}".format(slice_acc[cls]))
-                        del ref_dice_es[cls - 1][-1]
-                    else:
-                        # print("Remove-ed {}".format(slice_acc[cls + half_classes]))
-                        del ref_dice_ed[cls - 1][-1]
-                else:
-                    f_str += str_elem
-                if cls != cls_range[-1]:
-                    f_str += "/"
-            return f_str
-
-        def print_detailed_results(es_outliers, ed_outliers):
-
-            if es_outliers:
-                es_print_string = format_print_string(es_outliers, phase=0)
-            else:
-                es_print_string = "{:.2f}/{:.2f}/{:.2f}"
-            if ed_outliers:
-                ed_print_string = format_print_string(ed_outliers, phase=1)
-            else:
-                ed_print_string = "{:.2f}/{:.2f}/{:.2f}"
-
-            es_print_string = "Test img/slice {}/{} \tES: Dice (RV/Myo/LV)" + es_print_string
-            ed_print_string = "\tED: dice (RV/Myo/LV)" + ed_print_string
-            msg_part1 = es_print_string.format(image_num, slice_idx + 1, slice_acc[1], slice_acc[2], slice_acc[3])
-            msg_part2 = ed_print_string.format(slice_acc[5], slice_acc[6], slice_acc[7])
-            print(msg_part1 + msg_part2)
 
         # -------------------------------------- local procedures END -----------------------------------------
         if use_seed:
@@ -295,30 +253,7 @@ class ExperimentHandler(object):
         if self.test_results is None:
             self.test_results = TestResults(self.exper, use_dropout=sample_weights, mc_samples=mc_samples)
         # if we use referral then we need to load the u-maps
-        if use_uncertainty:
-            # get uncertainty maps for this image [2, 4classes, width, height, #slices]
-            patient_id = test_set.img_file_names[image_num]
-            u_maps_image = self.referral_umaps[patient_id]
-            self.test_results.referral_threshold = referral_threshold
-        else:
-            u_maps_image = None
-        # if we're discarding outlier slices/classes we need to initialize a couple of things
-        if discard_outliers:
-            if not self.exper.outliers_per_epoch:
-                print("------>>>>> INFO - Loading outlier statistics from disk <<<<<-------")
-                self.get_outlier_stats()
-            # geth the patient id for this image_num
-            patient_id = test_set.img_file_names[image_num]
-            print("INFO - Using outlier statistics for this image {}".format(patient_id))
-            # get the "latest" (max epoch) outlier statistics, tuple with 6 dictionaries
-            outlier_stats = self.exper.outliers_per_epoch[self.exper.epoch_id]
-            # we only need the most detailed dictionaries (key=(patient_id, slice_id, phase)) for ES & ED
-            outliers_per_img_class_es = outlier_stats[4]
-            outliers_per_img_class_ed = outlier_stats[5]
-            image_outliers = ImageOutliers(patient_id, outliers_per_img_class_es, outliers_per_img_class_ed)
-        else:
-            image_outliers = None
-
+        u_maps_image = None
         num_of_checkpoints = len(checkpoints)
         # correct the divisor for calculation of stddev when low number of samples (biased), used in np.std
         if num_of_checkpoints * mc_samples <= 25 and mc_samples != 1:
@@ -377,22 +312,6 @@ class ExperimentHandler(object):
             test_set.set_pred_labels(mean_test_pred, verbose=verbose, do_filter=False)
             slice_acc, slice_hd = test_set.compute_slice_accuracy(compute_hd=compute_hd)
 
-            if discard_outliers:
-                # add the current dice score to the referral arrays
-                for cls in np.arange(1, half_classes):
-                    ref_dice_es[cls - 1].append(slice_acc[cls])
-                    ref_dice_ed[cls - 1].append(slice_acc[cls + half_classes])
-
-                    dice_es[cls - 1].append(slice_acc[cls])
-                    dice_ed[cls - 1].append(slice_acc[cls + half_classes])
-
-                if image_outliers and image_outliers.has_outliers:
-                    outliers_es = image_outliers.get_slice_outliers(test_set.slice_counter, phase=0)
-                    outliers_ed = image_outliers.get_slice_outliers(test_set.slice_counter, phase=1)
-                else:
-                    outliers_es = None
-                    outliers_ed = None
-                print_detailed_results(outliers_es, outliers_ed)
             if sample_weights:
                 # NOTE: currently only displaying the MEAN STDDEV uncertainty stats but we also capture the stddev stats
                 # b_uncertainty_stats["stddev"] has shape [2, 4cls, 4measures, #slices]
@@ -436,19 +355,8 @@ class ExperimentHandler(object):
         if save_pred_labels:
             test_set.save_pred_labels(self.exper.output_dir, u_threshold=0., mc_dropout=mc_dropout,
                                       forced_save=True)
-
-        if use_uncertainty:
-            # u_maps_image shape [8classes, width, height, #slices]
-            # referral with u-maps for each class
-            test_set.filter_referrals(u_maps=u_maps_image, ref_positives_only=ref_positives_only,
-                                      referral_threshold=referral_threshold)
-            test_accuracy_ref, test_hd_ref, seg_errors_ref = test_set.get_accuracy(compute_hd=compute_hd,
-                                                                                   compute_seg_errors=True,
-                                                                                   do_filter=False)
-            # save the referred labels
-            if save_pred_labels:
-                test_set.save_pred_labels(self.exper.output_dir, u_threshold=referral_threshold,
-                                          mc_dropout=mc_dropout)
+            # save probability maps (mean softmax)
+            test_set.save_pred_probs(self.exper.output_dir, mc_dropout=mc_dropout)
 
         print("Image {} - test loss {:.3f} "
               " dice(RV/Myo/LV):\tES {:.2f}/{:.2f}/{:.2f}\t"
@@ -456,56 +364,12 @@ class ExperimentHandler(object):
                                                test_accuracy[1], test_accuracy[2],
                                                test_accuracy[3], test_accuracy[5],
                                                test_accuracy[6], test_accuracy[7]))
-
-        if use_uncertainty:
-            print("\t\t\t\t\t After referral\t\tES {:.2f}/{:.2f}/{:.2f}\t"
-                  "ED {:.2f}/{:.2f}/{:.2f}".format(test_accuracy_ref[1], test_accuracy_ref[2],
-                                                   test_accuracy_ref[3], test_accuracy_ref[5],
-                                                   test_accuracy_ref[6], test_accuracy_ref[7]))
-        else:
-            test_accuracy_ref = None
-            test_hd_ref = None
-
-        if discard_outliers:
-            referral_dice_es, referral_dice_ed = np.zeros(3), np.zeros(3)
-            np_dice_es = np.zeros(3)
-            np_dice_ed = np.zeros(3)
-            for cls in np.arange(3):
-                np_dice_es[cls] = np.mean(dice_es[cls])
-                np_dice_ed[cls] = np.mean(dice_ed[cls])
-                if len(ref_dice_es[cls]) != 0:
-                    referral_dice_es[cls] = np.mean(np.array(ref_dice_es[cls]))
-                else:
-                    # test_accuracy is numpy array with shape 8.
-                    referral_dice_es[cls] = test_accuracy[cls + 1]
-                if len(ref_dice_ed[cls]) != 0:
-                    referral_dice_ed[cls] = np.mean(np.array(ref_dice_ed[cls]))
-                else:
-                    # test_accuracy is numpy array with shape 8.
-                    referral_dice_ed[cls] = test_accuracy[cls + 1 + half_classes]
-            referral_dice = np.concatenate((referral_dice_es, referral_dice_ed))
-            non_referral_dice = np.array([np_dice_es[0], np_dice_es[1], np_dice_es[2],
-                                          np_dice_ed[0], np_dice_ed[1], np_dice_ed[2]])
-            print("\t\t\t\tWithout outliers: dice(RV/Myo/LV): ES {:.2f}/{:.2f}/{:.2f} --- "
-                  "ED {:.2f}/{:.2f}/{:.2f}".format(referral_dice_es[0], referral_dice_es[1],
-                                                   referral_dice_es[2], referral_dice_ed[0],
-                                                   referral_dice_ed[1], referral_dice_ed[2]))
-            print("\t\t\t\t    Wih outliers: dice(RV/Myo/LV): ES {:.2f}/{:.2f}/{:.2f} --- "
-                  "ED {:.2f}/{:.2f}/{:.2f}".format(np_dice_es[0], np_dice_es[1],
-                                                   np_dice_es[2], np_dice_ed[0],
-                                                   np_dice_ed[1], np_dice_ed[2]))
         if compute_hd:
             print("\t\t\t\t\t"
                   "Hausdorff(RV/Myo/LV):\tES {:.2f}/{:.2f}/{:.2f}\t"
                   "ED {:.2f}/{:.2f}/{:.2f}".format(test_hd[1], test_hd[2],
                                                    test_hd[3], test_hd[5],
                                                    test_hd[6], test_hd[7]))
-            if use_uncertainty:
-                print("\t\t\t\t\t"
-                      "After referral:\t\tES {:.2f}/{:.2f}/{:.2f}\t"
-                      "ED {:.2f}/{:.2f}/{:.2f}".format(test_hd_ref[1], test_hd_ref[2],
-                                                       test_hd_ref[3], test_hd_ref[5],
-                                                       test_hd_ref[6], test_hd_ref[7]))
         if store_test_results:
             self.test_results.add_results(test_set.b_image, test_set.b_labels, test_set.b_image_id,
                                           test_set.b_pred_labels, b_predictions, test_set.b_stddev_map,
@@ -516,7 +380,7 @@ class ExperimentHandler(object):
                                           test_accuracy_slices=test_set.b_acc_slices,
                                           test_hd_slices=test_set.b_hd_slices,
                                           image_name=test_set.b_image_name,
-                                          referral_accuracy=test_accuracy_ref, referral_hd=test_hd_ref,
+                                          referral_accuracy=None, referral_hd=None,
                                           referral_stats=test_set.referral_stats)
 
     def create_u_maps(self, model=None, checkpoints=None, mc_samples=10, u_threshold=0., do_save_u_stats=False,
@@ -743,7 +607,6 @@ class ExperimentHandler(object):
         if self.referred_slices is None:
             self.referred_slices = OrderedDict()
 
-        print(file_name)
         for fname in glob.glob(file_name):
             file_basename = os.path.splitext(os.path.basename(fname))[0]
             f_patient_id = file_basename[:file_basename.find("_")]
@@ -758,6 +621,36 @@ class ExperimentHandler(object):
 
         if patient_id is not None:
             return referred_slices
+
+    def get_pred_prob_maps(self, patient_id=None):
+
+        input_dir = os.path.join(self.exper.config.root_dir,
+                                 os.path.join(self.exper.output_dir, config.pred_lbl_dir))
+
+        if patient_id is None:
+            search_mask = "patient_id*_pred_probs_mc"
+        else:
+            search_mask = patient_id + "_pred_probs_mc"
+
+        search_mask = search_mask + ".npz"
+        file_name = os.path.join(input_dir, search_mask)
+        if self.pred_prob_maps is None:
+            self.pred_prob_maps = OrderedDict()
+
+        for fname in glob.glob(file_name):
+            file_basename = os.path.splitext(os.path.basename(fname))[0]
+            f_patient_id = file_basename[:file_basename.find("_")]
+            try:
+                np_archive = np.load(file_name)
+                pred_probs = np_archive["pred_probs"]
+                self.pred_prob_maps[f_patient_id] = pred_probs
+            except IOError:
+                print("ERROR - Unable to load predicted prob-maps from numpy file {}".format(file_name))
+            except KeyError:
+                print("ERROR - Archive pred_probs does not exist in {}.".format(file_name))
+
+        if patient_id is not None:
+            return pred_probs
 
     def create_filtered_umaps(self, u_threshold, verbose=False, patient_id=None, aggregate_func="max",
                               filter_per_slice=False):

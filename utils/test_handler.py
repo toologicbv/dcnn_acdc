@@ -1001,6 +1001,25 @@ class ACDC2017TestHandler(object):
         except IOError:
             print("ERROR - Unable to save predicted labels file {}".format(file_name))
 
+    def save_pred_probs(self, output_dir, mc_dropout=False):
+        """
+        Save a 3D volume of the mean softmax probabilities
+        :return:
+        """
+        pred_prob_output_dir = os.path.join(self.config.root_dir, os.path.join(output_dir, config.pred_lbl_dir))
+        if not os.path.isdir(pred_prob_output_dir):
+            os.makedirs(pred_prob_output_dir)
+        if mc_dropout:
+            file_name = self.b_image_name + "_pred_probs_mc.npz"
+        else:
+            file_name = self.b_image_name + "_pred_probs.npz"
+
+        file_name = os.path.join(pred_prob_output_dir, file_name)
+        try:
+            np.savez(file_name, pred_probs=self.b_pred_probs)
+        except IOError:
+            print("ERROR - Unable to save softmax probabilities to file {}".format(file_name))
+
     def save_batch_img_to_files(self, slice_range=None, save_dir=None, wo_padding=True):
 
         if save_dir is None:

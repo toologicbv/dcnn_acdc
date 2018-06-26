@@ -556,16 +556,16 @@ class UncertaintyMapsGenerator(object):
                                                       mc_samples=self.mc_samples)
         # make a "pointer" to the test_results object of the exper_handler because we are using both
         self.test_results = self.exper_handler.test_results
-
+        # debugging
+        image_range = [0,1,2]
         for image_num in tqdm(image_range):
             print("Prediction mc={} with sampling without referral".format(self.mc_samples))
-            self._test(image_num, mc_samples=self.mc_samples, sample_weights=True, referral_threshold=0.,
-                       store_test_results=True, save_pred_labels=True, ref_positives_only=False,
-                       use_uncertainty=False, store_details=False)
+            self._test(image_num, mc_samples=self.mc_samples, sample_weights=True,
+                       store_test_results=True, save_pred_labels=True,
+                       store_details=False)
             if do_save:
                 saved += 1
                 self.save(save_actual_maps=save_actual_maps)
-
         if self.store_test_results:
             self.exper_handler.test_results.compute_mean_stats()
             self.exper_handler.test_results.show_results()
@@ -678,20 +678,17 @@ class UncertaintyMapsGenerator(object):
         else:
             self.exper_handler.logger.info(message)
 
-    def _test(self, image_num, mc_samples=1, sample_weights=False, referral_threshold=0.,
-              store_test_results=False, save_pred_labels=False, ref_positives_only=False,
-              use_uncertainty=False, store_details=False):
+    def _test(self, image_num, mc_samples=1, sample_weights=False,
+              store_test_results=False, save_pred_labels=False,
+              store_details=False):
 
         self.exper_handler.test(self.checkpoints, self.test_set, image_num=image_num,
                                 sample_weights=sample_weights,
-                                mc_samples=mc_samples, compute_hd=True, discard_outliers=False,
-                                referral_threshold=referral_threshold,
+                                mc_samples=mc_samples, compute_hd=True,
                                 u_threshold=self.u_threshold,
                                 verbose=self.verbose,
                                 store_details=store_details,
                                 use_seed=False, do_filter=True,
-                                use_uncertainty=use_uncertainty,
-                                ref_positives_only=ref_positives_only,
                                 save_pred_labels=save_pred_labels,
                                 store_test_results=store_test_results)
 

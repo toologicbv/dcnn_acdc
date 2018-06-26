@@ -15,7 +15,7 @@ from config.config import config
         Example:
         python generate_uncertainty_stats.py --cuda --exper_id=20180418_15_02_05_dcnn_mcv1_150000E_lr2e02
             --checkpoints 100000 110000 120000 130000 140000 150000 --mc_samples=10 --save_actual_maps 
-            --run_mode="u_maps_only" --aggregate_func=max
+            --run_mode="u_maps_and_preds" --aggregate_func=max
             
     (2) Run with run_mode=filtered_umaps_only in order to create the filtered uncertainty maps for the different
         referral thresholds. If exper_id argument is None, all exeriments in exp_mc01_brier dict will be computed.
