@@ -37,6 +37,7 @@ class ExperimentHandler(object):
         self.u_maps = None
         self.pred_prob_maps = None
         self.referral_umaps = None
+        self.entropy_maps = None
         self.ref_map_blobs = None
         self.test_results = None
         self.logger = None
@@ -233,16 +234,12 @@ class ExperimentHandler(object):
         which basically results in a very large object. Should not be used for evaluation of many test images,
                evaluate the performance on the test set. Variable is used in order to indicate this situation
         most certainly only for 1-3 images in order to generate some figures.
-
+        :param save_pred_labels: save probability maps and predicted segmentation maps to file
         :param store_test_results:
         :param checkpoints: list of model checkpoints that we use for the ensemble test
         :return:
         """
-        half_classes = 4
-        ref_dice_es = [[], [], []]
-        ref_dice_ed = [[], [], []]
-        dice_es = [[], [], []]
-        dice_ed = [[], [], []]
+
         # if we're lazy and just pass checkpoints as a single number, we convert this here to a list
         if not isinstance(checkpoints, list):
             checkpoints = list(checkpoints)
@@ -786,6 +783,73 @@ class ExperimentHandler(object):
         patients = Patients()
         patients.load(self.exper.config.data_dir)
         self.patients = patients.category
+
+    def create_entropy_maps(self, do_save=False):
+        input_dir = os.path.join(self.exper.config.root_dir,
+                                           os.path.join(self.exper.output_dir, config.pred_lbl_dir))
+        output_dir = os.path.join(self.exper.config.root_dir,
+                                 os.path.join(self.exper.output_dir, config.u_map_dir))
+
+        search_path = os.path.join(input_dir, "*" + "_pred_probs.npz")
+        files = glob.glob(search_path)
+        if len(files) == 0:
+            raise ImportError("ERROR - no predicted probs found in {}".format(search_path))
+        self.entropy_maps = OrderedDict()
+        min_ent, max_ent = 0, 0
+        for fname in glob.glob(search_path):
+            try:
+                pred_data = np.load(fname)
+                pred_probs = pred_data["pred_probs"]
+            except IOError:
+                print("ERROR - Can't open file {}".format(fname))
+            except KeyError:
+                print("ERROR - pred_probs is not an existing archive")
+            # pred_probs has shape [8, height, width, #slices]: next step compute two entropy maps ES/ED
+            pred_probs_es, pred_probs_ed = pred_probs[:4], pred_probs[4:]
+            entropy_es = (-pred_probs_es * np.log2(pred_probs_es)).sum(axis=0)
+            entropy_ed = (-pred_probs_ed * np.log2(pred_probs_ed)).sum(axis=0)
+            entropy = np.concatenate((np.expand_dims(entropy_es, axis=0),
+                                      np.expand_dims(entropy_ed, axis=0)))
+            p_min, p_max = np.min(entropy), np.max(entropy)
+            if p_min < min_ent:
+                min_ent = p_min
+            if p_max > max_ent:
+                max_ent = p_max
+            file_basename = os.path.splitext(os.path.basename(fname))[0]
+            patient_id = file_basename[:file_basename.find("_")]
+            self.entropy_maps[patient_id] = entropy
+        # print("Final min/max values {:.2f}/{:.2f}".format(min_ent, max_ent))
+        for patient_id, entropy_map in self.entropy_maps.iteritems():
+            # normalize to values between 0 and 0.5, same scale as stddev values
+            # p_min, p_max = np.min(self.entropy_maps[patient_id]), np.max(self.entropy_maps[patient_id])
+            # print("Before normalize {:.2f}/{:.2f}".format(p_min, p_max))
+            self.entropy_maps[patient_id] = ((entropy_map - min_ent) * 1./(max_ent - min_ent)) * 0.5
+            # p_min, p_max = np.min(self.entropy_maps[patient_id]), np.max(self.entropy_maps[patient_id])
+            # print("After normalize {:.2f}/{:.2f}".format(p_min, p_max))
+            if do_save:
+                out_fname = os.path.join(output_dir, patient_id + "_entropy_map.npz")
+                try:
+                    np.savez(out_fname, entropy_map=self.entropy_maps[patient_id])
+                except IOError:
+                    print("Unable to load uncertainty maps from {}".format(fname))
+        if do_save:
+            print("INFO - Saved all entropy maps to {}".format(output_dir))
+
+    def get_entropy_maps(self):
+        self.entropy_maps = OrderedDict()
+        input_dir = os.path.join(self.exper.config.root_dir,
+                                  os.path.join(self.exper.output_dir, config.u_map_dir))
+
+        search_path = os.path.join(input_dir, "*" + "_entropy_map.npz")
+        for fname in glob.glob(search_path):
+            try:
+                entropy_data = np.load(fname)
+                entropy_map = entropy_data["entropy_map"]
+            except IOError:
+                print("Unable to load entropy maps from {}".format(fname))
+            file_basename = os.path.splitext(os.path.basename(fname))[0]
+            patient_id = file_basename[:file_basename.find("_")]
+            self.entropy_maps[patient_id] = entropy_map
 
     def info(self, message):
         if self.logger is None:

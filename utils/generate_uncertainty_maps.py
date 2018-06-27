@@ -557,10 +557,19 @@ class UncertaintyMapsGenerator(object):
         # make a "pointer" to the test_results object of the exper_handler because we are using both
         self.test_results = self.exper_handler.test_results
         # debugging
-        image_range = [0,1,2]
+        # image_range = [0]
+        image_range = np.arange(len(self.test_set.img_file_names))
         for image_num in tqdm(image_range):
-            print("Prediction mc={} with sampling without referral".format(self.mc_samples))
-            self._test(image_num, mc_samples=self.mc_samples, sample_weights=True,
+            patient_id = self.test_set.img_file_names[image_num]
+
+            if self.mc_samples == 1:
+                sample_weights = False
+            else:
+                sample_weights = True
+            print("Predictions for {} with #samples={} without referral (use-mc={})".format(patient_id,
+                                                                                            self.mc_samples,
+                                                                                            sample_weights))
+            self._test(image_num, mc_samples=self.mc_samples, sample_weights=sample_weights,
                        store_test_results=True, save_pred_labels=True,
                        store_details=False)
             if do_save:

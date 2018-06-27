@@ -59,9 +59,11 @@ def do_parse_args():
     parser.add_argument('--run_mode', choices=['outliers', 'u_maps_and_preds', 'figures_only', 'test_referrals',
                                                "filtered_umaps_only"], default="u_maps_only")
     parser.add_argument('--slice_filter_type', choices=['M', 'MD', 'MS', 'R'],
-                        default="M",
+                        default=None,
                         help="M=mean; MD=median; MS=mean+stddev; R=Random. ")
     parser.add_argument('--aggregate_func', choices=['max', 'mean'], default="max")
+    parser.add_argument('--use_entropy_maps', action='store_true', default=False, help='use entropy-maps')
+
     parser.add_argument('--mc_samples', type=int, default=10, help="# of MC samples")
     parser.add_argument('--checkpoints', nargs='+', default=150000, help="Saved checkpoints")
     parser.add_argument('--cuda', action='store_true', default=False, help='use GPU')
@@ -229,6 +231,7 @@ def main():
                                           referral_thresholds=args.referral_thresholds,
                                           aggregate_func=args.aggregate_func,
                                           verbose=True, do_save=True, num_of_images=None,
+                                          use_entropy_maps=args.use_entropy_maps,
                                           patients=None)  # ["patient082", "patient084"])
             ref_handler.test(referral_only=True, slice_filter_type=args.slice_filter_type, verbose=False)
 

@@ -103,7 +103,7 @@ class ReferralResults(object):
     results_dice_wo_referral = np.array([[0, 0.85, 0.88, 0.91], [0, 0.92, 0.86, 0.96]])
 
     def __init__(self, exper_dict, referral_thresholds, print_latex_string=False,
-                 print_results=True, fold=None, slice_filter_type=None):
+                 print_results=True, fold=None, slice_filter_type=None, use_entropy_maps=False):
         """
 
         :param exper_dict:
@@ -112,6 +112,7 @@ class ReferralResults(object):
         :param print_latex_string:
         :param print_results:
         :param fold: to load only a specific fold, testing purposes
+        :param use_entropy_maps
         :param slice_filter_type: M=mean; MD=median; MS=mean+stddev
                 IMPORTANT: if slice_filter_type is NONE we load the referral results in which WE REFER
                            ALL SLICES!
@@ -120,6 +121,7 @@ class ReferralResults(object):
         self.save_output_dir = config.data_dir
         self.referral_thresholds = referral_thresholds
         self.slice_filter_type = slice_filter_type
+        self.use_entropy_maps = use_entropy_maps
         if fold is not None:
             self.exper_dict = {fold: exper_dict[fold]}
             print("WARNING - only loading results for fold {}".format(fold))
@@ -243,6 +245,8 @@ class ReferralResults(object):
                 else:
                     # loading referral results when ALL SLICES ARE REFERRED!
                     file_name = self.search_prefix + "utr" + str_referral_threshold
+                    if self.use_entropy_maps:
+                        file_name += "_entropy_maps"
 
                 search_path = os.path.join(input_dir, file_name + ".npz")
                 filenames = glob.glob(search_path)
@@ -727,7 +731,7 @@ class ReferralDetailedResults(object):
             self.summed_blob_uvalue_per_slice[patient_disease_cat][0].extend(np.sum(slice_blobs_es, axis=1))
             self.summed_blob_uvalue_per_slice[patient_disease_cat][1].extend(np.sum(slice_blobs_ed, axis=1))
 
-    def compute_results_per_group(self):
+    def compute_results_per_group(self, compute_blob_values=True):
         for disease_cat, num_of_cases in self.num_per_category.iteritems():
             if num_of_cases != 5 and not self.debug:
                 raise ValueError("ERROR - Number of patients in group {} should be 5 not {}".format(disease_cat,
@@ -737,14 +741,18 @@ class ReferralDetailedResults(object):
                 self.mean_ref_hd_per_dcat[disease_cat] = self.ref_hd_per_dcat[disease_cat] * 1. / float(num_of_cases)
                 self.mean_org_dice_per_dcat[disease_cat] = self.org_dice_per_dcat[disease_cat] * 1. / float(num_of_cases)
                 self.mean_org_hd_per_dcat[disease_cat] = self.org_hd_per_dcat[disease_cat] * 1. / float(num_of_cases)
-                self.mean_blob_uvalue_per_slice[disease_cat][0] = \
-                    [np.mean(self.summed_blob_uvalue_per_slice[disease_cat][0]),
-                     np.median(self.summed_blob_uvalue_per_slice[disease_cat][0]),
-                     np.std(self.summed_blob_uvalue_per_slice[disease_cat][0])]
-                self.mean_blob_uvalue_per_slice[disease_cat][1] = \
-                    [np.mean(self.summed_blob_uvalue_per_slice[disease_cat][1]),
-                     np.median(self.summed_blob_uvalue_per_slice[disease_cat][1]),
-                     np.std(self.summed_blob_uvalue_per_slice[disease_cat][1])]
+                if compute_blob_values:
+                    self.mean_blob_uvalue_per_slice[disease_cat][0] = \
+                        [np.mean(self.summed_blob_uvalue_per_slice[disease_cat][0]),
+                         np.median(self.summed_blob_uvalue_per_slice[disease_cat][0]),
+                         np.std(self.summed_blob_uvalue_per_slice[disease_cat][0])]
+                    self.mean_blob_uvalue_per_slice[disease_cat][1] = \
+                        [np.mean(self.summed_blob_uvalue_per_slice[disease_cat][1]),
+                         np.median(self.summed_blob_uvalue_per_slice[disease_cat][1]),
+                         np.std(self.summed_blob_uvalue_per_slice[disease_cat][1])]
+                else:
+                    self.mean_blob_uvalue_per_slice[disease_cat][0] = [0, 0, 0]
+                    self.mean_blob_uvalue_per_slice[disease_cat][1] = [0, 0, 0]
             else:
                 self.mean_blob_uvalue_per_slice[disease_cat][0] = np.zeros(3)
                 self.mean_blob_uvalue_per_slice[disease_cat][1] = np.zeros(3)

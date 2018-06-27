@@ -111,7 +111,7 @@ def compute_ref_results_per_pgroup(ref_dice, ref_hd, org_dice, org_hd, patient_c
 class ReferralHandler(object):
 
     def __init__(self, exper_handler, referral_thresholds=None, test_set=None, verbose=False, do_save=False,
-                 num_of_images=None, aggregate_func="max", patients=None):
+                 num_of_images=None, aggregate_func="max", patients=None, use_entropy_maps=False):
         """
 
         :param exper_handler:
@@ -122,6 +122,8 @@ class ReferralHandler(object):
         :param num_of_images:
         :param aggregate_func:
         :param patients:
+        :param use_entropy_maps: boolean, if true, we use the raw entropy maps to create filtered maps and
+                use these to refer voxels above referral threhold
 
         """
         # Overrule!
@@ -132,7 +134,12 @@ class ReferralHandler(object):
         self.do_filter_slices = False
         self.slice_filter_type = None
         self.referral_only = False
-
+        self.use_entropy_maps = use_entropy_maps
+        if use_entropy_maps:
+            # in case we use the entropy maps we load pred_labels that we generated with 1 sample/prediction
+            self.use_mc_samples = False
+        else:
+            self.use_mc_samples = True
         self.exper_handler = exper_handler
         self.aggregate_func = aggregate_func
         self.referral_threshold = None
@@ -181,10 +188,13 @@ class ReferralHandler(object):
         self.outfile = None
         self.det_results = None
 
-    def __load_pred_labels(self, patient_id):
-
-        search_path = os.path.join(self.pred_labels_input_dir,
-                                   patient_id + "_pred_labels_mc.npz")
+    def __load_pred_labels(self, patient_id, with_mc=True):
+        if with_mc:
+            search_path = os.path.join(self.pred_labels_input_dir,
+                                       patient_id + "_pred_labels_mc.npz")
+        else:
+            search_path = os.path.join(self.pred_labels_input_dir,
+                                       patient_id + "_pred_labels.npz")
         pred_labels = load_pred_labels(search_path)
 
         return pred_labels  # , ref_pred_labels
@@ -250,20 +260,27 @@ class ReferralHandler(object):
                 ublob_stats = None
             self.referral_threshold = referral_threshold
             if referral_only:
-                # load the filtered u-maps from disk
-                self.exper_handler.get_referral_maps(referral_threshold, per_class=False,
-                                                     aggregate_func=self.aggregate_func)
+                if self.use_entropy_maps:
+                    # load entropy maps
+                    self.exper_handler.create_entropy_maps(do_save=True)
+                    self.exper_handler.get_entropy_maps()
+                else:
+                    # load the filtered u-maps from disk
+                    self.exper_handler.get_referral_maps(referral_threshold, per_class=False,
+                                                         aggregate_func=self.aggregate_func)
             self.str_referral_threshold = str(referral_threshold).replace(".", "_")
             print("INFO - Running evaluation with referral for threshold {} (referral-only={}/"
-                  "do-filter-slices={}/filter_type={})".format(self.str_referral_threshold, referral_only,
-                                                               self.do_filter_slices,
-                                                               self.slice_filter_type))
+                  "do-filter-slices={}/filter_type={}/use-entropy-maps={})".format(self.str_referral_threshold,
+                                                                                   referral_only,
+                                                                                   self.do_filter_slices,
+                                                                                   self.slice_filter_type,
+                                                                                   self.use_entropy_maps))
             for idx, image_num in enumerate(self.image_range):
                 patient_id = self.test_set.img_file_names[image_num]
                 # disease classification NOR, ARV...
                 patient_cat = self.exper_handler.patients[patient_id]
                 self.det_results.patient_ids.append(patient_id)
-                pred_labels = self.__load_pred_labels(patient_id)
+                pred_labels = self.__load_pred_labels(patient_id, self.use_mc_samples)
                 # when we call method test_set.filter_referrals which will alter the b_labels object
                 # it is important that we make a deepcopy of test_set.labels because the original numpy array will be
                 # altered as well
@@ -297,16 +314,25 @@ class ReferralHandler(object):
                 # filter original b_labels based on the u-map with this specific referral threshold
                 if not referral_only:
                     # we need to create the filtered u-maps first
-                    self.exper_handler.create_filtered_umaps(u_threshold=referral_threshold,
-                                                             patient_id=patient_id,
-                                                             aggregate_func=self.aggregate_func)
+                    if self.use_entropy_maps:
+                        # load entropy maps
+                        self.exper_handler.create_entropy_maps(do_save=True)
+                        self.exper_handler.get_entropy_maps()
+                    else:
+                        self.exper_handler.create_filtered_umaps(u_threshold=referral_threshold,
+                                                                 patient_id=patient_id,
+                                                                 aggregate_func=self.aggregate_func)
                 # generate prediction with referral OF UNCERTAIN, POSITIVES ONLY
-                ref_u_map = self.exper_handler.referral_umaps[patient_id]
-                # get original uncertainty blob values for all slices ES/ED. These will be essential for referral
-                # in case we do this based on slice filtering...
-                ref_u_map_blobs = self.exper_handler.ref_map_blobs[patient_id]
+                if self.use_entropy_maps:
+                    ref_u_map = self.exper_handler.entropy_maps[patient_id]
+                else:
+                    ref_u_map = self.exper_handler.referral_umaps[patient_id]
+
                 # filter uncertainty blobs in slices
                 if self.do_filter_slices:
+                    # get original uncertainty blob values for all slices ES/ED. These will be essential for referral
+                    # in case we do this based on slice filtering...
+                    ref_u_map_blobs = self.exper_handler.ref_map_blobs[patient_id]
                     if self.slice_filter_type == "R":
                         # we randomly refer slices
                         slice_blobs_es, slice_blobs_ed, ref_slices_idx_es, ref_slices_idx_ed = \
@@ -329,6 +355,7 @@ class ReferralHandler(object):
                     # sure we refer ALL SLICES then.
                     arr_slice_referrals = None
                     referred_slices = None
+                    ref_u_map_blobs = None
                 self.test_set.b_pred_labels = copy.deepcopy(pred_labels)
                 self.test_set.filter_referrals(u_maps=ref_u_map, ref_positives_only=self.pos_only,
                                                referral_threshold=referral_threshold,
@@ -416,10 +443,8 @@ class ReferralHandler(object):
                 self.ref_hd[idx] = np.reshape(test_hd_ref, (2, -1))
                 if verbose:
                     self._show_results(test_accuracy_ref, image_num, msg="with referral")
-            print("_compute_result")
             self._compute_result()
-            print("det_results.compute_results_per_group")
-            self.det_results.compute_results_per_group()
+            self.det_results.compute_results_per_group(compute_blob_values=self.do_filter_slices)
             self._show_results(per_disease_cat=True)
             if self.do_save:
                 self.save_results()
@@ -468,8 +493,8 @@ class ReferralHandler(object):
             self.outfile += "_utr{}_{}".format(self.str_referral_threshold, self.slice_filter_type)
         else:
             self.outfile += "_utr{}".format(self.str_referral_threshold)
-        if self.pos_only:
-            self.outfile += "_pos_only"
+        if self.use_entropy_maps:
+            self.outfile += "_entropy_maps"
         outfile = os.path.join(self.save_output_dir, self.outfile)
 
         try:
