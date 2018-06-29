@@ -50,13 +50,19 @@ exp_mc01_brier = {3: "20180426_14_14_57_dcnn_mc_f3p01_brier_150KE_lr2e02",
                   1: "20180426_14_13_46_dcnn_mc_f1p01_brier_150KE_lr2e02",
                   0: "20180418_15_02_05_dcnn_mcv1_150000E_lr2e02"}
 
+exp_base = {3: "20180509_18_36_23_dcnn_f3_150KE_lr2e02",
+            2: "20180509_18_36_28_dcnn_f2_150KE_lr2e02",
+            1: "20180509_18_36_32_dcnn_f1_150KE_lr2e02",
+            0: "20180330_09_56_39_dcnnv1_150000E_lr2e02"}
+
 
 def do_parse_args():
     # Training settings
     parser = argparse.ArgumentParser(description='Generate Uncertainty Maps')
 
     parser.add_argument('--exper_id', default=None)
-    parser.add_argument('--run_mode', choices=['outliers', 'u_maps_and_preds', 'figures_only', 'test_referrals',
+    parser.add_argument('--exper_dict_id', default=None)
+    parser.add_argument('--run_mode', choices=['outliers', 'umaps_and_preds', 'figures_only', 'test_referrals',
                                                "filtered_umaps_only"], default="u_maps_only")
     parser.add_argument('--slice_filter_type', choices=['M', 'MD', 'MS', 'R'],
                         default=None,
@@ -84,6 +90,15 @@ def do_parse_args():
         args.referral_thresholds = [float(c) for c in args.referral_thresholds]
     else:
         args.referral_thresholds = [int(args.referral_thresholds)]
+
+    if args.exper_dict_id is not None:
+        if args.exper_dict_id == "exp_base":
+            args.exper_dict_id = exp_base
+        elif args.exper_dict_id == "exp_mc01_brier":
+            args.exper_dict_id = exp_mc01_brier
+        else:
+            raise ValueError("ERROR - exper_dict_id argument {} not supported".format(args.exper_dict_id))
+
     return args
 
 
@@ -113,15 +128,17 @@ def main():
         torch.backends.cudnn.enabled = True
 
     np.random.seed(SEED)
+    exper_handlers = []
     if args.exper_id is not None:
         exp_model_path = os.path.join(LOG_DIR, args.exper_id)
-        exper = ExperimentHandler.load_experiment(exp_model_path)
-        exper_handler = ExperimentHandler(exper, use_logfile=False)
+        exper_handler = ExperimentHandler()
+        exper_handler.load_experiment(exp_model_path, use_logfile=False)
         exper_handler.set_root_dir(ROOT_DIR)
-        exper_args = exper.run_args
+        exper_args = exper_handler.exper.run_args
         info_str = "{} p={:.2f} fold={} loss={}".format(exper_args.model, exper_args.drop_prob, exper_args.fold_ids,
                                                         exper_args.loss_function)
         print("INFO - Experimental details extracted:: " + info_str)
+        exper_handlers.append(exper_handler)
     else:
         print("WARNING - Exper_id argument is empty!")
 
@@ -140,25 +157,34 @@ def main():
                                                  do_save_u_stats=True, use_high_threshold=True,
                                                  do_save_outlier_stats=True, use_existing_umaps=args.reuse_maps,
                                                  do_analyze_slices=args.generate_plots)
-    elif args.run_mode == "u_maps_and_preds":
-        exper_handler.create_u_maps(model=None, checkpoints=args.checkpoints, mc_samples=args.mc_samples,
-                                    u_threshold=0., referral_thresholds=args.referral_thresholds,
-                                    do_save_u_stats=True, verbose=args.verbose,
-                                    save_actual_maps=True, test_set=None, generate_figures=args.generate_plots,
-                                    aggregate_func=args.aggregate_func,
-                                    store_test_results=True)
+    elif args.run_mode == "umaps_and_preds":
+
+        for e_handler in exper_handlers:
+            exper_args = e_handler.exper.run_args
+            print("INFO - Create umaps and predictions (save-actual-maps={})".format(args.save_actual_maps))
+            info_str = "{} p={:.2f} fold={} loss={}".format(exper_args.model, exper_args.drop_prob,
+                                                            exper_args.fold_ids[0],
+                                                            exper_args.loss_function)
+            print("INFO - Experimental details extracted:: " + info_str)
+            e_handler.create_u_maps(model=None, checkpoints=args.checkpoints, mc_samples=args.mc_samples,
+                                        u_threshold=0., referral_thresholds=args.referral_thresholds,
+                                        do_save_u_stats=True, verbose=args.verbose,
+                                        save_actual_maps=args.save_actual_maps, test_set=None,
+                                        generate_figures=args.generate_plots,
+                                        aggregate_func=args.aggregate_func,
+                                        store_test_results=True)
+
     elif args.run_mode == "filtered_umaps_only":
+
         str_referral_thresholds = ", ".join([str(r) for r in args.referral_thresholds])
-        exper_handlers = []
         if args.exper_id is None:
             for exper_id in exp_mc01_brier.values():
                 exp_model_path = os.path.join(LOG_DIR, exper_id)
-                exper = ExperimentHandler.load_experiment(exp_model_path)
-                exper_handler = ExperimentHandler(exper, use_logfile=False)
+                exper_handler = ExperimentHandler()
+                exper_handler.load_experiment(exp_model_path, use_logfile=False)
                 exper_handler.set_root_dir(ROOT_DIR)
                 exper_handlers.append(exper_handler)
-        else:
-            exper_handlers.append(exper_handler)
+
         for e_handler in exper_handlers:
             exper_args = e_handler.exper.run_args
             print("INFO - Create filtered u-maps for referral thresholds {}".format(str_referral_thresholds))
@@ -176,16 +202,15 @@ def main():
             raise ValueError("ERROR - argument referral_threshold needs to be greater than 0.")
 
         str_referral_thresholds = ", ".join([str(r) for r in args.referral_thresholds])
-        exper_handlers = []
+
         if args.exper_id is None:
             for exper_id in exp_mc01_brier.values():
                 exp_model_path = os.path.join(LOG_DIR, exper_id)
-                exper = ExperimentHandler.load_experiment(exp_model_path)
-                exper_handler = ExperimentHandler(exper, use_logfile=False)
+                exper_handler = ExperimentHandler()
+                exper_handler.load_experiment(exp_model_path, use_logfile=False)
                 exper_handler.set_root_dir(ROOT_DIR)
                 exper_handlers.append(exper_handler)
-        else:
-            exper_handlers.append(exper_handler)
+
         print("INFO - Generate figures for referral thresholds {}".format(str_referral_thresholds))
         for e_handler in exper_handlers:
             exper_args = e_handler.exper.run_args
@@ -203,13 +228,15 @@ def main():
                                            patients=None)  # ["patient005", "patient022"])
 
     elif args.run_mode == "test_referrals":
+        if args.exper_id is None and args.exper_dict_id is None:
+            raise ValueError("ERROR - arguments exper_id and exper_dict_id can't be both None")
         str_referral_thresholds = ", ".join([str(r) for r in args.referral_thresholds])
         exper_handlers = []
         if args.exper_id is None:
-            for exper_id in exp_mc01_brier.values():
+            for exper_id in args.exper_dict_id.values():
                 exp_model_path = os.path.join(LOG_DIR, exper_id)
-                exper = ExperimentHandler.load_experiment(exp_model_path)
-                exper_handler = ExperimentHandler(exper, use_logfile=False)
+                exper_handler = ExperimentHandler()
+                exper_handler.load_experiment(exp_model_path, use_logfile=False)
                 exper_handler.set_root_dir(ROOT_DIR)
                 exper_handlers.append(exper_handler)
         else:
@@ -221,6 +248,8 @@ def main():
                                                             exper_args.fold_ids[0],
                                                             exper_args.loss_function)
             print("INFO - Experimental details: " + info_str)
+            if args.use_entropy_maps:
+                e_handler.get_entropy_maps()
             ref_test_set = ACDC2017TestHandler(exper_config=e_handler.exper.config,
                                                search_mask=config.dflt_image_name + ".mhd", fold_ids=exper_args.fold_ids,
                                                debug=False, batch_size=25, use_cuda=True, load_train=False,

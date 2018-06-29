@@ -423,7 +423,7 @@ class ReferralResults(object):
                                                                 np.expand_dims(ref_hd_stats_ed, axis=0)))
         org_hd_stats_es = np.array([np.mean(arr_org_hds_es, axis=0), np.std(arr_org_hds_es, axis=0)])
         org_hd_stats_ed = np.array([np.mean(arr_org_hds_ed, axis=0), np.std(arr_org_hds_ed, axis=0)])
-        self.ref_hd_stats[referral_threshold] = np.concatenate((np.expand_dims(org_hd_stats_es, axis=0),
+        self.org_hd_stats[referral_threshold] = np.concatenate((np.expand_dims(org_hd_stats_es, axis=0),
                                                                 np.expand_dims(org_hd_stats_ed, axis=0)))
 
     def _process_disease_categories(self, det_result_obj, referral_threshold):

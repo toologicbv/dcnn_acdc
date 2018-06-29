@@ -444,8 +444,11 @@ def create_exper_label(exper):
 
     # exper_label = exper.run_args.model + exper.run_args.version + "_" + str(exper.run_args.epochs) + "E"
     if exper.run_args.model == "dcnn":
-        exper_label = exper.run_args.model + "_f" + str(exper.run_args.fold_ids[0]) + "_" + \
-                      str(exper.run_args.epochs / 1000) + "KE"
+        exper_label = exper.run_args.model + "_f" + str(exper.run_args.fold_ids[0])
+        if exper.run_args.loss_function == "brier":
+            exper_label += "_" + exper.run_args.loss_function
+        exper_label += "_" + str(exper.run_args.epochs / 1000) + "KE"
+
     elif exper.run_args.model == "dcnn_mc":
         prob = "p" + str(exper.run_args.drop_prob).replace(".", "")
         if exper.run_args.loss_function == "brier":

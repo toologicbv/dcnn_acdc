@@ -15,8 +15,7 @@ from common.parsing import create_def_argparser, run_dict
 from common.common import create_logger, create_exper_label, setSeed
 from config.config import config, DEFAULT_DCNN_MC_2D, DEFAULT_DCNN_2D
 from utils.batch_handlers import TwoDimBatchHandler, BatchStatistics
-from utils.generate_uncertainty_maps import UncertaintyMapsGenerator, ImageUncertainties, OutOfDistributionSlices
-from utils.generate_uncertainty_maps import ImageOutliers
+from utils.generate_uncertainty_maps import InferenceGenerator, ImageUncertainties, OutOfDistributionSlices
 from utils.post_processing import filter_connected_components, detect_largest_umap_areas
 import models.dilated_cnn
 from utils.test_results import TestResults
@@ -24,6 +23,7 @@ from common.acquisition_functions import bald_function
 from plotting.uncertainty_plots import analyze_slices
 from plotting.main_seg_results import plot_seg_erros_uncertainties
 from in_out.load_data import ACDC2017DataSet
+from utils.test_handler import ACDC2017TestHandler
 from in_out.patient_classification import Patients
 
 
@@ -31,26 +31,24 @@ class ExperimentHandler(object):
 
     exp_filename = "exper_stats"
 
-    def __init__(self, exper, logger=None, use_logfile=True):
+    def __init__(self):
 
-        self.exper = exper
+        self.exper = None
         self.u_maps = None
         self.pred_prob_maps = None
         self.referral_umaps = None
         self.entropy_maps = None
         self.ref_map_blobs = None
         self.test_results = None
+        self.test_set = None
         self.logger = None
+        self.model_name = None
         self.num_val_runs = 0
         self.saved_model_state_dict = None
         self.ensemble_models = OrderedDict()
         self.test_set_ids = {}
         self.patients = None
         self.referred_slices = None
-        if logger is None:
-            self.logger = create_logger(self.exper, file_handler=use_logfile)
-        else:
-            self.logger = logger
 
     def set_root_dir(self, root_dir):
         self.exper.config.root_dir = root_dir
@@ -393,7 +391,7 @@ class ExperimentHandler(object):
                   "save the actual uncertainty maps!")
             do_save_u_stats = True
 
-        maps_generator = UncertaintyMapsGenerator(self, test_set=test_set, verbose=verbose,
+        maps_generator = InferenceGenerator(self, test_set=test_set, verbose=verbose,
                                                   mc_samples=mc_samples, u_threshold=u_threshold,
                                                   checkpoints=checkpoints, store_test_results=store_test_results,
                                                   aggregate_func=aggregate_func,
@@ -425,7 +423,7 @@ class ExperimentHandler(object):
         :param dataset: we need the original training/val dataset in order to get hold of the image slices
         and augmented slices and use the same imgID's as the original training set
         :param mc_samples:
-        :param do_save_u_stats: save the uncertainty statistics and raw values. See object UncertaintyMapsGenerator
+        :param do_save_u_stats: save the uncertainty statistics and raw values. See object InferenceGenerator
         method save_maps for more details (will be stored in "/u_maps/" directory of the experiment.
         :param do_save_outlier_stats: saves 2 dictionaries of the object "OutOfDistributionSlices", enables us
         to trace the img/slice outlier statistics later.
@@ -436,13 +434,13 @@ class ExperimentHandler(object):
         :param use_existing_umaps: If True we load existing U-maps from the u_maps directory, so skipping the step
         of generating the U-maps.
         :param test_set: the test_set we're operating on i.e. we're determining the outliers. If not specified
-        UncertaintyMapsGenerator will load the test_set, assuming, we want to load the validation set of the FOLD
+        InferenceGenerator will load the test_set, assuming, we want to load the validation set of the FOLD
         we trained on (info comes from exper_handler.exper.run_args.fold_ids
         :param do_analyze_slices: generate plots for each image, which can be used to visually inspect which of
         the slices have "bizar" uncertainties.
         :return:
 
-        Note: we don't specify the test_set. But, UncertaintyMapsGenerator will by default, load all training
+        Note: we don't specify the test_set. But, InferenceGenerator will by default, load all training
         images from the FOLD the current model is trained on!
         """
         if model is None and checkpoint is None:
@@ -450,7 +448,7 @@ class ExperimentHandler(object):
                              "that needs to be loaded.")
 
         if not use_existing_umaps:
-            maps_generator = UncertaintyMapsGenerator(self, model=model, test_set=test_set, verbose=False,
+            maps_generator = InferenceGenerator(self, model=model, test_set=test_set, verbose=False,
                                                       mc_samples=mc_samples, u_threshold=u_threshold,
                                                       checkpoint=checkpoint, store_test_results=True)
             maps_generator(do_save=do_save_u_stats, clean_up=True)
@@ -785,6 +783,7 @@ class ExperimentHandler(object):
         self.patients = patients.category
 
     def create_entropy_maps(self, do_save=False):
+        eps = 1e-7
         input_dir = os.path.join(self.exper.config.root_dir,
                                            os.path.join(self.exper.output_dir, config.pred_lbl_dir))
         output_dir = os.path.join(self.exper.config.root_dir,
@@ -806,8 +805,13 @@ class ExperimentHandler(object):
                 print("ERROR - pred_probs is not an existing archive")
             # pred_probs has shape [8, height, width, #slices]: next step compute two entropy maps ES/ED
             pred_probs_es, pred_probs_ed = pred_probs[:4], pred_probs[4:]
-            entropy_es = (-pred_probs_es * np.log2(pred_probs_es)).sum(axis=0)
-            entropy_ed = (-pred_probs_ed * np.log2(pred_probs_ed)).sum(axis=0)
+            # for numerical stability we add eps (tiny) to softmax probability to prevent np.log2 on zero
+            # probability values, which result in nan-values. This actually only happens when we trained the model
+            # with the soft-dice.
+            entropy_es = (-pred_probs_es * np.log2(pred_probs_es + eps)).sum(axis=0)
+            entropy_ed = (-pred_probs_ed * np.log2(pred_probs_ed + eps)).sum(axis=0)
+            entropy_es = np.nan_to_num(entropy_es)
+            entropy_ed = np.nan_to_num(entropy_ed)
             entropy = np.concatenate((np.expand_dims(entropy_es, axis=0),
                                       np.expand_dims(entropy_ed, axis=0)))
             p_min, p_max = np.min(entropy), np.max(entropy)
@@ -823,7 +827,7 @@ class ExperimentHandler(object):
             # normalize to values between 0 and 0.5, same scale as stddev values
             # p_min, p_max = np.min(self.entropy_maps[patient_id]), np.max(self.entropy_maps[patient_id])
             # print("Before normalize {:.2f}/{:.2f}".format(p_min, p_max))
-            self.entropy_maps[patient_id] = ((entropy_map - min_ent) * 1./(max_ent - min_ent)) * 0.5
+            self.entropy_maps[patient_id] = ((entropy_map - min_ent) * 1./(max_ent - min_ent)) * 0.4
             # p_min, p_max = np.min(self.entropy_maps[patient_id]), np.max(self.entropy_maps[patient_id])
             # print("After normalize {:.2f}/{:.2f}".format(p_min, p_max))
             if do_save:
@@ -841,6 +845,8 @@ class ExperimentHandler(object):
                                   os.path.join(self.exper.output_dir, config.u_map_dir))
 
         search_path = os.path.join(input_dir, "*" + "_entropy_map.npz")
+        if len(glob.glob(search_path)) == 0:
+            self.create_entropy_maps(do_save=True)
         for fname in glob.glob(search_path):
             try:
                 entropy_data = np.load(fname)
@@ -905,6 +911,14 @@ class ExperimentHandler(object):
     def set_model_name(self, model_name):
         self.exper.model_name = model_name
 
+    def get_test_set(self):
+        if self.test_set is None:
+            fold_id = self.exper.run_args.fold_ids[0]
+            self.test_set = ACDC2017TestHandler.get_testset_instance(self.exper.config,
+                                                                     fold_id,
+                                                                     load_train=False, load_val=True,
+                                                                     batch_size=None, use_cuda=True)
+
     @staticmethod
     def check_compatibility(exper):
         arg_dict = vars(exper.run_args)
@@ -914,8 +928,7 @@ class ExperimentHandler(object):
 
         return exper
 
-    @staticmethod
-    def load_experiment(path_to_exp, full_path=False, epoch=None):
+    def load_experiment(self, path_to_exp, full_path=False, epoch=None, use_logfile=True):
 
         path_to_exp = os.path.join(path_to_exp, config.stats_path)
 
@@ -940,8 +953,15 @@ class ExperimentHandler(object):
             print "Unexpected error:", sys.exc_info()[0]
             raise
 
-        experiment = ExperimentHandler.check_compatibility(experiment)
-        return experiment
+        self.exper = ExperimentHandler.check_compatibility(experiment)
+        self.model_name = "{} p={:.2f} fold={} loss={}".format(self.exper.run_args.model,
+                                                               self.exper.run_args.drop_prob,
+                                                               self.exper.run_args.fold_ids[0],
+                                                               self.exper.run_args.loss_function)
+        if use_logfile:
+            self.logger = create_logger(self.exper, file_handler=use_logfile)
+        else:
+            self.logger = None
 
 
 class Experiment(object):

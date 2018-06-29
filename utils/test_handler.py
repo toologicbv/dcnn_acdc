@@ -159,7 +159,7 @@ class ACDC2017TestHandler(object):
             raise ValueError("You have to load at least train or validation files for this fold.")
         self.config = exper_config
         self.data_dir = os.path.join(self.config.root_dir, exper_config.data_dir)
-        self.filtered_umaps_dir = os.path.join(self.config.root_dir, exper_config.u_map_dir)
+        self.filtered_umaps_dir = os.path.join(self.config.root_dir, config.u_map_dir)
         self.search_mask = search_mask
         self.num_of_classes = nclass
         self.fold_ids = fold_ids

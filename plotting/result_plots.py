@@ -7,7 +7,7 @@ from utils.referral_results import ReferralResults
 
 def plot_referral_results(ref_result_obj, ref_slice_results=None, width=16, height=14,
                           do_save=False, do_show=True, model_name="Main title",
-                          ref_random_obj=None):
+                          ref_random_obj=None, fig_name=None):
     """
     :param ref_result_obj: ReferralResult object for which ALL slices are referred
     :param ref_slice_results:  ReferralResult object for which only SPECIFIC slices are referred
@@ -20,7 +20,9 @@ def plot_referral_results(ref_result_obj, ref_slice_results=None, width=16, heig
     :param do_save
     :param width
     :param height
+    :param fig_name
     """
+    use_entropy_maps = ref_result_obj.use_entropy_maps
     # % referred slices over ALL classes. Key=referral_threshold, value numpy [2] (for ES/ED)
     dice_ref = ref_result_obj.get_dice_referral_dict()
     xs = np.array(dice_ref.keys())
@@ -196,15 +198,20 @@ def plot_referral_results(ref_result_obj, ref_slice_results=None, width=16, heig
     fig.tight_layout(rect=[0.03, 0.03, 0.97, 0.97])
     if do_save:
         fig_path = os.path.join(config.root_dir, "figures")
+
         if not os.path.isdir(fig_path):
             os.makedirs(fig_path)
+        if fig_name is None:
+            fig_name = model_name
         if random_referral:
-            fig_name = model_name + "_random_referral_results"
+            fig_name = fig_name + "_random_referral_results"
         else:
             if slice_referral:
-                fig_name = model_name + "_referral_results"
+                fig_name = fig_name + "_referral_results"
             else:
-                fig_name = model_name + "_referral_results_allslices_only"
+                fig_name = fig_name + "_referral_results_allslices"
+                if use_entropy_maps:
+                    fig_name += "_ent_maps"
 
         fig_name_pdf = os.path.join(fig_path, fig_name + ".pdf")
         fig_name_jpeg = os.path.join(fig_path, fig_name + ".jpeg")

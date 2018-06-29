@@ -12,7 +12,7 @@ from common.common import generate_std_hist_corr_err_per_class, overlay_seg_mask
 from common.common import get_exper_objects
 
 
-def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=None, width=16,
+def plot_seg_erros_uncertainties(exper_handler, test_set, patient_id=None, width=16,
                                  test_results=None, slice_filter_type=None,
                                  info_type=None, referral_threshold=0., do_show=False, model_name="",
                                  do_save=False, slice_range=None, errors_only=False,
@@ -458,7 +458,8 @@ def plot_seg_erros_uncertainties(exper_handler=None, test_set=None, patient_id=N
             if errors_only:
                 fig_name = fig_name + "_w_uncrty"
             fig_name = os.path.join(fig_path, fig_name + ".pdf")
-
+            if not os.path.isdir(fig_path):
+                os.makedirs(fig_path)
             plt.savefig(fig_name, bbox_inches='tight')
             print("INFO - Successfully saved fig %s" % fig_name)
         if do_show:

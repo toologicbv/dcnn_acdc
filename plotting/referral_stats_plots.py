@@ -296,6 +296,8 @@ def show_referral_results(ref_result_obj, referral_threshold, per_disease=False)
                              np.expand_dims(ref_result_obj.ref_hd_stats[referral_threshold][1][1], axis=0)))
     org_dice = np.concatenate((np.expand_dims(ref_result_obj.org_dice_stats[referral_threshold][0][0], axis=0),
                                np.expand_dims(ref_result_obj.org_dice_stats[referral_threshold][1][0], axis=0)))
+    org_hd = np.concatenate((np.expand_dims(ref_result_obj.org_hd_stats[referral_threshold][0][0], axis=0),
+                               np.expand_dims(ref_result_obj.org_hd_stats[referral_threshold][1][0], axis=0)))
 
     print("----------------------Overall results for referral-threshold {:.2f} -----------------"
           "-----".format(referral_threshold))
@@ -305,12 +307,21 @@ def show_referral_results(ref_result_obj, referral_threshold, per_disease=False)
               "ED {:.2f}/{:.2f}/{:.2f}".format(org_dice[0, 1], org_dice[0, 2],
                                                org_dice[0, 3], org_dice[1, 1],
                                                org_dice[1, 2], org_dice[1, 3]))
+    print("without referral - HD (RV/Myo/LV):\tES {:.2f}/{:.2f}/{:.2f}\t"
+          "ED {:.2f}/{:.2f}/{:.2f}".format(org_hd[0, 1], org_hd[0, 2],
+                                           org_hd[0, 3], org_hd[1, 1],
+                                           org_hd[1, 2], org_hd[1, 3]))
 
     print("   with referral - "
           "dice(RV/Myo/LV):\tES {:.2f}/{:.2f}/{:.2f}\t"
           "ED {:.2f}/{:.2f}/{:.2f}".format(ref_dice[0, 1], ref_dice[0, 2],
                                            ref_dice[0, 3], ref_dice[1, 1],
                                            ref_dice[1, 2], ref_dice[1, 3]))
+    print("   with referral - HD (RV/Myo/LV):\tES {:.2f}/{:.2f}/{:.2f}\t"
+          "ED {:.2f}/{:.2f}/{:.2f}".format(ref_hd[0, 1], ref_hd[0, 2],
+                                           ref_hd[0, 3], ref_hd[1, 1],
+                                           ref_hd[1, 2], ref_hd[1, 3]))
+
     print("")
     if per_disease:
         num_per_category = ref_result_obj.num_per_category[referral_threshold]
@@ -345,15 +356,15 @@ def show_referral_results(ref_result_obj, referral_threshold, per_disease=False)
                   "ED {:.2f}/{:.2f}/{:.2f}".format(ref_dice[0, 1], ref_dice[0, 2],
                                                    ref_dice[0, 3], ref_dice[1, 1],
                                                    ref_dice[1, 2], ref_dice[1, 3]))
-            org_hd = mean_org_hd_per_dcat[disease_cat]
+            org_hd_dcat = mean_org_hd_per_dcat[disease_cat]
             print("without referral - HD (RV/Myo/LV):\tES {:.2f}/{:.2f}/{:.2f}\t"
-                  "ED {:.2f}/{:.2f}/{:.2f}".format(org_hd[0, 1], org_hd[0, 2],
-                                                   org_hd[0, 3], org_hd[1, 1],
-                                                   org_hd[1, 2], org_hd[1, 3]))
+                  "ED {:.2f}/{:.2f}/{:.2f}".format(org_hd_dcat[0, 1], org_hd_dcat[0, 2],
+                                                   org_hd_dcat[0, 3], org_hd_dcat[1, 1],
+                                                   org_hd_dcat[1, 2], org_hd_dcat[1, 3]))
 
-            ref_hd = mean_ref_hd_per_dcat[disease_cat]
+            ref_hd_dcat = mean_ref_hd_per_dcat[disease_cat]
             print("   with referral - HD (RV/Myo/LV):\tES {:.2f}/{:.2f}/{:.2f}\t"
-                  "ED {:.2f}/{:.2f}/{:.2f}".format(ref_hd[0, 1], ref_hd[0, 2],
-                                                   ref_hd[0, 3], ref_hd[1, 1],
-                                                   ref_hd[1, 2], ref_hd[1, 3]))
+                  "ED {:.2f}/{:.2f}/{:.2f}".format(ref_hd_dcat[0, 1], ref_hd_dcat[0, 2],
+                                                   ref_hd_dcat[0, 3], ref_hd_dcat[1, 1],
+                                                   ref_hd_dcat[1, 2], ref_hd_dcat[1, 3]))
             print(" ")
