@@ -15,7 +15,10 @@ from config.config import config
         Example:
         python generate_uncertainty_stats.py --cuda --exper_id=20180418_15_02_05_dcnn_mcv1_150000E_lr2e02
             --checkpoints 100000 110000 120000 130000 140000 150000 --mc_samples=10 --save_actual_maps 
-            --run_mode="u_maps_and_preds" --aggregate_func=max
+            --run_mode="umaps_and_preds" --aggregate_func=max
+            
+python generate_uncertainty_stats.py --cuda --exper_dict_id="exp_base_brier" --checkpoints 100000 110000 120000 130000 140000 150000 --mc_samples=1 --run_mode="u_maps_and_preds"
+
             
     (2) Run with run_mode=filtered_umaps_only in order to create the filtered uncertainty maps for the different
         referral thresholds. If exper_id argument is None, all exeriments in exp_mc01_brier dict will be computed.
@@ -26,7 +29,7 @@ from config.config import config
 
     (3) Run with run_mode=test_referrals but WITHOUT do_filter_slices. This creates the predicted labels for an
         image WITH referral (based on the referral_thresholds specified). We need this segmentation maps in the next
-        step when we refer only certain slices of the image to mimick realistic clinical workflow.
+        step when we refer only certain slices of the image to mimic realistic clinical workflow.
         
         Example:
         python generate_uncertainty_stats.py --cuda --run_mode="test_referrals" 
@@ -49,6 +52,16 @@ exp_mc01_brier = {3: "20180426_14_14_57_dcnn_mc_f3p01_brier_150KE_lr2e02",
                   2: "20180426_14_14_39_dcnn_mc_f2p01_brier_150KE_lr2e02",
                   1: "20180426_14_13_46_dcnn_mc_f1p01_brier_150KE_lr2e02",
                   0: "20180418_15_02_05_dcnn_mcv1_150000E_lr2e02"}
+
+exp_mc01_softmax = {3: "20180630_10_26_32_dcnn_mc_f3p01_150KE_lr2e02",
+                    2: "20180630_10_27_07_dcnn_mc_f2p01_150KE_lr2e02",
+                    1: "20180629_11_28_29_dcnn_mc_f1p01_150KE_lr2e02",
+                    0: "20180629_10_33_08_dcnn_mc_f0p01_150KE_lr2e02"}
+
+exp_base_brier = {3: "20180628_15_28_44_dcnn_f3_150KE_lr2e02",
+                  2: "20180628_15_18_08_dcnn_f2_150KE_lr2e02",
+                  1: "20180628_13_53_01_dcnn_f1_150KE_lr2e02",
+                  0: "20180628_13_51_59_dcnn_f0_150KE_lr2e02"}
 
 exp_base = {3: "20180509_18_36_23_dcnn_f3_150KE_lr2e02",
             2: "20180509_18_36_28_dcnn_f2_150KE_lr2e02",
@@ -96,6 +109,10 @@ def do_parse_args():
             args.exper_dict_id = exp_base
         elif args.exper_dict_id == "exp_mc01_brier":
             args.exper_dict_id = exp_mc01_brier
+        elif args.exper_dict_id == "exp_base_brier":
+            args.exper_dict_id = exp_base_brier
+        elif args.exper_dict_id == "exp_mc01_softmax":
+            args.exper_dict_id = exp_mc01_softmax
         else:
             raise ValueError("ERROR - exper_dict_id argument {} not supported".format(args.exper_dict_id))
 
@@ -119,15 +136,7 @@ def _print_flags(args, logger=None):
             print(" *** RUNNING ON GPU *** ")
 
 
-def main():
-    args = do_parse_args()
-    SEED = 4325
-    torch.manual_seed(SEED)
-    torch.cuda.manual_seed(SEED)
-    if args.cuda:
-        torch.backends.cudnn.enabled = True
-
-    np.random.seed(SEED)
+def collect_exper_handlers(args):
     exper_handlers = []
     if args.exper_id is not None:
         exp_model_path = os.path.join(LOG_DIR, args.exper_id)
@@ -140,23 +149,43 @@ def main():
         print("INFO - Experimental details extracted:: " + info_str)
         exper_handlers.append(exper_handler)
     else:
-        print("WARNING - Exper_id argument is empty!")
+        print("INFO - Using exper dictionary ID {}".format(args.exper_dict_id))
+        for exper_id in args.exper_dict_id.values():
+            exp_model_path = os.path.join(LOG_DIR, exper_id)
+            exper_handler = ExperimentHandler()
+            exper_handler.load_experiment(exp_model_path, use_logfile=False)
+            exper_handler.set_root_dir(ROOT_DIR)
+            exper_handlers.append(exper_handler)
+    return exper_handlers
 
+
+def main():
+    args = do_parse_args()
+    SEED = 4325
+    torch.manual_seed(SEED)
+    torch.cuda.manual_seed(SEED)
+    if args.cuda:
+        torch.backends.cudnn.enabled = True
+
+    np.random.seed(SEED)
     _print_flags(args)
+    exper_handlers = collect_exper_handlers(args)
 
     if args.run_mode == "outliers":
         # create dataset
-        dataset = ACDC2017DataSet(exper_handler.exper.config, search_mask=config.dflt_image_name + ".mhd",
-                                  fold_ids=exper_handler.exper.run_args.fold_ids, preprocess=False,
-                                  debug=exper_handler.exper.run_args.quick_run)
+        for e_handler in exper_handlers:
+            exper_args = e_handler.exper.run_args
+            dataset = ACDC2017DataSet(e_handler.exper.config, search_mask=config.dflt_image_name + ".mhd",
+                                      fold_ids=e_handler.exper.run_args.fold_ids, preprocess=False,
+                                      debug=e_handler.exper.run_args.quick_run)
 
-        # IMPORTANT: current settings=we're loading VALIDATION set for outlier detection: use_train_set=False !!!
-        _ = exper_handler.create_outlier_dataset(dataset, model=None, test_set=None,
-                                                 checkpoint=args.checkpoints[0], mc_samples=args.mc_samples,
-                                                 u_threshold=0., use_train_set=False,
-                                                 do_save_u_stats=True, use_high_threshold=True,
-                                                 do_save_outlier_stats=True, use_existing_umaps=args.reuse_maps,
-                                                 do_analyze_slices=args.generate_plots)
+            # IMPORTANT: current settings=we're loading VALIDATION set for outlier detection: use_train_set=False !!!
+            _ = e_handler.create_outlier_dataset(dataset, model=None, test_set=None,
+                                                     checkpoint=args.checkpoints[0], mc_samples=args.mc_samples,
+                                                     u_threshold=0., use_train_set=False,
+                                                     do_save_u_stats=True, use_high_threshold=True,
+                                                     do_save_outlier_stats=True, use_existing_umaps=args.reuse_maps,
+                                                     do_analyze_slices=args.generate_plots)
     elif args.run_mode == "umaps_and_preds":
 
         for e_handler in exper_handlers:
@@ -168,7 +197,7 @@ def main():
             print("INFO - Experimental details extracted:: " + info_str)
             e_handler.create_u_maps(model=None, checkpoints=args.checkpoints, mc_samples=args.mc_samples,
                                         u_threshold=0., referral_thresholds=args.referral_thresholds,
-                                        do_save_u_stats=True, verbose=args.verbose,
+                                        verbose=args.verbose,
                                         save_actual_maps=args.save_actual_maps, test_set=None,
                                         generate_figures=args.generate_plots,
                                         aggregate_func=args.aggregate_func,
@@ -177,14 +206,6 @@ def main():
     elif args.run_mode == "filtered_umaps_only":
 
         str_referral_thresholds = ", ".join([str(r) for r in args.referral_thresholds])
-        if args.exper_id is None:
-            for exper_id in exp_mc01_brier.values():
-                exp_model_path = os.path.join(LOG_DIR, exper_id)
-                exper_handler = ExperimentHandler()
-                exper_handler.load_experiment(exp_model_path, use_logfile=False)
-                exper_handler.set_root_dir(ROOT_DIR)
-                exper_handlers.append(exper_handler)
-
         for e_handler in exper_handlers:
             exper_args = e_handler.exper.run_args
             print("INFO - Create filtered u-maps for referral thresholds {}".format(str_referral_thresholds))
@@ -202,15 +223,6 @@ def main():
             raise ValueError("ERROR - argument referral_threshold needs to be greater than 0.")
 
         str_referral_thresholds = ", ".join([str(r) for r in args.referral_thresholds])
-
-        if args.exper_id is None:
-            for exper_id in exp_mc01_brier.values():
-                exp_model_path = os.path.join(LOG_DIR, exper_id)
-                exper_handler = ExperimentHandler()
-                exper_handler.load_experiment(exp_model_path, use_logfile=False)
-                exper_handler.set_root_dir(ROOT_DIR)
-                exper_handlers.append(exper_handler)
-
         print("INFO - Generate figures for referral thresholds {}".format(str_referral_thresholds))
         for e_handler in exper_handlers:
             exper_args = e_handler.exper.run_args
@@ -223,24 +235,14 @@ def main():
                                                                 load_train=False, load_val=True,
                                                                 batch_size=None, use_cuda=True)
             # in this case image_range REALLY must be a list e.g. [1, 3, 10] in order to select specific images
-            exper_handler.generate_figures(test_set, image_range=None, slice_type_filter=args.slice_filter_type,
-                                           referral_thresholds=args.referral_thresholds,
-                                           patients=None)  # ["patient005", "patient022"])
+            e_handler.generate_figures(test_set, image_range=None, slice_type_filter=args.slice_filter_type,
+                                       referral_thresholds=args.referral_thresholds,
+                                       patients=None)  # ["patient005", "patient022"])
 
     elif args.run_mode == "test_referrals":
         if args.exper_id is None and args.exper_dict_id is None:
             raise ValueError("ERROR - arguments exper_id and exper_dict_id can't be both None")
         str_referral_thresholds = ", ".join([str(r) for r in args.referral_thresholds])
-        exper_handlers = []
-        if args.exper_id is None:
-            for exper_id in args.exper_dict_id.values():
-                exp_model_path = os.path.join(LOG_DIR, exper_id)
-                exper_handler = ExperimentHandler()
-                exper_handler.load_experiment(exp_model_path, use_logfile=False)
-                exper_handler.set_root_dir(ROOT_DIR)
-                exper_handlers.append(exper_handler)
-        else:
-            exper_handlers.append(exper_handler)
         print("INFO - Test referrals with referral thresholds {}".format(str_referral_thresholds))
         for e_handler in exper_handlers:
             exper_args = e_handler.exper.run_args
@@ -262,6 +264,7 @@ def main():
                                           verbose=True, do_save=True, num_of_images=None,
                                           use_entropy_maps=args.use_entropy_maps,
                                           patients=None)  # ["patient082", "patient084"])
+            # referral_only -> we don't create the filtered maps (u-map or entropy)
             ref_handler.test(referral_only=True, slice_filter_type=args.slice_filter_type, verbose=False)
 
 

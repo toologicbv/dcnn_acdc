@@ -943,16 +943,16 @@ class ACDC2017TestHandler(object):
         except IOError:
             print("ERROR - Unable to save filtered umaps file {}".format(file_name))
 
-    def save_pred_labels(self, output_dir, u_threshold=0., mc_dropout=False,
-                         forced_save=True):
+    def save_pred_labels(self, output_dir, u_threshold=0., mc_dropout=False, used_entropy=False):
         """
 
         :param output_dir: is actually the exper_id e.g. 20180503_13_22_18_dcnn_mc_f2p005....
         :param u_threshold: indicating whether we store a filtered label mask...if <> 0
 
         :param mc_dropout: boolean indicating whether we obtained the predictions by means of mc-dropout
-
-        :return: saves the predicted label maps for an image. shape [8classes, width, height, #slices]
+        :param used_entropy: did we use entropy maps to generate the predicted labels (filtering/referral)?
+                if so, we need to distinguish the predictions from the "other" predictions
+        saves the predicted label maps for an image. shape [8classes, width, height, #slices]
         """
         pred_lbl_output_dir = os.path.join(self.config.root_dir, os.path.join(output_dir, config.pred_lbl_dir))
         if not os.path.isdir(pred_lbl_output_dir):
@@ -961,20 +961,26 @@ class ACDC2017TestHandler(object):
             u_threshold = str(u_threshold).replace(".", "_")
             if mc_dropout:
                 u_threshold = "_mc" + u_threshold
+            else:
+                u_threshold = "_" + u_threshold
+            if used_entropy:
+                u_threshold += "_ep"
 
             file_name = self.b_image_name + "_filtered_pred_labels" + u_threshold + ".npz"
         else:
+            file_name = self.b_image_name + "_pred_labels"
             if mc_dropout:
-                file_name = self.b_image_name + "_pred_labels_mc.npz"
-            else:
-                file_name = self.b_image_name + "_pred_labels.npz"
+                file_name += "_mc"
+            if used_entropy:
+                file_name += "_ep"
+
+            file_name += ".npz"
         file_name = os.path.join(pred_lbl_output_dir, file_name)
-        # we don't overwrite existing predictions we obtained with the base model, so the non-referral predictions!
-        if not os.path.isfile(file_name) or u_threshold != 0 or forced_save:
-            try:
-                np.savez(file_name, pred_labels=self.b_pred_labels)
-            except IOError:
-                print("ERROR - Unable to save predicted labels file {}".format(file_name))
+
+        try:
+            np.savez(file_name, pred_labels=self.b_pred_labels)
+        except IOError:
+            print("ERROR - Unable to save predicted labels file {}".format(file_name))
 
     def save_referred_slices(self, output_dir, referral_threshold=0., slice_filter_type=None,
                              referred_slices=None):

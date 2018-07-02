@@ -51,7 +51,7 @@ def plot_entropy_map_for_patient(exper_handler, patient_id, do_show=True, do_sav
             ax1 = plt.subplot2grid((rows, columns), (row, phase * 2), rowspan=2, colspan=2)
             ax1.imshow(img_slice, cmap=cm.gray)
             ax1plot = ax1.imshow(entropy_slice_map, cmap=mycmap,
-                                   vmin=0., vmax=0.51)
+                                   vmin=0., vmax=0.4)
             ax1.set_aspect('auto')
             fig.colorbar(ax1plot, ax=ax1, fraction=0.046, pad=0.04)
 

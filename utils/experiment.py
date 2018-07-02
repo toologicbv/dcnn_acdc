@@ -5,7 +5,8 @@ from torch.autograd import Variable
 import numpy as np
 import os
 import glob
-import copy
+import shutil
+
 from collections import OrderedDict
 from datetime import datetime
 from pytz import timezone
@@ -50,6 +51,13 @@ class ExperimentHandler(object):
         self.patients = None
         self.referred_slices = None
 
+    def set_exper(self, exper, use_logfile=False):
+        self.exper = exper
+        if use_logfile:
+            self.logger = create_logger(self.exper, file_handler=use_logfile)
+        else:
+            self.logger = None
+
     def set_root_dir(self, root_dir):
         self.exper.config.root_dir = root_dir
         self.exper.config.data_dir = os.path.join(self.exper.config.root_dir, "data/Folds/")
@@ -76,12 +84,16 @@ class ExperimentHandler(object):
             else:
                 file_name = ExperimentHandler.exp_filename + "@{}".format(self.exper.epoch_id) + ".dll"
 
-        outfile = os.path.join(self.exper.stats_path, file_name)
+        exper_out_dir = os.path.join(self.exper.config.root_dir, self.exper.stats_path)
+
+        outfile = os.path.join(exper_out_dir, file_name)
         with open(outfile, 'wb') as f:
             dill.dump(self.exper, f)
 
         if self.logger is not None:
             self.logger.info("Epoch: {} - Saving experimental details to {}".format(self.exper.epoch_id, outfile))
+        else:
+            print("Epoch: {} - Saving experimental details to {}".format(self.exper.epoch_id, outfile))
 
     def print_flags(self):
         """
@@ -348,8 +360,7 @@ class ExperimentHandler(object):
                                            slice_seg_error[1, 1], slice_seg_error[1, 2], slice_seg_error[1, 3]))
         # we only want to save predicted labels when we're not SAMPLING weights
         if save_pred_labels:
-            test_set.save_pred_labels(self.exper.output_dir, u_threshold=0., mc_dropout=mc_dropout,
-                                      forced_save=True)
+            test_set.save_pred_labels(self.exper.output_dir, u_threshold=0., mc_dropout=mc_dropout)
             # save probability maps (mean softmax)
             test_set.save_pred_probs(self.exper.output_dir, mc_dropout=mc_dropout)
 
@@ -378,7 +389,7 @@ class ExperimentHandler(object):
                                           referral_accuracy=None, referral_hd=None,
                                           referral_stats=test_set.referral_stats)
 
-    def create_u_maps(self, model=None, checkpoints=None, mc_samples=10, u_threshold=0., do_save_u_stats=False,
+    def create_u_maps(self, model=None, checkpoints=None, mc_samples=10, u_threshold=0.,
                       save_actual_maps=False, test_set=None, generate_figures=False, verbose=False,
                       aggregate_func="max", referral_thresholds=None, store_test_results=False):
 
@@ -386,17 +397,12 @@ class ExperimentHandler(object):
             raise ValueError("When model parameter is None, you need to specify the checkpoint model "
                              "that needs to be loaded.")
 
-        if save_actual_maps and not do_save_u_stats:
-            print("WARNING - Setting do_save_u_stats=True because you specified that you want to "
-                  "save the actual uncertainty maps!")
-            do_save_u_stats = True
-
         maps_generator = InferenceGenerator(self, test_set=test_set, verbose=verbose,
                                                   mc_samples=mc_samples, u_threshold=u_threshold,
                                                   checkpoints=checkpoints, store_test_results=store_test_results,
                                                   aggregate_func=aggregate_func,
                                                   referral_thresholds=referral_thresholds)
-        maps_generator(do_save=do_save_u_stats, clean_up=False, save_actual_maps=save_actual_maps,
+        maps_generator(clean_up=False, save_actual_maps=save_actual_maps,
                        generate_figures=generate_figures)
 
         # if generate_figures:
@@ -669,25 +675,30 @@ class ExperimentHandler(object):
             # here we store the maps per phase ES/ED taking the max uncertainty over 4 classes after we've filtered
             # the u-maps per class by means of 6 connectivity components.
             filtered_stddev_map = np.zeros((num_of_phases, raw_u_map.shape[2], raw_u_map.shape[3], raw_u_map.shape[4]))
+
+            # anything_there = np.count_nonzero(raw_u_map)
             for phase in np.arange(num_of_phases):
                 cls_offset = phase * num_of_classes
                 for cls in np.arange(0, num_of_classes):
                     # if cls != 0 and cls != 4:
                     u_3dmaps_cls = raw_u_map[phase, cls]
+
                     # set all uncertainties below threshold to zero
                     u_3dmaps_cls[u_3dmaps_cls < u_threshold] = 0
                     # do not yet filter 6 largest connected comonents here when we average over the stddev values
                     # we do that after we've averaged, for max-aggregate this wouldn't have an effect
                     if aggregate_func == "max":
-
                         if filter_per_slice:
                             for slice_id in np.arange(num_of_slices):
                                 slice_cls_u_map = u_3dmaps_cls[:, :, slice_id]
                                 filtered_cls_stddev_map[cls + cls_offset, :, :, slice_id] = \
                                     filter_connected_components(slice_cls_u_map, threshold=u_threshold)
                         else:
+
                             filtered_cls_stddev_map[cls + cls_offset] = filter_connected_components(u_3dmaps_cls,
                                                                                                     threshold=u_threshold)
+                            # anything_left = np.count_nonzero(filtered_cls_stddev_map[cls + cls_offset])
+                            # print("Before {} and what's left {}".format(anything_there, anything_left))
                     else:
                         filtered_cls_stddev_map[cls + cls_offset] = u_3dmaps_cls
 
@@ -918,6 +929,41 @@ class ExperimentHandler(object):
                                                                      fold_id,
                                                                      load_train=False, load_val=True,
                                                                      batch_size=None, use_cuda=True)
+
+    def change_exper_dirs(self, new_dir, move_dir=False):
+
+        """
+
+        :param new_dir:
+        usage: exper_hdl_base_brier.change_exper_dirs("20180628_13_53_01_dcnn_f1_brier_150KE_lr2e02")
+
+        """
+
+        print("Current directory names:")
+        old_exper_dir = os.path.join(self.exper.config.root_dir, self.exper.output_dir)
+        print("log_dir = {}".format(self.exper.run_args.log_dir))
+        print("output_dir = {}".format(self.exper.output_dir))
+        print("stats_path = {}".format(self.exper.stats_path))
+        print("chkpnt_dir = {}".format(self.exper.chkpnt_dir))
+        self.exper.run_args.log_dir = new_dir
+        self.exper.output_dir = os.path.join(config.log_root_path, new_dir)
+        self.exper.stats_path = os.path.join(self.exper.output_dir, config.stats_path)
+        self.exper.chkpnt_dir = os.path.join(self.exper.output_dir, config.checkpoint_path)
+        # create new directories if they don't exist
+        exper_new_out_dir = os.path.join(self.exper.config.root_dir, self.exper.output_dir)
+        # create_dir_if_not_exist(os.path.join(self.exper.config.root_dir, self.exper.output_dir))
+        # create_dir_if_not_exist(os.path.join(self.exper.config.root_dir, self.exper.stats_path))
+        # create_dir_if_not_exist(os.path.join(self.exper.config.root_dir, self.exper.chkpnt_dir))
+        # create_dir_if_not_exist(os.path.join(exper_new_out_dir, config.figure_path))
+        if move_dir:
+            print("WARNING - Copying dir {} to {}".format(old_exper_dir, exper_new_out_dir))
+            shutil.move(old_exper_dir, exper_new_out_dir)
+
+        print("New directory names:")
+        print("log_dir = {}".format(self.exper.run_args.log_dir))
+        print("output_dir = {}".format(self.exper.output_dir))
+        print("stats_path = {}".format(self.exper.stats_path))
+        print("chkpnt_dir = {}".format(self.exper.chkpnt_dir))
 
     @staticmethod
     def check_compatibility(exper):

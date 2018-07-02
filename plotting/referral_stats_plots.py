@@ -284,7 +284,7 @@ def histogram_slice_referral(ref_result_obj, referral_threshold, do_save=False, 
         plt.show()
 
 
-def show_referral_results(ref_result_obj, referral_threshold, per_disease=False):
+def show_referral_results(ref_result_obj, referral_threshold, per_disease=False, print_latex_string=False):
 
     ref_dice = np.concatenate((np.expand_dims(ref_result_obj.ref_dice_stats[referral_threshold][0][0], axis=0),
                                    np.expand_dims(ref_result_obj.ref_dice_stats[referral_threshold][1][0], axis=0)))
@@ -317,11 +317,20 @@ def show_referral_results(ref_result_obj, referral_threshold, per_disease=False)
           "ED {:.2f}/{:.2f}/{:.2f}".format(ref_dice[0, 1], ref_dice[0, 2],
                                            ref_dice[0, 3], ref_dice[1, 1],
                                            ref_dice[1, 2], ref_dice[1, 3]))
+
     print("   with referral - HD (RV/Myo/LV):\tES {:.2f}/{:.2f}/{:.2f}\t"
           "ED {:.2f}/{:.2f}/{:.2f}".format(ref_hd[0, 1], ref_hd[0, 2],
                                            ref_hd[0, 3], ref_hd[1, 1],
                                            ref_hd[1, 2], ref_hd[1, 3]))
 
+    if print_latex_string:
+        latex_line = " & {:.2f} & {:.2f}  & {:.2f} & {:.2f} & {:.2f} & {:.2f} "
+        # print Latex strings
+        print("----------------------------------------------------------------------------------------------")
+        print("INFO - Latex strings")
+        print("Dice coefficients with referral")
+        print(latex_line.format(ref_dice[0, 1], ref_dice[0, 2],
+                                ref_dice[0, 3], ref_dice[1, 1], ref_dice[1, 2], ref_dice[1, 3]))
     print("")
     if per_disease:
         num_per_category = ref_result_obj.num_per_category[referral_threshold]

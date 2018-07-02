@@ -449,7 +449,7 @@ def create_exper_label(exper):
             exper_label += "_" + exper.run_args.loss_function
         exper_label += "_" + str(exper.run_args.epochs / 1000) + "KE"
 
-    elif exper.run_args.model == "dcnn_mc":
+    elif exper.run_args.model[:7] == "dcnn_mc":
         prob = "p" + str(exper.run_args.drop_prob).replace(".", "")
         if exper.run_args.loss_function == "brier":
             prob += "_" + exper.run_args.loss_function

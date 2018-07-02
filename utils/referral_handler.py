@@ -141,6 +141,11 @@ class ReferralHandler(object):
         else:
             self.use_mc_samples = True
         self.exper_handler = exper_handler
+        # check whether we're dealing with an MC-dropout model, sometimes we use entropy maps to test referral
+        if "mc" in exper_handler.exper.run_args.model:
+            self.mc_model = True
+        else:
+            self.mc_model = False
         self.aggregate_func = aggregate_func
         self.referral_threshold = None
         self.str_referral_threshold = None
@@ -415,7 +420,7 @@ class ReferralHandler(object):
                                                        referred_slices=referred_slices)
                 else:
                     self.test_set.save_pred_labels(self.exper_handler.exper.output_dir, u_threshold=referral_threshold,
-                                                   mc_dropout=True)
+                                                   mc_dropout=self.mc_model, used_entropy=self.use_entropy_maps)
                 if verbose:
                     print("INFO - {} with referral (pos-only={}) using "
                           "threshold {:.2f}".format(patient_id, self.pos_only, referral_threshold))

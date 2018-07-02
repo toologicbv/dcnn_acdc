@@ -59,7 +59,7 @@ class InferenceGenerator(object):
         else:
             self.test_results = None
 
-    def __call__(self, do_save=True, clean_up=False, save_actual_maps=False, generate_figures=False):
+    def __call__(self, clean_up=False, save_actual_maps=False, generate_figures=False):
 
         start_time = time.time()
         message = "INFO - Starting to generate uncertainty maps (agg-func={}) " \
@@ -85,6 +85,7 @@ class InferenceGenerator(object):
         # debugging
         # image_range = [0]
         image_range = np.arange(len(self.test_set.img_file_names))
+        # image_range = np.arange(2, len(self.test_set.img_file_names))
         for image_num in tqdm(image_range):
             patient_id = self.test_set.img_file_names[image_num]
             print("Predictions for {} with #samples={} without referral (use-mc={})".format(patient_id,
@@ -93,14 +94,14 @@ class InferenceGenerator(object):
             self._test(image_num, mc_samples=self.mc_samples, sample_weights=sample_weights,
                        store_test_results=True, save_pred_labels=True,
                        store_details=False)
-            if do_save:
+            if save_actual_maps:
                 saved += 1
-                self.save(save_actual_maps=save_actual_maps)
+                self.save()
         if self.store_test_results:
             self.exper_handler.test_results.compute_mean_stats()
             self.exper_handler.test_results.show_results()
         duration = time.time() - start_time
-        if do_save:
+        if save_actual_maps:
             self.info("INFO - Successfully saved {} maps to {}".format(saved, self.umap_output_dir))
         if self.store_test_results:
             self.exper_handler.test_results.save_results(fold_ids=self.exper_handler.exper.run_args.fold_ids,
@@ -108,15 +109,12 @@ class InferenceGenerator(object):
 
         self.info("INFO - Total duration of generation process {:.2f} secs".format(duration))
 
-    def save(self, save_actual_maps=False):
-        # NOTE: we're currently not saving the actual MAPS, only the uncertainty values per pixels and the stats
+    def save(self):
+        # NOTE: we're currently saving the uncertainty values per pixels and the stats
         # b_stddev_map: [8 classes, width, height, #slices]. we insert a new axis and split dim1 into 2 x 4
         # new shape [2, 4 classes, width, height, #slices]
-        if save_actual_maps:
-            stddev_map = np.concatenate((self.test_set.b_stddev_map[np.newaxis, :4, :, :, :],
+        stddev_map = np.concatenate((self.test_set.b_stddev_map[np.newaxis, :4, :, :, :],
                                          self.test_set.b_stddev_map[np.newaxis, 4:, :, :, :]))
-        else:
-            stddev_map = None
         # b_bald_map shape: [2, width, height, #slices]
         try:
             # the b_image_name contains the patientxxx ID! otherwise we have on identification

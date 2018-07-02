@@ -60,7 +60,8 @@ def do_parse_args():
     # Training settings
     parser = argparse.ArgumentParser(description='PyTorch Dilated CNN')
 
-    parser.add_argument('--model', default="dcnn", choices=['dcnn', 'dcnn_mc', 'dcnn_mcm', 'dcnn_mc_crelu'])
+    parser.add_argument('--model', default="dcnn", choices=['dcnn', 'dcnn_mc', 'dcnn_mc_bn89', 'dcnn_mcm',
+                                                            'dcnn_mc_crelu'])
     parser.add_argument('--version', type=str, default='v1')
     # in case we retrain a previous model/checkpoint this parameter specifies the experiment directory
     # relative path (w.r.t. logs/ directory e.g. "20180330_09_56_01_dcnn_mcv1_150000E_lr2e02"

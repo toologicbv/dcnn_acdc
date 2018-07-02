@@ -177,9 +177,8 @@ def main():
         torch.backends.cudnn.enabled = True
 
     np.random.seed(SEED)
-
-    exper = Experiment(config, run_args=args)
-    exper_hdl = ExperimentHandler(exper)
+    exper_hdl = ExperimentHandler()
+    exper_hdl.set_exper(Experiment(config, run_args=args), use_logfile=True)
     exper_hdl.print_flags()
     check_dependencies_run_args(exper_hdl.exper.run_args)
     training(exper_hdl)
