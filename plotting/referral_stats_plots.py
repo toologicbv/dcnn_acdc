@@ -328,6 +328,9 @@ def show_referral_results(ref_result_obj, referral_threshold, per_disease=False,
         # print Latex strings
         print("----------------------------------------------------------------------------------------------")
         print("INFO - Latex strings")
+        print("Dice coefficients without referral")
+        print(latex_line.format(org_dice[0, 1], org_dice[0, 2],
+                                org_dice[0, 3], org_dice[1, 1], org_dice[1, 2], org_dice[1, 3]))
         print("Dice coefficients with referral")
         print(latex_line.format(ref_dice[0, 1], ref_dice[0, 2],
                                 ref_dice[0, 3], ref_dice[1, 1], ref_dice[1, 2], ref_dice[1, 3]))

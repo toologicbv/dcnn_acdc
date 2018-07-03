@@ -60,8 +60,8 @@ def do_parse_args():
     # Training settings
     parser = argparse.ArgumentParser(description='PyTorch Dilated CNN')
 
-    parser.add_argument('--model', default="dcnn", choices=['dcnn', 'dcnn_mc', 'dcnn_mc_bn89', 'dcnn_mcm',
-                                                            'dcnn_mc_crelu'])
+    parser.add_argument('--model', default="dcnn", choices=['dcnn', 'dcnn_mc', 'dcnn_mc_bn789', 'dcnn_mcm',
+                                                            'dcnn_mc_ep'])
     parser.add_argument('--version', type=str, default='v1')
     # in case we retrain a previous model/checkpoint this parameter specifies the experiment directory
     # relative path (w.r.t. logs/ directory e.g. "20180330_09_56_01_dcnn_mcv1_150000E_lr2e02"
@@ -70,7 +70,7 @@ def do_parse_args():
     parser.add_argument('--retrain_chkpnt', type=int, default=None)
     parser.add_argument('--root_dir', default=config.root_dir)
     parser.add_argument('--log_dir', default=None)
-    parser.add_argument('--loss_function', type=str, choices=['softdice', 'brier'], default='softdice',
+    parser.add_argument('--loss_function', type=str, choices=['softdice', 'brier', "cross-entropy"], default='softdice',
                         help='Loss function for training the model (default: softdice)')
     parser.add_argument('--use_cuda', action='store_true', default=False,
                         help='use GPU')

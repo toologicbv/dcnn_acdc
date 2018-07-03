@@ -50,6 +50,7 @@ class ConcatenateCNNBlock(nn.Module):
             if self.verbose:
                 print("INFO - apply {}".format(apply_non_linearity.__name__))
             self.non_linearity = self.apply_non_linearity(dim=1)
+            self.log_softmax = nn.LogSoftmax(dim=1)
 
         if self.apply_batch_norm:
             if self.verbose:
@@ -82,10 +83,15 @@ class ConcatenateCNNBlock(nn.Module):
             # The model uses the so called soft-Dice loss function. Calculation of the loss requires
             # that we calculate probabilities for each pixel, and hence we use the Softmax for this, which should
             # be specified as the non-linearity in the dictionary of the config object
+            out1_log_softmax = self.log_softmax(out1)
+            out2_log_softmax = self.log_softmax(out2)
+            out_log_softmax = torch.cat((out1_log_softmax, out2_log_softmax), dim=self.axis)
             out1 = self.non_linearity(out1)
             out2 = self.non_linearity(out2)
+        else:
+            out_log_softmax = None
 
-        return torch.cat((out1, out2), dim=self.axis)
+        return torch.cat((out1, out2), dim=self.axis), out_log_softmax
 
 
 class ConcatenateCNNBlockWithRegression(ConcatenateCNNBlock):

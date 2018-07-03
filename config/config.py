@@ -175,10 +175,10 @@ class BaseConfig(object):
                             'dropout': [kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"],
                                         kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"],
                                         kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"], 0.],
-                            'loss_function': nn.NLLLoss,
+                            'loss_function': nn.NLLLoss2d,
                             'description': 'DCNN_2D_MC_DROPOUT_{}'.format(kwargs["drop_prob"])
                             }
-        elif model == "dcnn_mc_bn89":
+        elif model == "dcnn_mc_bn789":
             num_of_layers = 10
             architecture = {'num_of_layers': num_of_layers,
                             'input_channels': 2,
@@ -187,7 +187,7 @@ class BaseConfig(object):
                             # NOTE: last channel is num_of_classes
                             'dilation': [1, 1, 2, 4, 8, 16, 32, 1, 1, 1],
                             'stride': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                            'batch_norm': [False, False, False, False, False, False, False, True, True, False],
+                            'batch_norm': [False, False, False, False, False, False, True, True, True, False],
                             'non_linearity': [nn.ELU, nn.ELU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ELU,
                                               nn.ELU, nn.Softmax],
                             # 'dropout': [kwargs["drop_prob"]] * num_of_layers,

@@ -13,7 +13,7 @@ from pytz import timezone
 import dill
 from common.parsing import create_def_argparser, run_dict
 
-from common.common import create_logger, create_exper_label, setSeed
+from common.common import create_logger, create_exper_label, setSeed, load_pred_labels
 from config.config import config, DEFAULT_DCNN_MC_2D, DEFAULT_DCNN_2D
 from utils.batch_handlers import TwoDimBatchHandler, BatchStatistics
 from utils.generate_uncertainty_maps import InferenceGenerator, ImageUncertainties, OutOfDistributionSlices
@@ -37,6 +37,7 @@ class ExperimentHandler(object):
         self.exper = None
         self.u_maps = None
         self.pred_prob_maps = None
+        self.pred_labels = None
         self.referral_umaps = None
         self.entropy_maps = None
         self.ref_map_blobs = None
@@ -194,7 +195,8 @@ class ExperimentHandler(object):
             val_batch.generate_batch_2d(dataset.images(train=False), dataset.labels(train=False),
                                         slice_range=slice_range)
             val_loss, _ = model.do_test(val_batch.get_images(), val_batch.get_labels(),
-                                        num_of_labels_per_class=val_batch.get_num_labels_per_class())
+                                        num_of_labels_per_class=val_batch.get_num_labels_per_class(),
+                                        multi_labels=val_batch.get_labels_multiclass())
             arr_val_loss[chunk] = val_loss.data.cpu().numpy()[0]
             # returns array of 6 values
             arr_val_acc += model.get_accuracy()
@@ -623,32 +625,39 @@ class ExperimentHandler(object):
         if patient_id is not None:
             return referred_slices
 
-    def get_pred_prob_maps(self, patient_id=None):
+    def get_pred_prob_maps(self, patient_id=None, mc_dropout=True):
 
         input_dir = os.path.join(self.exper.config.root_dir,
                                  os.path.join(self.exper.output_dir, config.pred_lbl_dir))
 
-        if patient_id is None:
-            search_mask = "patient_id*_pred_probs_mc"
+        if mc_dropout:
+            search_suffix = "_pred_probs_mc"
         else:
-            search_mask = patient_id + "_pred_probs_mc"
+            search_suffix = "_pred_probs"
+        if patient_id is None:
+            search_mask = "*" + search_suffix
+        else:
+            search_mask = patient_id + search_suffix
 
         search_mask = search_mask + ".npz"
         file_name = os.path.join(input_dir, search_mask)
         if self.pred_prob_maps is None:
             self.pred_prob_maps = OrderedDict()
 
+        if len(glob.glob(file_name)) == 0:
+            raise ValueError("ERROR - no file found with search mask {}".format(search_mask))
         for fname in glob.glob(file_name):
             file_basename = os.path.splitext(os.path.basename(fname))[0]
             f_patient_id = file_basename[:file_basename.find("_")]
             try:
-                np_archive = np.load(file_name)
+                np_archive = np.load(fname)
                 pred_probs = np_archive["pred_probs"]
                 self.pred_prob_maps[f_patient_id] = pred_probs
-            except IOError:
-                print("ERROR - Unable to load predicted prob-maps from numpy file {}".format(file_name))
+            except IOError as e:
+                print("ERROR - Unable to load predicted prob-maps from numpy file {}".format(fname))
+                print(e)
             except KeyError:
-                print("ERROR - Archive pred_probs does not exist in {}.".format(file_name))
+                print("ERROR - Archive pred_probs does not exist in {}.".format(fname))
 
         if patient_id is not None:
             return pred_probs
@@ -929,6 +938,31 @@ class ExperimentHandler(object):
                                                                      fold_id,
                                                                      load_train=False, load_val=True,
                                                                      batch_size=None, use_cuda=True)
+
+    def get_pred_labels(self, patient_id=None, mc_dropout=True):
+        if self.pred_labels is None:
+            self.pred_labels = OrderedDict()
+
+        pred_labels_input_dir = os.path.join(self.exper.config.root_dir,
+                                             os.path.join(self.exper.output_dir, config.pred_lbl_dir))
+
+        if mc_dropout:
+            search_suffix = "_pred_labels_mc.npz"
+        else:
+            search_suffix = "_pred_labels.npz"
+
+        if patient_id is not None:
+            search_path = os.path.join(pred_labels_input_dir, patient_id + search_suffix)
+        else:
+            search_path = os.path.join(pred_labels_input_dir, "*" + search_suffix)
+
+        if len(glob.glob(search_path)) == 0:
+            raise ValueError("ERROR - no file found with search mask {}".format(search_path))
+        for fname in glob.glob(search_path):
+            pred_labels = load_pred_labels(fname)
+            file_basename = os.path.splitext(os.path.basename(fname))[0]
+            patient_id = file_basename[:file_basename.find("_")]
+            self.pred_labels[patient_id] = pred_labels
 
     def change_exper_dirs(self, new_dir, move_dir=False):
 

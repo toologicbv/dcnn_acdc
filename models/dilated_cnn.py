@@ -39,6 +39,7 @@ class BaseDilated2DCNN(nn.Module):
         self.np_reg_loss = None
         self.hausdorff_list = None
         self.loss_function = loss_function
+        self.lossfunc = nn.NLLLoss2d()
 
         if self.use_cuda:
             self.cuda()
@@ -114,6 +115,19 @@ class BaseDilated2DCNN(nn.Module):
 
         return out
 
+    def get_loss_cross_entropy(self, log_softmax_predictions, labels_multiclass):
+        losses = Variable(torch.FloatTensor(2))
+        if self.use_cuda:
+            losses = losses.cuda()
+        b_pred_es = log_softmax_predictions[:, :4, :, :]
+        b_pred_ed = log_softmax_predictions[:, 4:, :, :]
+        b_gt_labels_es = labels_multiclass[:, 0, :, :]
+        b_gt_labels_ed = labels_multiclass[:, 1, :, :]
+        losses[0] = self.lossfunc(b_pred_es, b_gt_labels_es)
+        losses[1] = self.lossfunc(b_pred_ed, b_gt_labels_ed)
+
+        return torch.sum(losses)
+
     def get_loss(self, predictions, labels, zooms=None, compute_hd=False, regression_maps=None,
                  num_of_labels_per_class=None):
         """
@@ -156,8 +170,12 @@ class BaseDilated2DCNN(nn.Module):
         for cls in np.arange(labels.size(1)):
             if self.loss_function == "softdice":
                 losses[cls] = soft_dice_score(predictions[:, cls, :, :], labels[:, cls, :, :])
-            else:
+            elif self.loss_function == "brier":
                 losses[cls] = compute_brier_score(predictions[:, cls, :, :], labels[:, cls, :, :])
+            elif self.loss_function == "cross-entropy":
+                pass
+            else:
+                raise ValueError("ERROR - {} as loss functional is not supported!".format(self.loss_function))
             # brier_score[cls] = compute_brier_score(predictions[:, cls, :, :], labels[:, cls, :, :])
             # for the dice coefficient we need to determine the class labels of the predictions
             # remember that the object labels contains binary labels for each class (hence dim=1 has size 8)
@@ -210,6 +228,8 @@ class BaseDilated2DCNN(nn.Module):
         # get better. HENCE, we need to multiply by minus one here.
         if self.loss_function == "softdice":
             return (-1.) * torch.sum(losses)
+        elif self.loss_function == "cross-entropy":
+            pass
         else:
             # summing the mean loss for RV & LV as if we would have the cavity volumes. See whether this "helps"
             losses = torch.mean(losses[0:half_classes]) + torch.mean(losses[half_classes:])
@@ -222,8 +242,17 @@ class BaseDilated2DCNN(nn.Module):
     def do_train(self, batch):
         self.zero_grad()
         if not self.use_regression_loss:
-            b_predictions = self(batch.get_images())
-            b_loss = self.get_loss(b_predictions, batch.get_labels())
+            b_predictions, b_log_soft_preds = self(batch.get_images())
+            if self.loss_function == "cross-entropy":
+                b_loss = self.get_loss_cross_entropy(b_log_soft_preds, batch.get_labels_multiclass())
+                _ = self.get_loss(b_predictions, batch.get_labels())
+                # acc = self.get_accuracy()
+                # print("Current dice accuracies ES {:.3f}/{:.3f}/{:.3f} \t"
+                #             "ED {:.3f}/{:.3f}/{:.3f} ".format(acc[0], acc[1], acc[2], acc[3], acc[4], acc[5]))
+            else:
+                b_loss = self.get_loss(b_predictions, batch.get_labels())
+                # ent_loss = self.get_loss_cross_entropy(b_log_soft_preds, batch.get_labels_multiclass())
+                # print("INFO - CrossEntropyLoss {:.3f}".format(ent_loss.data.cpu().numpy()[0]))
         else:
             b_predictions, b_out_regression = self(batch.get_images())
             b_loss = self.get_loss(b_predictions, batch.get_labels(), regression_maps=b_out_regression,
@@ -237,7 +266,7 @@ class BaseDilated2DCNN(nn.Module):
         return b_loss
 
     def do_test(self, images, labels, voxel_spacing=None, compute_hd=False, num_of_labels_per_class=None,
-                mc_dropout=False):
+                mc_dropout=False, multi_labels=None):
         """
         voxel_spacing: we assume the image slices are 2D and have isotropic spacing. Hence voxel_spacing is a scaler
                        and for AC-DC equal to 1.4
@@ -247,8 +276,10 @@ class BaseDilated2DCNN(nn.Module):
         """
         self.eval(mc_dropout=mc_dropout)
         if not self.use_regression_loss:
-            b_predictions = self(images)
+            b_predictions, b_log_soft_preds = self(images)
             test_loss = self.get_loss(b_predictions, labels, zooms=voxel_spacing, compute_hd=compute_hd)
+            if self.loss_function == "cross-entropy" and multi_labels is not None:
+                test_loss = self.get_loss_cross_entropy(b_log_soft_preds, multi_labels)
         else:
             b_predictions, b_reg_maps = self(images)
             test_loss = self.get_loss(b_predictions, labels, zooms=voxel_spacing, compute_hd=compute_hd,

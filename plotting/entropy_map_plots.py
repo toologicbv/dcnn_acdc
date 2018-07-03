@@ -6,7 +6,7 @@ import os
 from matplotlib import cm
 
 
-def plot_entropy_map_for_patient(exper_handler, patient_id, do_show=True, do_save=False):
+def plot_entropy_map_for_patient(exper_handler, patient_id, do_show=True, do_save=False, threshold=None):
 
     def transparent_cmap(cmap, N=255):
         "Copy colormap and set alpha values"
@@ -40,11 +40,17 @@ def plot_entropy_map_for_patient(exper_handler, patient_id, do_show=True, do_sav
     model_info = "{} p={:.2f} fold={} loss={}".format(exper_args.model, exper_args.drop_prob,
                                                       exper_args.fold_ids[0],
                                                       exper_args.loss_function)
+    if threshold is not None:
+        str_threshold = str(threshold).replace(".", "_")
+        model_info += " (thr={:.2f})".format(threshold)
     fig = plt.figure(figsize=(width, height))
     fig.suptitle(model_info + ": " + patient_id, **config.title_font_medium)
     for slice_id in slice_range:
         for phase in np.arange(num_of_phases):
             entropy_slice_map = entropy_map[phase, :, :, slice_id]
+            if threshold is not None:
+                # set everything below threshold to zero
+                entropy_slice_map[entropy_slice_map < threshold] = 0
             img_slice = mri_image[phase, :, :, slice_id]
             # print("Min/max values {:.2f}/{:.2f}".format(np.min(entropy_slice_map),
             #                                            np.max(entropy_slice_map)))
@@ -68,6 +74,8 @@ def plot_entropy_map_for_patient(exper_handler, patient_id, do_show=True, do_sav
         if not os.path.isdir(fig_path):
             os.makedirs(fig_path)
         fig_name = patient_id + "_entropy_map"
+        if threshold is not None:
+            fig_name += "_" + str_threshold
         fig_name = os.path.join(fig_path, fig_name + ".pdf")
 
         plt.savefig(fig_name, bbox_inches='tight')
