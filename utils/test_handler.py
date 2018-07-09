@@ -285,37 +285,37 @@ class ACDC2017TestHandler(object):
         for idx in tqdm(np.arange(0, len(batch_file_list), 2)):
             # tuple contains [0]=train file name and [1] reference file name
             img_file, ref_file = file_list[idx]
-            # first frame is always the end-systolic MRI scan, filename ends with "1"
-            mri_scan_es, origin, spacing = self.load_func(img_file, data_type=ACDC2017TestHandler.pixel_dta_type,
+            # first frame is always the end-diastole MRI scan, filename ends with "1"
+            mri_scan_ed, origin, spacing = self.load_func(img_file, data_type=ACDC2017TestHandler.pixel_dta_type,
                                                           swap_axis=True)
             # es_abs_file_name = os.path.dirname(img_file)  # without actual filename, just directory
-            es_file_name = os.path.splitext(os.path.basename(img_file))[0]
+            ed_file_name = os.path.splitext(os.path.basename(img_file))[0]
             # get rid off _frameXX and take only the patient name
-            patientID = es_file_name[:es_file_name.find("_")]
+            patientID = ed_file_name[:ed_file_name.find("_")]
             self.img_file_names.append(patientID)
             self.trans_dict[patientID] = self.num_of_images
             # print("{} - {}".format(idx, img_file))
             self.spacings.append(spacing)
-            mri_scan_es = self._preprocess(mri_scan_es, spacing, poly_order=3, do_pad=True, do_zoom=do_zoom)
-            # print("INFO - Loading ES-file {}".format(img_file))
-            reference_es, _, _ = self.load_func(ref_file, data_type=ACDC2017TestHandler.pixel_dta_type,
-                                                swap_axis=True)
-            reference_es = self._preprocess(reference_es, spacing, poly_order=0, do_pad=False, do_zoom=do_zoom)
-
-            # do the same for the End-diastole pair of images
-            img_file, ref_file = file_list[idx+1]
-
-            # print("{} - {}".format(idx+1, img_file))
-            mri_scan_ed, _, _ = self.load_func(img_file, data_type=ACDC2017TestHandler.pixel_dta_type,
-                                               swap_axis=True)
             mri_scan_ed = self._preprocess(mri_scan_ed, spacing, poly_order=3, do_pad=True, do_zoom=do_zoom)
-
+            # print("INFO - Loading ES-file {}".format(img_file))
             reference_ed, _, _ = self.load_func(ref_file, data_type=ACDC2017TestHandler.pixel_dta_type,
                                                 swap_axis=True)
             reference_ed = self._preprocess(reference_ed, spacing, poly_order=0, do_pad=False, do_zoom=do_zoom)
+
+            # do the same for the End-systolic pair of images
+            img_file, ref_file = file_list[idx+1]
+
+            # print("{} - {}".format(idx+1, img_file))
+            mri_scan_es, _, _ = self.load_func(img_file, data_type=ACDC2017TestHandler.pixel_dta_type,
+                                               swap_axis=True)
+            mri_scan_es = self._preprocess(mri_scan_es, spacing, poly_order=3, do_pad=True, do_zoom=do_zoom)
+
+            reference_es, _, _ = self.load_func(ref_file, data_type=ACDC2017TestHandler.pixel_dta_type,
+                                                swap_axis=True)
+            reference_es = self._preprocess(reference_es, spacing, poly_order=0, do_pad=False, do_zoom=do_zoom)
             # concatenate both images for further processing
-            images = np.concatenate((np.expand_dims(mri_scan_ed, axis=0),
-                                     np.expand_dims(mri_scan_es, axis=0)))
+            images = np.concatenate((np.expand_dims(mri_scan_es, axis=0),
+                                     np.expand_dims(mri_scan_ed, axis=0)))
             # same concatenation for the label files of ED and ES
             labels, num_labels_per_class = self._split_class_labels(reference_ed, reference_es)
             self.images.append(images)
@@ -352,10 +352,10 @@ class ACDC2017TestHandler(object):
                                      labels_ed.shape[2]))
         b_num_labels_per_class = np.zeros((1, self.num_of_classes * 2, labels_ed.shape[2]))
         for cls_idx in np.arange(self.num_of_classes):
-            # store ED class labels in first 4 positions of dim-1
-            labels_per_class[cls_idx, :, :, :] = (labels_ed == cls_idx).astype('int16')
-            # store ES class labels in positions 4-7 of dim-1
-            labels_per_class[cls_idx + self.num_of_classes, :, :, :] = (labels_es == cls_idx).astype('int16')
+            # store ES class labels in first 4 positions of dim-1
+            labels_per_class[cls_idx, :, :, :] = (labels_es == cls_idx).astype('int16')
+            # store ED class labels in positions 4-7 of dim-1
+            labels_per_class[cls_idx + self.num_of_classes, :, :, :] = (labels_ed == cls_idx).astype('int16')
             if cls_idx != 0:
                 b_num_labels_per_class[0, cls_idx] = \
                     np.count_nonzero(labels_per_class[cls_idx, :, :, :], axis=(0, 1))
