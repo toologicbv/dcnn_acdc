@@ -253,18 +253,18 @@ class TwoDimBatchHandler(BatchHandler):
 
             b_images[idx, :, :, :] = img
             # next convert class labels to binary class labels
-            label_ed = label[0, offx:offx + self.patch_size + 1, offy:offy + self.patch_size + 1]
-            label_es = label[1, offx:offx + self.patch_size + 1, offy:offy + self.patch_size + 1]
-            b_labels_multiclass[idx, 0] = label_ed.astype('int16')
-            b_labels_multiclass[idx, 1] = label_es.astype('int16')
+            label_es = label[0, offx:offx + self.patch_size + 1, offy:offy + self.patch_size + 1]
+            label_ed = label[1, offx:offx + self.patch_size + 1, offy:offy + self.patch_size + 1]
+            b_labels_multiclass[idx, 0] = label_es.astype('int16')
+            b_labels_multiclass[idx, 1] = label_ed.astype('int16')
             half_classes = int(self.num_classes / 2)
             for cls_idx in np.arange(half_classes):
-                # store ED class labels in first 4 positions of dim-1
-                b_labels_per_class[idx, cls_idx, :, :] = (label_ed == cls_idx).astype('int16')
+                # store ES class labels in first 4 positions of dim-1
+                b_labels_per_class[idx, cls_idx, :, :] = (label_es == cls_idx).astype('int16')
                 if cls_idx != 0:
                     b_num_labels_per_class[idx, cls_idx] = np.count_nonzero(b_labels_per_class[idx, cls_idx, :, :])
-                # sotre ES class labels in positions 4-7 of dim-1
-                b_labels_per_class[idx, cls_idx+half_classes, :, :] = (label_es == cls_idx).astype('int16')
+                # store ED class labels in positions 4-7 of dim-1
+                b_labels_per_class[idx, cls_idx+half_classes, :, :] = (label_ed == cls_idx).astype('int16')
                 if cls_idx != 0:
                     b_num_labels_per_class[idx, cls_idx+half_classes] = \
                         np.count_nonzero(b_labels_per_class[idx, cls_idx+half_classes, :, :])

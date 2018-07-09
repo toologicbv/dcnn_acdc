@@ -153,6 +153,14 @@ class ACDC2017DataSet(BaseImageDataSet):
     pad_size = config.pad_size
     new_voxel_spacing = 1.4
 
+    """
+        IMPORTANT: For each patient we load four files (1) ED-image (2) ED-reference (3) ES-image (4) ES-reference
+                   !!! ED image ALWAYS ends with 01 index
+                   !!! ES image had higher index
+                   
+                   HENCE ES IMAGE IS THE SECOND WE'RE LOADING in the _load_file_list method
+    """
+
     def __init__(self, exper_config, search_mask=None, nclass=4, load_func=load_mhd_to_numpy,
                  fold_ids=[0], preprocess=False, debug=False, do_augment=True, incomplete_only=False):
         super(BaseImageDataSet, self).__init__()
@@ -264,27 +272,31 @@ class ACDC2017DataSet(BaseImageDataSet):
         for idx in tqdm(np.arange(0, len(file_list), 2)):
             # tuple contains [0]=train file name and [1] reference file name
             img_file, ref_file = file_list[idx]
-            # first frame is always the end-systolic MRI scan, filename ends with "1"
-            mri_scan_es, origin, spacing = self.load_func(img_file, data_type=ACDC2017DataSet.pixel_dta_type,
+            # IMPORTANT: first frame is always the End-Diastole MRI scan, filename ends with "1"
+
+            mri_scan_ed, origin, spacing = self.load_func(img_file, data_type=ACDC2017DataSet.pixel_dta_type,
                                                           swap_axis=True)
-            self.img_stats += mri_scan_es.shape
-            # es_abs_file_name = os.path.dirname(img_file)  # without actual filename, just directory
-            es_file_name = os.path.splitext(os.path.basename(img_file))[0]
+            self.img_stats += mri_scan_ed.shape
+            # ed_abs_file_name = os.path.dirname(img_file)  # without actual filename, just directory
+            ed_file_name = os.path.splitext(os.path.basename(img_file))[0]
+            # print("ED: Image file-name {}".format(es_file_name))
             # get rid off _frameXX and take only the patient name
-            patientID = es_file_name[:es_file_name.find("_")]
+            patientID = ed_file_name[:ed_file_name.find("_")]
             self.image_names.append(patientID)
             if not is_train:
                 self.val_image_names[patientID] = int(patientID.strip("patient"))
             self.trans_dict[patientID] = self.num_of_images
             # print("INFO - Loading ES-file {}".format(img_file))
-            reference_es, origin, spacing = self.load_func(ref_file, data_type=ACDC2017DataSet.pixel_dta_type,
+            reference_ed, origin, spacing = self.load_func(ref_file, data_type=ACDC2017DataSet.pixel_dta_type,
                                                            swap_axis=True)
-            # do the same for the End-diastole pair of images
+            # IMPORTANT: do the same for the End-Systole pair of images
             img_file, ref_file = file_list[idx+1]
-            mri_scan_ed, origin, spacing = self.load_func(img_file, data_type=ACDC2017DataSet.pixel_dta_type,
+            # ed_file_name = os.path.splitext(os.path.basename(img_file))[0]
+            # print("ES: Image file-name {}".format(ed_file_name))
+            mri_scan_es, origin, spacing = self.load_func(img_file, data_type=ACDC2017DataSet.pixel_dta_type,
                                                           swap_axis=True)
             # print("INFO - Loading ED_file {}".format(img_file))
-            reference_ed, origin, spacing = self.load_func(ref_file, data_type=ACDC2017DataSet.pixel_dta_type,
+            reference_es, origin, spacing = self.load_func(ref_file, data_type=ACDC2017DataSet.pixel_dta_type,
                                                            swap_axis=True)
             # AUGMENT data and add to train, validation or test if applicable
             if self.do_augment:
@@ -342,12 +354,12 @@ class ACDC2017DataSet(BaseImageDataSet):
                                           constant_values=(0,)).astype(ACDC2017DataSet.pixel_dta_type)
                 pad_img_es_slice = np.pad(img_es_slice, ACDC2017DataSet.pad_size, 'constant',
                                           constant_values=(0,)).astype(ACDC2017DataSet.pixel_dta_type)
-                # we make a 3dim tensor (first dim has one-size) and concatenate ED and ES image
-                pad_img_slice = np.concatenate((np.expand_dims(pad_img_ed_slice, axis=0),
-                                                np.expand_dims(pad_img_es_slice, axis=0)))
+                # we make a 3dim tensor (first dim has one-size) and concatenate ES and ED image
+                pad_img_slice = np.concatenate((np.expand_dims(pad_img_es_slice, axis=0),
+                                                np.expand_dims(pad_img_ed_slice, axis=0)))
                 # same concatenation for the label files of ED and ES
-                label_slice = np.concatenate((np.expand_dims(lbl_ed_slice, axis=0),
-                                                np.expand_dims(lbl_es_slice, axis=0)))
+                label_slice = np.concatenate((np.expand_dims(lbl_es_slice, axis=0),
+                                                np.expand_dims(lbl_ed_slice, axis=0)))
                 if is_train:
                     self.train_images.append(pad_img_slice)
                     self.train_labels.append(label_slice)

@@ -218,6 +218,23 @@ def histogram_slice_improvements_v1(referral_results, referral_threshold, width=
 def histogram_slice_referral(ref_result_obj, referral_threshold, do_save=False, width=16,
                              do_show=True, plot_title="Main title", max_scale=100.):
 
+    """
+    Visualizes how often we have referred slices (based on position base-apex)
+    SO THIS IS ONLY APPLICABLE IN CASE WE REFER CERTAIN SLICES NOT ALL SLICES
+
+    Used these plots in order to gain inside when computing a simple heuristic measure + threshold when to refer
+    a specific slice to an expert.
+
+    :param ref_result_obj:
+    :param referral_threshold:
+    :param do_save:
+    :param width:
+    :param do_show:
+    :param plot_title:
+    :param max_scale:
+    :return:
+    """
+
     densities = rescale_slice_referral_histograms(ref_result_obj.patient_slices_referred[referral_threshold],
                                                   max_scale=max_scale)
     # get dict of disease cats with each its own slice-referred frequencies

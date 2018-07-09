@@ -131,6 +131,11 @@ class BaseDilated2DCNN(nn.Module):
     def get_loss(self, predictions, labels, zooms=None, compute_hd=False, regression_maps=None,
                  num_of_labels_per_class=None):
         """
+            IMPORTANT: predictions and labels have 4 dimensions (see below).
+                       The second dim contains the split between ES and ED phase
+                            ==> index 0-3 = ES
+                            ==> index 4-7 = ED
+
             we need to reshape the tensors because CrossEntropy expects 2D tensor (N, C) where C is num of classes
             the input tensor is in our case [batch_size, 2 * num_of_classes, height, width]
             the labels are                  [batch_size, 2 * num_of_classes, height, width]
