@@ -58,6 +58,12 @@ exp_mc01_softmax = {3: "20180630_10_26_32_dcnn_mc_f3p01_150KE_lr2e02",
                     1: "20180629_11_28_29_dcnn_mc_f1p01_150KE_lr2e02",
                     0: "20180629_10_33_08_dcnn_mc_f0p01_150KE_lr2e02"}
 
+exp_mc01_crossent = {3: "20180703_18_15_22_dcnn_mc_f3p01_entrpy_150KE_lr2e02",
+                     2: "20180703_18_11_10_dcnn_mc_f2p01_entrpy_150KE_lr2e02",
+                     1: "20180703_18_13_51_dcnn_mc_f1p01_entrpy_150KE_lr2e02",
+                     0: "20180703_18_09_33_dcnn_mc_f0p01_entrpy_150KE_lr2e02"}
+
+
 exp_base_brier = {3: "20180628_15_28_44_dcnn_f3_150KE_lr2e02",
                   2: "20180628_15_18_08_dcnn_f2_150KE_lr2e02",
                   1: "20180628_13_53_01_dcnn_f1_150KE_lr2e02",
@@ -113,6 +119,8 @@ def do_parse_args():
             args.exper_dict_id = exp_base_brier
         elif args.exper_dict_id == "exp_mc01_softmax":
             args.exper_dict_id = exp_mc01_softmax
+        elif args.exper_dict_id == "exp_mc01_crossent":
+            args.exper_dict_id = exp_mc01_crossent
         else:
             raise ValueError("ERROR - exper_dict_id argument {} not supported".format(args.exper_dict_id))
 
