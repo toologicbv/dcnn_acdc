@@ -111,7 +111,7 @@ def compute_ref_results_per_pgroup(ref_dice, ref_hd, org_dice, org_hd, patient_c
 class ReferralHandler(object):
 
     def __init__(self, exper_handler, referral_thresholds=None, test_set=None, verbose=False, do_save=False,
-                 num_of_images=None, aggregate_func="max", patients=None, use_entropy_maps=False):
+                 num_of_images=None, aggregate_func="max", patients=None, type_of_map=None):
         """
 
         :param exper_handler:
@@ -122,20 +122,39 @@ class ReferralHandler(object):
         :param num_of_images:
         :param aggregate_func:
         :param patients:
-        :param use_entropy_maps: boolean, if true, we use the raw entropy maps to create filtered maps and
-                use these to refer voxels above referral threhold
+        :param type_of_map: determines the maps (u-map/entropy-map) we're using during referral.
+                            Possible values: "entropy":
+                            "umap": u-maps that are thresholded and post-processed
+                            "raw_umap": u-maps that are ONLY thresholded
+
 
         """
         # Overrule!
         if patients is not None:
             num_of_images = None
 
+        if type_of_map is None or type_of_map not in ["entropy", "umap", "raw_umap"]:
+            raise ValueError("ERROR - type_of_map parameter must be (1) entropy (2) umap or (3) raw_umap"
+                             "and cannot be None")
+
         # we will set do_filter_slices and referral_only and slice_filter_type later in the test method
         self.do_filter_slices = False
         self.slice_filter_type = None
         self.referral_only = False
-        self.use_entropy_maps = use_entropy_maps
-        if use_entropy_maps:
+        self.type_of_map = type_of_map
+        # boolean, if true, we use the raw entropy maps to create filtered maps and use these to refer voxels above
+        # referral threshold
+        if self.type_of_map == "entropy":
+            self.use_entropy_maps = True
+        else:
+            self.use_entropy_maps = False
+
+        if self.type_of_map == "raw_umap":
+            self.use_raw_umap = True
+        else:
+            self.use_raw_umap = False
+
+        if self.use_entropy_maps:
             # in case we use the entropy maps we load pred_labels that we generated with 1 sample/prediction
             self.use_mc_samples = False
         else:
@@ -272,14 +291,18 @@ class ReferralHandler(object):
                 else:
                     # load the filtered u-maps from disk
                     self.exper_handler.get_referral_maps(referral_threshold, per_class=False,
-                                                         aggregate_func=self.aggregate_func)
+                                                         aggregate_func=self.aggregate_func,
+                                                         use_raw_maps=self.use_raw_umap)
             self.str_referral_threshold = str(referral_threshold).replace(".", "_")
             print("INFO - Running evaluation with referral for threshold {} (referral-only={}/"
-                  "do-filter-slices={}/filter_type={}/use-entropy-maps={})".format(self.str_referral_threshold,
-                                                                                   referral_only,
-                                                                                   self.do_filter_slices,
-                                                                                   self.slice_filter_type,
-                                                                                   self.use_entropy_maps))
+                  "do-filter-slices={}/filter_type={}/"
+                  "type-of-map={}/use_entropy_maps={}/use_raw_maps={})".format(self.str_referral_threshold,
+                                                                               referral_only,
+                                                                               self.do_filter_slices,
+                                                                               self.slice_filter_type,
+                                                                               self.type_of_map,
+                                                                               self.use_entropy_maps,
+                                                                               self.use_raw_umap))
             for idx, image_num in enumerate(self.image_range):
                 patient_id = self.test_set.img_file_names[image_num]
                 # disease classification NOR, ARV...

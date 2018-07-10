@@ -250,6 +250,7 @@ class ReferralResults(object):
 
                 search_path = os.path.join(input_dir, file_name + ".npz")
                 filenames = glob.glob(search_path)
+                # print(search_path)
                 if len(filenames) != 1:
                     raise ValueError("ERROR - Found {} result files for this {} experiment (pos-only={},"
                                      "slice-filter={}). Must be 1.".format(len(filenames), exper_id,

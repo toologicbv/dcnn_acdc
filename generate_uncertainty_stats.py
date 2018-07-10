@@ -25,7 +25,7 @@ python generate_uncertainty_stats.py --cuda --exper_dict_id="exp_base_brier" --c
         
         Example:
         python generate_uncertainty_stats.py --cuda --run_mode="filtered_umaps_only" --aggregate_func="max" 
-        --referral_thresholds 0.8 0.1 0.12 0.14 0.16 0.18 0.2 0.22 0.24
+        --referral_thresholds 0.08 0.1 0.12 0.14 0.16 0.18 0.2 0.22 0.24
 
     (3) Run with run_mode=test_referrals but WITHOUT do_filter_slices. This creates the predicted labels for an
         image WITH referral (based on the referral_thresholds specified). We need this segmentation maps in the next
@@ -50,18 +50,18 @@ ROOT_DIR = os.getenv("REPO_PATH", "/home/jorg/repo/dcnn_acdc/")
 LOG_DIR = os.path.join(ROOT_DIR, "logs")
 exp_mc01_brier = {3: "20180426_14_14_57_dcnn_mc_f3p01_brier_150KE_lr2e02",
                   2: "20180426_14_14_39_dcnn_mc_f2p01_brier_150KE_lr2e02",
-                  1: "20180426_14_13_46_dcnn_mc_f1p01_brier_150KE_lr2e02",
-                  0: "20180418_15_02_05_dcnn_mcv1_150000E_lr2e02"}
+                  1: "20180426_14_13_46_dcnn_mc_f1p01_brier_150KE_lr2e02"}
+                  # 0: "20180418_15_02_05_dcnn_mcv1_150000E_lr2e02"}
 
-exp_mc01_softmax = {3: "20180630_10_26_32_dcnn_mc_f3p01_150KE_lr2e02",
-                    2: "20180630_10_27_07_dcnn_mc_f2p01_150KE_lr2e02",
-                    1: "20180629_11_28_29_dcnn_mc_f1p01_150KE_lr2e02",
-                    0: "20180629_10_33_08_dcnn_mc_f0p01_150KE_lr2e02"}
+exp_mc01_softdice = {3: "20180630_10_26_32_dcnn_mc_f3p01_150KE_lr2e02",
+                     2: "20180630_10_27_07_dcnn_mc_f2p01_150KE_lr2e02",
+                     1: "20180629_11_28_29_dcnn_mc_f1p01_150KE_lr2e02"}
+                     # 0: "20180629_10_33_08_dcnn_mc_f0p01_150KE_lr2e02"}
 
 exp_mc01_crossent = {3: "20180703_18_15_22_dcnn_mc_f3p01_entrpy_150KE_lr2e02",
                      2: "20180703_18_11_10_dcnn_mc_f2p01_entrpy_150KE_lr2e02",
-                     1: "20180703_18_13_51_dcnn_mc_f1p01_entrpy_150KE_lr2e02",
-                     0: "20180703_18_09_33_dcnn_mc_f0p01_entrpy_150KE_lr2e02"}
+                     1: "20180703_18_13_51_dcnn_mc_f1p01_entrpy_150KE_lr2e02"}
+                     # 0: "20180703_18_09_33_dcnn_mc_f0p01_entrpy_150KE_lr2e02"}
 
 
 exp_base_brier = {3: "20180628_15_28_44_dcnn_f3_150KE_lr2e02",
@@ -87,7 +87,8 @@ def do_parse_args():
                         default=None,
                         help="M=mean; MD=median; MS=mean+stddev; R=Random. ")
     parser.add_argument('--aggregate_func', choices=['max', 'mean'], default="max")
-    parser.add_argument('--use_entropy_maps', action='store_true', default=False, help='use entropy-maps')
+    parser.add_argument('--type_of_map',choices=["entropy", "umap", "raw_umap"], default=None,
+                        help='Type of map used for referral.')
 
     parser.add_argument('--mc_samples', type=int, default=10, help="# of MC samples")
     parser.add_argument('--checkpoints', nargs='+', default=150000, help="Saved checkpoints")
@@ -117,8 +118,8 @@ def do_parse_args():
             args.exper_dict_id = exp_mc01_brier
         elif args.exper_dict_id == "exp_base_brier":
             args.exper_dict_id = exp_base_brier
-        elif args.exper_dict_id == "exp_mc01_softmax":
-            args.exper_dict_id = exp_mc01_softmax
+        elif args.exper_dict_id == "exp_mc01_softdice":
+            args.exper_dict_id = exp_mc01_softdice
         elif args.exper_dict_id == "exp_mc01_crossent":
             args.exper_dict_id = exp_mc01_crossent
         else:
@@ -221,7 +222,7 @@ def main():
                                                             exper_args.loss_function)
             print("INFO - Experimental details extracted:: " + info_str)
             for referral_threshold in args.referral_thresholds:
-                print("INFO - Generating filtered u-maps for ref-threshold {:.2f}".format(referral_threshold))
+                print("INFO - Generating filtered u-maps for ref-threshold {:.3f}".format(referral_threshold))
                 e_handler.create_filtered_umaps(u_threshold=referral_threshold,
                                                     patient_id=None,
                                                     aggregate_func=args.aggregate_func)
@@ -258,8 +259,7 @@ def main():
                                                             exper_args.fold_ids[0],
                                                             exper_args.loss_function)
             print("INFO - Experimental details: " + info_str)
-            if args.use_entropy_maps:
-                e_handler.get_entropy_maps()
+
             ref_test_set = ACDC2017TestHandler(exper_config=e_handler.exper.config,
                                                search_mask=config.dflt_image_name + ".mhd", fold_ids=exper_args.fold_ids,
                                                debug=False, batch_size=25, use_cuda=True, load_train=False,
@@ -270,7 +270,7 @@ def main():
                                           referral_thresholds=args.referral_thresholds,
                                           aggregate_func=args.aggregate_func,
                                           verbose=True, do_save=True, num_of_images=None,
-                                          use_entropy_maps=args.use_entropy_maps,
+                                          type_of_map=args.type_of_map,
                                           patients=None)  # ["patient082", "patient084"])
             # referral_only -> we don't create the filtered maps (u-map or entropy)
             ref_handler.test(referral_only=True, slice_filter_type=args.slice_filter_type, verbose=False)

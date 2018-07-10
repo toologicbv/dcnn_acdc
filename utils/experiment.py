@@ -6,6 +6,7 @@ import numpy as np
 import os
 import glob
 import shutil
+import copy
 
 from collections import OrderedDict
 from datetime import datetime
@@ -407,15 +408,6 @@ class ExperimentHandler(object):
         maps_generator(clean_up=False, save_actual_maps=save_actual_maps,
                        generate_figures=generate_figures)
 
-        # if generate_figures:
-        #     if self.test_results is None:
-        #         # if test_results object of experiment handler is None (because we generated u-maps) we point to the
-        #         # test_result object of the map generator. If we re-use maps we load the object, see above
-        #         self.test_results = maps_generator.test_results
-        #
-        #     analyze_slices(self, image_range=None, do_save=True, do_show=False, u_type="stddev",
-        #                    use_saved_umaps=False)
-
     def get_u_maps(self):
         # returns a dictionary key patientID with the uncertainty maps for each patient/image of shape
         # [2, 4classes, width, height, #slices]
@@ -560,7 +552,17 @@ class ExperimentHandler(object):
                   " (property=outliers_per_epoch, dictionary (key=epoch) with tuple (6 elements)"
                   " and property=test_results_per_epoch, dict (key=epoch) with tuple (4))".format(c))
 
-    def get_referral_maps(self, u_threshold, per_class=True, aggregate_func="max"):
+    def get_referral_maps(self, u_threshold, per_class=True, aggregate_func="max", use_raw_maps=False):
+        """
+
+        :param u_threshold: also called referral_threshold in other context.
+        :param per_class:
+        :param aggregate_func:
+        :param use_raw_maps: if true, we use the thresholded/filtered u-maps with NO POST-PROCESSING steps
+                             ONLY applicable for PER_CLASS = FALSE.
+                             We use these maps also during referral to compare with entropy maps
+        :return:
+        """
         input_dir = os.path.join(self.exper.config.root_dir,
                                            os.path.join(self.exper.output_dir, config.u_map_dir))
         u_threshold = str(u_threshold).replace(".", "_")
@@ -585,7 +587,11 @@ class ExperimentHandler(object):
                 self.referral_umaps[patientID] = data["filtered_cls_umap"]
             else:
                 # this is the one we use during referral at the moment
-                self.referral_umaps[patientID] = data["filtered_umap"]
+                if use_raw_maps:
+                    # raw means no post-processing applied (largest connected components per class)
+                    self.referral_umaps[patientID] = data["filtered_raw_umap"]
+                else:
+                    self.referral_umaps[patientID] = data["filtered_umap"]
             try:
                 self.ref_map_blobs[patientID] = data["filtered_stddev_blobs"]
             except KeyError:
@@ -678,13 +684,17 @@ class ExperimentHandler(object):
             num_of_phases = raw_u_map.shape[0]
             num_of_classes = raw_u_map.shape[1]
             num_of_slices = raw_u_map.shape[4]
+            raw_u_map_copy = copy.deepcopy(raw_u_map)
             # Yes I know, completely inconsistent the output is [8classes, width, height, #slices] instead of [2, 4...]
             filtered_cls_stddev_map = np.zeros((num_of_phases * num_of_classes, raw_u_map.shape[2], raw_u_map.shape[3],
                                                 raw_u_map.shape[4]))
             # here we store the maps per phase ES/ED taking the max uncertainty over 4 classes after we've filtered
             # the u-maps per class by means of 6 connectivity components.
             filtered_stddev_map = np.zeros((num_of_phases, raw_u_map.shape[2], raw_u_map.shape[3], raw_u_map.shape[4]))
-
+            # the raw_stddev_map is NOT filtered with post-processing steps but only filtered/thresholded w.r.t.
+            # uncertainties (above certain threshold). Also, we take the max or mean over all CLASSES. So dim1
+            # of the original u-maps is squeezed out.
+            raw_stddev_map = np.zeros((num_of_phases, raw_u_map.shape[2], raw_u_map.shape[3], raw_u_map.shape[4]))
             # anything_there = np.count_nonzero(raw_u_map)
             for phase in np.arange(num_of_phases):
                 cls_offset = phase * num_of_classes
@@ -694,7 +704,7 @@ class ExperimentHandler(object):
 
                     # set all uncertainties below threshold to zero
                     u_3dmaps_cls[u_3dmaps_cls < u_threshold] = 0
-                    # do not yet filter 6 largest connected comonents here when we average over the stddev values
+                    # do not yet filter 6 largest connected components here when we average over the stddev values
                     # we do that after we've averaged, for max-aggregate this wouldn't have an effect
                     if aggregate_func == "max":
                         if filter_per_slice:
@@ -711,19 +721,27 @@ class ExperimentHandler(object):
                     else:
                         filtered_cls_stddev_map[cls + cls_offset] = u_3dmaps_cls
 
+                raw_map_phase = raw_u_map_copy[phase]
+                raw_map_phase[raw_map_phase < u_threshold] = 0
                 if phase == 0:
                     if aggregate_func == "max":
                         filtered_stddev_map[phase] = np.max(filtered_cls_stddev_map[:num_of_classes], axis=0)
+                        raw_stddev_map[phase] = np.max(raw_map_phase, axis=0)
                     else:
                         filtered_stddev_map[phase] = np.mean(filtered_cls_stddev_map[:num_of_classes], axis=0)
+                        raw_stddev_map[phase] = np.mean(raw_map_phase, axis=0)
                 else:
                     if aggregate_func == "max":
                         filtered_stddev_map[phase] = np.max(filtered_cls_stddev_map[num_of_classes:], axis=0)
+                        raw_stddev_map[phase] = np.max(raw_map_phase, axis=0)
                     else:
                         filtered_stddev_map[phase] = np.mean(filtered_cls_stddev_map[num_of_classes:], axis=0)
+                        raw_stddev_map[phase] = np.mean(raw_map_phase, axis=0)
                 if aggregate_func == "mean":
                     filtered_stddev_map[phase] = filter_connected_components(filtered_stddev_map[phase],
                                                                              threshold=u_threshold)
+
+            del raw_map_phase
             u_map_c_areas, _ = detect_largest_umap_areas(filtered_stddev_map,
                                                          rank_structure=config.erosion_rank_structure,
                                                          max_objects=config.num_of_umap_blobs)
@@ -742,7 +760,12 @@ class ExperimentHandler(object):
             except IOError:
                 print("ERROR - Unable to save filtered cls-umaps file {}".format(file_name_cls))
             try:
-                np.savez(file_name, filtered_umap=filtered_stddev_map, filtered_stddev_blobs=u_map_c_areas)
+                # 3 objects to save: (1) the filtered u-map with aggregate over classes with post-processing
+                #                    (2) the raw filtered/thresholded u-map with aggregate over classes (no post-pro)
+                #                    (3) a list containing integers specifying a u-value for each of the remaining
+                #                        blob areas in the filtered u-map with post processing
+                np.savez(file_name, filtered_umap=filtered_stddev_map, filtered_raw_umap=raw_stddev_map,
+                         filtered_stddev_blobs=u_map_c_areas)
             except IOError:
                 print("ERROR - Unable to save filtered umaps file {}".format(file_name))
         if verbose:
