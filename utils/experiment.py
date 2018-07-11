@@ -1031,7 +1031,7 @@ class ExperimentHandler(object):
 
         return exper
 
-    def load_experiment(self, path_to_exp, full_path=False, epoch=None, use_logfile=True):
+    def load_experiment(self, path_to_exp, full_path=False, epoch=None, use_logfile=True, verbose=True):
 
         path_to_exp = os.path.join(path_to_exp, config.stats_path)
 
@@ -1042,8 +1042,8 @@ class ExperimentHandler(object):
             path_to_exp = os.path.join(path_to_exp, exp_filename)
         if not full_path:
             path_to_exp = os.path.join(config.root_dir, os.path.join(config.log_root_path, path_to_exp))
-
-        print("Load experiment from {}".format(path_to_exp))
+        if verbose:
+            print("Load experiment from {}".format(path_to_exp))
         try:
             with open(path_to_exp, 'rb') as f:
                 experiment = dill.load(f)

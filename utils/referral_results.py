@@ -7,6 +7,20 @@ from collections import OrderedDict
 from config.config import config
 from in_out.patient_classification import Patients
 from common.common import get_dice_diffs
+from experiment import ExperimentHandler
+
+
+def scale_mean_uvoxels_per_vol(mean_uvoxels_per_vol):
+
+    # create numpy array of shape [#num of thresholds, 2] ES and ED values per ref-threshold
+    all_uvalues = np.vstack(mean_uvoxels_per_vol.values())
+    min_value, max_value = np.min(all_uvalues, axis=0), np.max(all_uvalues, axis=0)
+    for ref, num_voxels_per_vol in mean_uvoxels_per_vol.iteritems():
+        denominator = 1. / (max_value - min_value)
+        numerator = num_voxels_per_vol - min_value
+        mean_uvoxels_per_vol[ref] = numerator * denominator
+
+    return mean_uvoxels_per_vol
 
 
 def rescale_slice_ref_improvement_histograms(es_mean_slice_improvements, ed_mean_slice_improvements,
@@ -122,6 +136,8 @@ class ReferralResults(object):
         self.referral_thresholds = referral_thresholds
         self.slice_filter_type = slice_filter_type
         self.use_entropy_maps = use_entropy_maps
+        self.model_name = None
+        self.loss_function = None
         if fold is not None:
             self.exper_dict = {fold: exper_dict[fold]}
             print("WARNING - only loading results for fold {}".format(fold))
@@ -164,6 +180,7 @@ class ReferralResults(object):
         self.es_mean_slice_improvements = OrderedDict()
         self.ed_mean_slice_improvements = OrderedDict()
         self.patient_slices_referred = OrderedDict()
+        self.mean_uvoxels_per_vol = OrderedDict()
         # slice frequencies e.g. #slice=10 with freq=13
         self.es_slice_freqs = OrderedDict()
         self.ed_slice_freqs = OrderedDict()
@@ -193,7 +210,7 @@ class ReferralResults(object):
 
         print("INFO - Loading referral results for thresholds"
               " {}".format(self.referral_thresholds))
-        print("WARNING - referral positives-only={}".format(self.pos_only))
+
         # IMPORTANT first sort thresholds
         self.referral_thresholds.sort()
         for referral_threshold in self.referral_thresholds:
@@ -250,7 +267,6 @@ class ReferralResults(object):
 
                 search_path = os.path.join(input_dir, file_name + ".npz")
                 filenames = glob.glob(search_path)
-                # print(search_path)
                 if len(filenames) != 1:
                     raise ValueError("ERROR - Found {} result files for this {} experiment (pos-only={},"
                                      "slice-filter={}). Must be 1.".format(len(filenames), exper_id,
@@ -267,6 +283,15 @@ class ReferralResults(object):
                 # is .dll instead of .npz
                 det_res_path = filenames[0].replace(".npz", ".dll")
                 self.detailed_results.append(ReferralDetailedResults.load_results(det_res_path, verbose=False))
+                # get model name and loss function once, we need it later for the figures
+                if self.model_name is None:
+                    exp_path = os.path.join(config.root_dir,
+                                            os.path.join(config.log_root_path, exper_id))
+                    exper_hdl = ExperimentHandler()
+                    exper_hdl.load_experiment(exp_path, use_logfile=False, verbose=False)
+                    self.model_name = exper_hdl.exper.run_args.model
+                    self.loss_function = exper_hdl.exper.run_args.loss_function
+                    del exper_hdl
 
             if len(results) != 4 and self.num_of_folds == 4:
                 raise ValueError("ERROR - Loaded {} instead of 4 result files.".format(len(results)))
@@ -484,9 +509,11 @@ class ReferralResults(object):
             img_slice_seg_error_improvements = OrderedDict()
             num_of_slices_es = OrderedDict()
             num_of_slices_ed = OrderedDict()
+            num_of_uncertain_voxels = np.zeros(2)  # actually mean per volume
             dict_ref_dice_slices = self.dice_slices[referral_threshold]
             dict_org_dice_slices = self.org_dice_slices[referral_threshold]
             dict_referral_stats = self.referral_stats[referral_threshold]
+            num_of_patients = len(dict_ref_dice_slices.keys())
             for patient_id, dice_slices in dict_ref_dice_slices.iteritems():
                 org_dice_slices = dict_org_dice_slices[patient_id]
                 phase = 0  # ES
@@ -502,6 +529,11 @@ class ReferralResults(object):
                                                                     np.expand_dims(diffs_ed, axis=0)))
                 # compute segmentation error reductions
                 patient_referral_stats = dict_referral_stats[patient_id]
+                # mean number of voxels referred per slice, position 12 holds # of voxels above uncertainty
+                # threshold, but is stored redundant over classes (dim1), hence we take index 0 and take the mean
+                num_of_uncertain_voxels[0] += np.sum(patient_referral_stats[0, 0, 12, :], axis=0) / float(556245) # ES
+                num_of_uncertain_voxels[1] += np.sum(patient_referral_stats[1, 0, 12, :], axis=0) / float(556245) # ED
+
                 errors_es_before = np.sum(patient_referral_stats[0, :, 4, :], axis=0)
                 errors_es_after = np.sum(patient_referral_stats[0, :, 5, :], axis=0)
                 errors_ed_before = np.sum(patient_referral_stats[1, :, 4, :], axis=0)
@@ -522,7 +554,11 @@ class ReferralResults(object):
             self.ed_slice_freqs[referral_threshold] = num_of_slices_ed
             self.img_slice_improvements[referral_threshold] = img_slice_improvements
             self.img_slice_seg_error_improvements[referral_threshold] = img_slice_seg_error_improvements
+            # mean uncertain voxels per volume
+            self.mean_uvoxels_per_vol[referral_threshold] = num_of_uncertain_voxels * 1./num_of_patients
             self._compute_improvements_per_disease_cat_slice(referral_threshold)
+        # normalize number of uncertain voxels per volume over all referral thresholds
+        # self.mean_uvoxels_per_vol = scale_mean_uvoxels_per_vol(self.mean_uvoxels_per_vol)
 
     def _compute_improvements_per_disease_cat_slice(self, referral_threshold):
 
