@@ -17,7 +17,8 @@ from config.config import config
             --checkpoints 100000 110000 120000 130000 140000 150000 --mc_samples=10 --save_actual_maps 
             --run_mode="umaps_and_preds" --aggregate_func=max
             
-python generate_uncertainty_stats.py --cuda --exper_dict_id="exp_base_brier" --checkpoints 100000 110000 120000 130000 140000 150000 --mc_samples=1 --run_mode="u_maps_and_preds"
+python generate_uncertainty_stats.py --cuda --exper_dict_id="exp_base_brier" --checkpoints 150000 
+--mc_samples=1 --run_mode="u_maps_and_preds"
 
             
     (2) Run with run_mode=filtered_umaps_only in order to create the filtered uncertainty maps for the different
