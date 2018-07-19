@@ -16,7 +16,7 @@ from common.losses import compute_brier_score
 class BaseDilated2DCNN(nn.Module):
 
     def __init__(self, architecture, optimizer=torch.optim.Adam, lr=1e-4, weight_decay=0.,
-                 use_cuda=False, verbose=True, cycle_length=0, loss_function="softdice",
+                 use_cuda=False, verbose=True, cycle_length=0, loss_function="soft-dice",
                  use_reg_loss=False):
         super(BaseDilated2DCNN, self).__init__()
         self.architecture = architecture
@@ -173,7 +173,7 @@ class BaseDilated2DCNN(nn.Module):
         _, pred_labels_ed = torch.max(predictions[:, num_of_classes / 2:num_of_classes, :, :], dim=1)
 
         for cls in np.arange(labels.size(1)):
-            if self.loss_function == "softdice":
+            if self.loss_function == "soft-dice":
                 losses[cls] = soft_dice_score(predictions[:, cls, :, :], labels[:, cls, :, :])
             elif self.loss_function == "brier":
                 losses[cls] = compute_brier_score(predictions[:, cls, :, :], labels[:, cls, :, :])
@@ -231,7 +231,7 @@ class BaseDilated2DCNN(nn.Module):
 
         # NOTE: we want to minimize the loss, but the soft-dice-loss is actually increasing when our predictions
         # get better. HENCE, we need to multiply by minus one here.
-        if self.loss_function == "softdice":
+        if self.loss_function == "soft-dice":
             return (-1.) * torch.sum(losses)
         elif self.loss_function == "cross-entropy":
             pass

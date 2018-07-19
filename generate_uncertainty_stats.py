@@ -206,7 +206,7 @@ def main():
                                                             exper_args.loss_function)
             print("INFO - Experimental details extracted:: " + info_str)
             e_handler.create_u_maps(model=None, checkpoints=args.checkpoints, mc_samples=args.mc_samples,
-                                        u_threshold=0., referral_thresholds=args.referral_thresholds,
+                                        u_threshold=0.,
                                         verbose=args.verbose,
                                         save_actual_maps=args.save_actual_maps, test_set=None,
                                         generate_figures=args.generate_plots,

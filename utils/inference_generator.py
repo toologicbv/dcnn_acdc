@@ -15,8 +15,7 @@ class InferenceGenerator(object):
     file_suffix = "_raw_umaps.npz"
 
     def __init__(self, exper_handler, test_set=None, mc_samples=10, checkpoints=None, verbose=False,
-                 use_logger=False, u_threshold=0., store_test_results=False, aggregate_func="max",
-                 referral_thresholds=None):
+                 use_logger=False, u_threshold=0., store_test_results=False, aggregate_func="max"):
 
         self.store_test_results = store_test_results
         self.verbose = verbose
@@ -28,9 +27,6 @@ class InferenceGenerator(object):
         self.exper_handler = exper_handler
         self.generate_figures = False
         self.aggregate_func = aggregate_func
-        self.referral_thresholds = referral_thresholds
-        if self.referral_thresholds is None:
-            self.referral_thresholds = [0.2]
         if use_logger and self.exper_handler.logger is None:
             self.exper_handler.logger = create_logger(self.exper_handler.exper, file_handler=True)
         # looks kind of awkward, but originally wanted to use an array of folds, but finally we only process 1
@@ -45,6 +41,7 @@ class InferenceGenerator(object):
                                                                      batch_size=None, use_cuda=True)
         else:
             self.test_set = test_set
+
         self.num_of_images = len(self.test_set.images)
         # set path in order to save results and figures
         self.umap_output_dir = os.path.join(self.exper_handler.exper.config.root_dir,
@@ -59,7 +56,7 @@ class InferenceGenerator(object):
         else:
             self.test_results = None
 
-    def __call__(self, clean_up=False, save_actual_maps=False, generate_figures=False):
+    def __call__(self, clean_up=False, save_actual_maps=False, generate_figures=False, patient_ids=None):
 
         start_time = time.time()
         message = "INFO - Starting to generate uncertainty maps (agg-func={}) " \
@@ -83,8 +80,13 @@ class InferenceGenerator(object):
         # make a "pointer" to the test_results object of the exper_handler because we are using both
         self.test_results = self.exper_handler.test_results
         # debugging
-        # image_range = [0]
-        image_range = np.arange(len(self.test_set.img_file_names))
+        if patient_ids is not None:
+            image_range = []
+            for p_id in patient_ids:
+                image_range.append(self.test_set.trans_dict[p_id])
+            print("INFO - Using patient ids {}".format(", ".join(patient_ids)))
+        else:
+            image_range = np.arange(len(self.test_set.img_file_names))
         # image_range = np.arange(2, len(self.test_set.img_file_names))
         for image_num in tqdm(image_range):
             patient_id = self.test_set.img_file_names[image_num]

@@ -148,7 +148,8 @@ class ExperimentHandler(object):
                           weight_decay=self.exper.run_args.weight_decay,
                           use_cuda=self.exper.run_args.cuda,
                           cycle_length=self.exper.run_args.cycle_length,
-                          verbose=verbose, use_reg_loss=self.exper.run_args.use_reg_loss)
+                          verbose=verbose, use_reg_loss=self.exper.run_args.use_reg_loss,
+                          loss_function=self.exper.run_args.loss_function)
         abs_checkpoint_dir = os.path.join(chkpnt_dir, checkpoint_file)
         if os.path.exists(abs_checkpoint_dir):
             model_state_dict = torch.load(abs_checkpoint_dir)
@@ -394,7 +395,8 @@ class ExperimentHandler(object):
 
     def create_u_maps(self, model=None, checkpoints=None, mc_samples=10, u_threshold=0.,
                       save_actual_maps=False, test_set=None, generate_figures=False, verbose=False,
-                      aggregate_func="max", referral_thresholds=None, store_test_results=False):
+                      aggregate_func="max", store_test_results=False,
+                      patient_ids=None):
 
         if model is None and checkpoints is None:
             raise ValueError("When model parameter is None, you need to specify the checkpoint model "
@@ -403,10 +405,9 @@ class ExperimentHandler(object):
         maps_generator = InferenceGenerator(self, test_set=test_set, verbose=verbose,
                                                   mc_samples=mc_samples, u_threshold=u_threshold,
                                                   checkpoints=checkpoints, store_test_results=store_test_results,
-                                                  aggregate_func=aggregate_func,
-                                                  referral_thresholds=referral_thresholds)
+                                                  aggregate_func=aggregate_func)
         maps_generator(clean_up=False, save_actual_maps=save_actual_maps,
-                       generate_figures=generate_figures)
+                       generate_figures=generate_figures, patient_ids=patient_ids)
 
     def get_u_maps(self):
         # returns a dictionary key patientID with the uncertainty maps for each patient/image of shape
@@ -607,6 +608,7 @@ class ExperimentHandler(object):
             search_mask = "patient_id*_referred_slices_mc"
         else:
             search_mask = patient_id + "_referred_slices_mc"
+            print("get_referred_slices - ", search_mask)
 
         search_mask = search_mask + str(referral_threshold).replace(".", "_")
         if slice_filter_type is not None:
@@ -762,6 +764,7 @@ class ExperimentHandler(object):
             try:
                 # 3 objects to save: (1) the filtered u-map with aggregate over classes with post-processing
                 #                    (2) the raw filtered/thresholded u-map with aggregate over classes (no post-pro)
+                #                        (filtered_raw_umap)
                 #                    (3) a list containing integers specifying a u-value for each of the remaining
                 #                        blob areas in the filtered u-map with post processing
                 np.savez(file_name, filtered_umap=filtered_stddev_map, filtered_raw_umap=raw_stddev_map,
@@ -815,14 +818,14 @@ class ExperimentHandler(object):
                                              do_save=True, slice_range=None, errors_only=False,
                                              load_base_model_pred_labels=True)
 
-    def get_patients(self):
+    def get_patients(self, use_four_digits=False):
         """
         loading the complete set of patient_ids with the corresponding disease classification
 
         :return:
         """
         patients = Patients()
-        patients.load(self.exper.config.data_dir)
+        patients.load(self.exper.config.data_dir, use_four_digits)
         self.patients = patients.category
 
     def create_entropy_maps(self, do_save=False):

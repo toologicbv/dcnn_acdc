@@ -291,6 +291,8 @@ class ReferralResults(object):
                     exper_hdl.load_experiment(exp_path, use_logfile=False, verbose=False)
                     self.model_name = exper_hdl.exper.run_args.model
                     self.loss_function = exper_hdl.exper.run_args.loss_function
+                    if self.loss_function == "softdice":
+                        self.loss_function = "soft-dice"
                     del exper_hdl
 
             if len(results) != 4 and self.num_of_folds == 4:

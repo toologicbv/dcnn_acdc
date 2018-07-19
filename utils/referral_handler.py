@@ -255,7 +255,7 @@ class ReferralHandler(object):
 
         # load patient disease categorization, NOTE: hold ALL patient_ids not just the 25 validation patients
         # seems odd but is the easiest this way
-        self.exper_handler.get_patients()
+        self.exper_handler.get_patients(use_four_digits=self.test_set.generate_flipped_images)
         ublob_stats = None
         self.referral_thresholds.sort()
         for referral_threshold in self.referral_thresholds:

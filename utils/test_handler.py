@@ -147,7 +147,7 @@ class ACDC2017TestHandler(object):
 
     def __init__(self, exper_config, search_mask=None, nclass=4, load_func=load_mhd_to_numpy,
                  fold_ids=[1], debug=False, use_cuda=True, batch_size=None, load_train=False,
-                 load_val=True, use_iso_path=False):
+                 load_val=True, use_iso_path=False, generate_flipped_images=False):
 
         # IMPORTANT: boolean flag indicating whether to load images from image_iso/reference_iso path or
         # from original directory (not resized). If True we don't resize the image during loading
@@ -155,6 +155,7 @@ class ACDC2017TestHandler(object):
         # IMPORTANT flag indicating whether we're loading only the validation set from the specified fold(s)
         self.load_train = load_train
         self.load_val = load_val
+        self.generate_flipped_images = generate_flipped_images
         if not load_train and not load_val:
             raise ValueError("You have to load at least train or validation files for this fold.")
         self.config = exper_config
@@ -166,10 +167,12 @@ class ACDC2017TestHandler(object):
         self.load_func = load_func
         self.abs_path_fold = os.path.join(self.data_dir, "fold")
         self.images = []
+        self.images_flipped = []
         #
         # filename of the figures printed during test evaluation e.g. patien007
         self.img_file_names = []
         self.labels = []
+        self.labels_flipped = []
         self.num_labels_per_class = []
         self.spacings = []
         self.b_pred_labels = None
@@ -213,6 +216,9 @@ class ACDC2017TestHandler(object):
 
         file_list = self._get_file_lists()
         self._load_file_list(file_list)
+        if self.generate_flipped_images:
+            self._generate_flipped_test_set()
+            print("INFO - Generated >>flipped<< images in objects images_flipped/labels_flipped.")
 
     def get_test_pair(self, patient_id):
         try:
@@ -222,6 +228,21 @@ class ACDC2017TestHandler(object):
             print("Following keys exist:")
             print(self.trans_dict.keys())
         return self.images[image_num], self.labels[image_num]
+
+    def _generate_flipped_test_set(self):
+
+        for idx, image in enumerate(self.images):
+            # remember image has shape [2, width, height, #slices]
+            # we need to ndarray.copy() the flipped tensor, otherwise we run into annoying errors
+            # reported here: https://discuss.pytorch.org/t/torch-from-numpy-not-support-negative-strides/3663/4
+            self.images_flipped.append(np.flip(image, axis=2).copy())
+            # remember label has shape [#classes, width, height, #slices]
+            label = self.labels[idx]
+            self.labels_flipped.append(np.flip(label, axis=2).copy())
+        self.images = self.images_flipped
+        self.images_flipped = []
+        self.labels = self.labels_flipped
+        self.labels_flipped = []
 
     def _set_pathes(self):
         # kind of awkward. but because it's a class variable we need to check whether we extended the path
@@ -292,6 +313,11 @@ class ACDC2017TestHandler(object):
             ed_file_name = os.path.splitext(os.path.basename(img_file))[0]
             # get rid off _frameXX and take only the patient name
             patientID = ed_file_name[:ed_file_name.find("_")]
+            if self.generate_flipped_images:
+                # we extend the patient IDs with one leading zero for the flipped test set
+                str_num = patientID.strip("patient")
+                str_num = str_num.zfill(4)
+                patientID = "patient" + str_num
             self.img_file_names.append(patientID)
             self.trans_dict[patientID] = self.num_of_images
             # print("{} - {}".format(idx, img_file))

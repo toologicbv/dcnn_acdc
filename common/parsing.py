@@ -70,8 +70,8 @@ def do_parse_args():
     parser.add_argument('--retrain_chkpnt', type=int, default=None)
     parser.add_argument('--root_dir', default=config.root_dir)
     parser.add_argument('--log_dir', default=None)
-    parser.add_argument('--loss_function', type=str, choices=['softdice', 'brier', "cross-entropy"], default='softdice',
-                        help='Loss function for training the model (default: softdice)')
+    parser.add_argument('--loss_function', type=str, choices=['soft-dice', 'brier', "cross-entropy"],
+                        default='soft-dice', help='Loss function for training the model (default: soft-dice)')
     parser.add_argument('--use_cuda', action='store_true', default=False,
                         help='use GPU')
     parser.add_argument('--batch_size', type=int, default=64, metavar='N',

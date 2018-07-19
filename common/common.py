@@ -228,6 +228,8 @@ def prepare_referrals(image_name, referral_threshold, umap_dir, pred_labels_inpu
     search_path = os.path.join(umap_dir,
                                image_name + "*" + "_filtered_umaps_" + aggregate_func + referral_threshold + ".npz")
     filtered_std_map = load_referral_umap(search_path, per_class=False)
+    # filtered but without post-processing (filtered means referral threshold applied
+    filtered_cls_std_map_wpostp = load_referral_umap(search_path, per_class=True, without_post_process=True)
 
     search_path = os.path.join(pred_labels_input_dir,
                                image_name + "_filtered_pred_labels_mc" + referral_threshold + ".npz")
@@ -236,10 +238,10 @@ def prepare_referrals(image_name, referral_threshold, umap_dir, pred_labels_inpu
     except IOError:
         referral_pred_labels = None
 
-    return filtered_cls_std_map, filtered_std_map, referral_pred_labels
+    return filtered_cls_std_map, filtered_std_map, filtered_cls_std_map_wpostp, referral_pred_labels
 
 
-def load_referral_umap(search_path, per_class=True):
+def load_referral_umap(search_path, per_class=True, without_post_process=False):
 
     data = None
     files = glob.glob(search_path)
@@ -252,7 +254,10 @@ def load_referral_umap(search_path, per_class=True):
     except IOError:
         print("Unable to load uncertainty map from {}".format(fname))
     if per_class:
-        return data["filtered_cls_umap"]
+        if without_post_process:
+            return data["filtered_raw_umap"]
+        else:
+            return data["filtered_cls_umap"]
     else:
         return data["filtered_umap"]
 

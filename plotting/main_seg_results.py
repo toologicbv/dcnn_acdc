@@ -16,7 +16,7 @@ def plot_seg_erros_uncertainties(exper_handler, test_set, patient_id=None, width
                                  test_results=None, slice_filter_type=None,
                                  info_type=None, referral_threshold=0., do_show=False, model_name="",
                                  do_save=False, slice_range=None, errors_only=False,
-                                 load_base_model_pred_labels=False):
+                                 load_base_model_pred_labels=False, umaps_without_postprocessing=False):
     """
 
     :param patient_id:
@@ -34,6 +34,8 @@ def plot_seg_erros_uncertainties(exper_handler, test_set, patient_id=None, width
     :param do_save:
     :param slice_range:
     :param errors_only:
+    :param umaps_without_postprocessing: when overlaying u-maps use the thresholded maps WITHOUT POST-PROCESSING
+                                         IF FALSE: use filtered+post-processing
     :param load_base_model_pred_labels: load the predicted labels for Jelmer's baseline model
            The files should be stored in the specific fold-directory that you're currently evaluating
            e.g:     data/Folds/fold1/pred_lbls/
@@ -67,18 +69,22 @@ def plot_seg_erros_uncertainties(exper_handler, test_set, patient_id=None, width
     image_num = test_set.trans_dict[patient_id]
     image_name = patient_id
     if exper_handler.patients is None:
-        exper_handler.get_patients()
+        exper_handler.get_patients(use_four_digits=test_set.generate_flipped_images)
     if exper_handler.referral_umaps is None:
         exper_handler.get_referral_maps(referral_threshold, per_class=False, aggregate_func="max")
     # get the matrix of shape [2, #slices] that indicates which slices were referred for this image (ES/ED)
-    if exper_handler.referred_slices is None:
-        referred_slices = exper_handler.get_referred_slices(referral_threshold, patient_id=patient_id,
-                                                            slice_filter_type=slice_filter_type)
-    elif patient_id in exper_handler.referred_slices.keys():
-        referred_slices = exper_handler.referred_slices[patient_id]
+    if slice_filter_type is None:
+        # unfortunately we need a boolean array shape [2, #slices] although we referred ALL SLICES
+        referred_slices = np.ones((2, image.shape[3]))
     else:
-        referred_slices = exper_handler.get_referred_slices(referral_threshold, patient_id=patient_id,
+        if exper_handler.referred_slices is None:
+            referred_slices = exper_handler.get_referred_slices(referral_threshold, patient_id=patient_id,
                                                                 slice_filter_type=slice_filter_type)
+        elif patient_id in exper_handler.referred_slices.keys():
+            referred_slices = exper_handler.referred_slices[patient_id]
+        else:
+            referred_slices = exper_handler.get_referred_slices(referral_threshold, patient_id=patient_id,
+                                                                    slice_filter_type=slice_filter_type)
 
     ref_u_map_blobs = exper_handler.ref_map_blobs[patient_id]
     # get disease category
@@ -106,7 +112,9 @@ def plot_seg_erros_uncertainties(exper_handler, test_set, patient_id=None, width
     if referral_threshold != 0.:
         # formerly we used object "referral_pred_labels_filter_slices" where we only referred positive segmented voxes
         # we dropped this functionality but haven't eliminated all references to it. hence we set it here to None
-        filtered_cls_std_map, filtered_std_map, referral_pred_labels = \
+        # object "filtered_cls_std_map_wpostp" is filtered/thresholded but without post-processing
+        # filtered_cls_std_map_wpostp has shape [2, width, height, #slices]
+        filtered_cls_std_map, filtered_std_map, filtered_cls_std_map_wpostp, referral_pred_labels = \
             prepare_referrals(image_name, referral_threshold, umap_dir, pred_labels_input_dir)
     else:
         # Normal non-referral functionality
@@ -266,7 +274,10 @@ def plot_seg_erros_uncertainties(exper_handler, test_set, patient_id=None, width
                 # plot unfiltered or filtered u-map (for all uncertain pixels) to the right of the u-map
                 # We plot the filtered u-map WHICH ALL UNCERTAIN PIXELS not just the positive-ones only
                 row += 2
-                mean_slice_stddev = filtered_std_map[phase, :, :, img_slice]
+                if umaps_without_postprocessing:
+                    mean_slice_stddev = filtered_cls_std_map_wpostp[phase, :, :, img_slice]
+                else:
+                    mean_slice_stddev = filtered_std_map[phase, :, :, img_slice]
                 total_uncertainty = np.count_nonzero(mean_slice_stddev)
                 sub_title = "Slice {} {}: Filtered U-map (#u={})".format(img_slice + 1, str_phase,
                                                                                     total_uncertainty)

@@ -21,7 +21,7 @@ class Patients(object):
     def __init__(self):
         self.category = {}
 
-    def load(self, path_to_fold_root_dir):
+    def load(self, path_to_fold_root_dir, use_four_digits=False):
         file_name = os.path.join(path_to_fold_root_dir, Patients.file_name.replace("txt", "dll"))
         if not os.path.isfile(file_name):
             p = Patients.create_dict(path_to_fold_root_dir)
@@ -33,6 +33,17 @@ class Patients(object):
             print "I/O error({0}): {1}".format(e.errno, e.strerror)
             print("ERROR - Can't open file {}".format(file_name))
             raise IOError
+
+        if use_four_digits:
+            # when we flip the images vertically we store them under a 4-digit patient_id
+            # i.e. patient0082 instead of patient082
+            new_dict = {}
+            for patient_id in self.category.keys():
+                str_num = patient_id.strip("patient")
+                str_num = str_num.zfill(4)
+                new_patient_id = "patient" + str_num
+                new_dict[new_patient_id] = self.category[patient_id]
+            self.category = new_dict
 
     @staticmethod
     def create_dict(root_fold_dir):

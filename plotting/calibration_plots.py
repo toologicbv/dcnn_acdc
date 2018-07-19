@@ -204,7 +204,8 @@ def plot_reliability_diagram(cal_data, height=None, width=16, do_show=True, do_s
             acc_ed = acc_bins[1, cls_idx]
             ax1.set_title("{} - class {}".format(phase_labels[1], cls_labels[cls_idx]), **sub_title_size)
         else:
-            acc_ed = acc_bins[0]
+            acc_ed = acc_bins[1]
+            # print(acc_ed)
             ax1.set_title("{} ".format(phase_labels[1]), **sub_title_size)
         # compute the gap between fraction of forcast and identiy. Set to zero if bin was empty (2nd line)
         y_gaps = np.abs(prob_bins[1:] - acc_ed)
@@ -214,7 +215,7 @@ def plot_reliability_diagram(cal_data, height=None, width=16, do_show=True, do_s
                 label="Miscalibration", edgecolor='red')
         ax1.set_ylim([0, 1])
         ax1.set_xlim([0, 1.1])
-        ax1.set_ylabel("fraction of positive cases", **axis_label_size)
+        ax1.set_ylabel("Fraction of positive cases", **axis_label_size)
         ax1.set_xlabel("Probability", **axis_label_size)
         ax1.tick_params(axis='both', which='major', labelsize=tick_size)
         # plot the identify function i.e. bisector line
@@ -226,6 +227,7 @@ def plot_reliability_diagram(cal_data, height=None, width=16, do_show=True, do_s
             ax2.set_title("{} - class {}".format(phase_labels[1], cls_labels[cls_idx]), **config.title_font_medium)
         else:
             acc_es = acc_bins[0]
+            # print(acc_es)
             ax2.set_title("{} ".format(phase_labels[0]), **sub_title_size)
         # compute the gap between fraction of forcast and identiy. Set to zero if bin was empty (2nd line)
         y_gaps = np.abs(prob_bins[1:] - acc_es)
@@ -269,9 +271,9 @@ def plot_loss_functions_for_true_label(do_show=True, do_save=False, width=6, hei
 
     fig = plt.figure(figsize=(width, height))
     fig.suptitle("Loss for a true label", **config.title_font_large)
-    plt.plot(probs, log_loss, c='g', label="log loss")
+    plt.plot(probs, log_loss, c='g', label="binary entropy loss")
     plt.plot(probs, brier_loss, c='b', label="brier loss")
-    plt.plot(probs, softdice, c='r', label="softdice loss")
+    plt.plot(probs, softdice, c='r', label="soft-dice loss")
     plt.ylim([-1, 4])
     plt.ylabel("Loss", **config.axis_font22)
     plt.xlabel("Probability", **config.axis_font22)
@@ -307,7 +309,8 @@ class CalibrationData(object):
         file_name = CalibrationData.file_prefix + self.model_name + "_" + self.loss_function + ".npz"
         file_name = os.path.join(config.data_dir, file_name)
         if len(glob.glob(file_name)) != 1:
-            raise ValueError("ERROR - found {} files with name {}. Must be one".format(file_name))
+            raise ValueError("ERROR - found {} files with name {}. Must be one".format(len(glob.glob(file_name)),
+                                                                                       file_name))
 
         try:
             data = np.load(file_name)
