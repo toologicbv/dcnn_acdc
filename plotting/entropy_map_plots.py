@@ -21,7 +21,8 @@ def plot_entropy_map_for_patient(exper_handler, patient_id, do_show=True, do_sav
         exper_handler.get_entropy_maps()
     exper_args = exper_handler.exper.run_args
 
-    exper_handler.get_test_set()
+    if exper_handler.test_set is None:
+        exper_handler.get_test_set()
     mri_image, labels = exper_handler.test_set.get_test_pair(patient_id)
     mri_image = mri_image[:, config.pad_size:-config.pad_size, config.pad_size:-config.pad_size, :]
     entropy_map = exper_handler.entropy_maps[patient_id]
