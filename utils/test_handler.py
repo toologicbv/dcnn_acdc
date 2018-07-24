@@ -1,4 +1,4 @@
-import sys
+
 import numpy as np
 from config.config import config
 import os
@@ -9,7 +9,6 @@ from tqdm import tqdm
 from in_out.read_save_images import load_mhd_to_numpy, write_numpy_to_image
 from utils.dice_metric import dice_coefficient
 from utils.img_sampling import resample_image_scipy
-from torch.autograd import Variable
 from utils.medpy_metrics import hd
 from utils.post_processing import filter_connected_components
 from common.common import create_mask_uncertainties
@@ -429,14 +428,12 @@ class ACDC2017TestHandler(object):
         self.b_bald_map = np.zeros((2, self.b_labels.shape[1], self.b_labels.shape[2], self.b_labels.shape[3]))
 
         for slice in np.arange(num_of_slices):
-            b_image = Variable(torch.FloatTensor(torch.from_numpy(self.b_image[:, :, :, slice]).float()),
-                               volatile=use_volatile)
+            b_image = torch.FloatTensor(torch.from_numpy(self.b_image[:, :, :, slice]).float())
             b_image = b_image.unsqueeze(0)
             if self.b_labels is not None:
-                b_label = Variable(torch.FloatTensor(torch.from_numpy(self.b_labels[:, :, :, slice]).float()),
-                                   volatile=use_volatile)
-                b_num_labels_per_class = Variable(torch.FloatTensor(torch.from_numpy(
-                    self.b_num_labels_per_class[:, :, slice]).float()), volatile=use_volatile)
+                b_label = torch.FloatTensor(torch.from_numpy(self.b_labels[:, :, :, slice]).float())
+                b_num_labels_per_class = torch.FloatTensor(torch.from_numpy(
+                    self.b_num_labels_per_class[:, :, slice]).float())
                 b_label = b_label.unsqueeze(0)
             if self.use_cuda:
                 b_image = b_image.cuda()

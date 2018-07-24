@@ -1,7 +1,6 @@
 import sys
 import time
 import torch
-from torch.autograd import Variable
 import numpy as np
 import os
 import glob
@@ -192,14 +191,16 @@ class ExperimentHandler(object):
         s_offset = 0
         for chunk in np.arange(num_of_chunks):
             slice_range = np.arange(s_offset, s_offset + val_batch_size)
-            val_batch = TwoDimBatchHandler(self.exper, batch_size=val_batch_size,
-                                           test_run=True)
+            val_batch = TwoDimBatchHandler(self.exper, batch_size=val_batch_size)
             val_batch.generate_batch_2d(dataset.images(train=False), dataset.labels(train=False),
                                         slice_range=slice_range)
-            val_loss, _ = model.do_test(val_batch.get_images(), val_batch.get_labels(),
-                                        num_of_labels_per_class=val_batch.get_num_labels_per_class(),
-                                        multi_labels=val_batch.get_labels_multiclass())
-            arr_val_loss[chunk] = val_loss.data.cpu().numpy()[0]
+            # New in pytorch 0.4.0, use local context manager to turn off history tracking
+            with torch.set_grad_enabled(False):
+                val_loss, _ = model.do_test(val_batch.get_images(), val_batch.get_labels(),
+                                            num_of_labels_per_class=val_batch.get_num_labels_per_class(),
+                                            multi_labels=val_batch.get_labels_multiclass())
+
+            arr_val_loss[chunk] = val_loss.data.cpu().numpy()
             # returns array of 6 values
             arr_val_acc += model.get_accuracy()
             arr_val_dice += model.get_dice_losses(average=True)
@@ -298,11 +299,13 @@ class ExperimentHandler(object):
                 sample_offset = run_id * mc_samples
                 # generate samples for this checkpoint
                 for s in np.arange(mc_samples):
-                    test_loss, test_pred = model.do_test(batch_image, batch_labels,
-                                                         voxel_spacing=test_set.new_voxel_spacing,
-                                                         compute_hd=True,
-                                                         num_of_labels_per_class=b_num_labels_per_class,
-                                                         mc_dropout=mc_dropout)
+                    # New in pytorch 0.4.0, use local context manager to turn off history tracking
+                    with torch.set_grad_enabled(False):
+                        test_loss, test_pred = model.do_test(batch_image, batch_labels,
+                                                             voxel_spacing=test_set.new_voxel_spacing,
+                                                             compute_hd=True,
+                                                             num_of_labels_per_class=b_num_labels_per_class,
+                                                             mc_dropout=mc_dropout)
                     b_predictions[s + sample_offset, :, :, :, test_set.slice_counter] = test_pred.data.cpu().numpy()
 
                     b_test_losses[s + sample_offset] = test_loss.data.cpu().numpy()
@@ -913,7 +916,7 @@ class ExperimentHandler(object):
         self.exper.epoch_stats["lr"][self.exper.epoch_id - 1] = lr
 
     def set_batch_loss(self, loss, used_outliers=False, reg_loss=None):
-        if isinstance(loss, Variable) or isinstance(loss, torch.FloatTensor):
+        if isinstance(loss, torch.FloatTensor):
             loss = loss.data.cpu().squeeze().numpy()
         if not used_outliers:
             self.exper.epoch_stats["mean_loss"][self.exper.epoch_id-1] = loss

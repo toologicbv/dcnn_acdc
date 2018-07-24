@@ -9,7 +9,7 @@ import numpy as np
 def weights_init(m):
     classname = m.__class__.__name__
     if classname.find('Conv2d') != -1:
-        nn.init.kaiming_normal(m.weight)
+        nn.init.kaiming_normal_(m.weight)
         m.bias.data.zero_()
 
 

@@ -8,7 +8,6 @@ import abc
 import os
 import numpy as np
 import torch
-from torch.autograd import Variable
 from in_out.read_save_images import write_numpy_to_image
 from config.config import config
 # from in_out.load_data import ACDC2017DataSet
@@ -143,13 +142,12 @@ class TwoDimBatchHandler(BatchHandler):
     patch_size = 150
     pixel_dta_type = "float32"
 
-    def __init__(self, exper, test_run=False, batch_size=None, num_classes=8):
+    def __init__(self, exper, batch_size=None, num_classes=8):
         if batch_size is None:
             self.batch_size = int(exper.run_args.batch_size)
         else:
             self.batch_size = int(batch_size)
 
-        self.test_run = test_run
         # the number of classes to 8 but sometimes we'll need to work with half of the classes (4 for ES and ED)
         self.num_classes = num_classes
         self.ps_wp = TwoDimBatchHandler.patch_size_with_padding
@@ -270,13 +268,11 @@ class TwoDimBatchHandler(BatchHandler):
                         np.count_nonzero(b_labels_per_class[idx, cls_idx+half_classes, :, :])
 
         # print("Images used {}".format(",".join(img_nums)))
-        self.b_images = Variable(torch.FloatTensor(torch.from_numpy(b_images).float()), volatile=self.test_run)
-        self.b_labels_per_class = Variable(torch.FloatTensor(torch.from_numpy(b_labels_per_class).float()),
-                                           volatile=self.test_run)
-        self.b_num_labels_per_class = Variable(torch.FloatTensor(torch.from_numpy(b_num_labels_per_class).float()),
-                                               volatile=self.test_run)
+        self.b_images = torch.FloatTensor(torch.from_numpy(b_images).float())
+        self.b_labels_per_class = torch.FloatTensor(torch.from_numpy(b_labels_per_class).float())
+        self.b_num_labels_per_class = torch.FloatTensor(torch.from_numpy(b_num_labels_per_class).float())
 
-        self.b_labels = Variable(torch.LongTensor(torch.from_numpy(b_labels_multiclass).long()), volatile=self.test_run)
+        self.b_labels = torch.LongTensor(torch.from_numpy(b_labels_multiclass).long())
         if save_batch:
             self.save_batch_img_to_files()
 

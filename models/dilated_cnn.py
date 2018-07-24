@@ -1,7 +1,6 @@
 
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
 from config.config import config
 import numpy as np
 from config.config import OPTIMIZER_DICT
@@ -39,10 +38,7 @@ class BaseDilated2DCNN(nn.Module):
         self.np_reg_loss = None
         self.hausdorff_list = None
         self.loss_function = loss_function
-        self.lossfunc = nn.NLLLoss2d()
-
-        if self.use_cuda:
-            self.cuda()
+        self.lossfunc = nn.NLLLoss()
 
     def cuda(self):
         super(BaseDilated2DCNN, self).cuda()
@@ -107,8 +103,6 @@ class BaseDilated2DCNN(nn.Module):
         :return: (1) the raw output in order to compute loss with PyTorch cross-entropy (see comment below)
                  (2) the softmax output
         """
-        if not isinstance(input, torch.autograd.variable.Variable):
-            raise ValueError("input is not of type torch.autograd.variable.Variable")
 
         out = self.model(input)
         # our last layer ConcatenateCNNBlock already contains the two Softmax layers
@@ -116,7 +110,7 @@ class BaseDilated2DCNN(nn.Module):
         return out
 
     def get_loss_cross_entropy(self, log_softmax_predictions, labels_multiclass):
-        losses = Variable(torch.FloatTensor(2))
+        losses = torch.FloatTensor(2)
         if self.use_cuda:
             losses = losses.cuda()
         b_pred_es = log_softmax_predictions[:, :4, :, :]
@@ -153,15 +147,15 @@ class BaseDilated2DCNN(nn.Module):
         batch_size = labels.size(0)
         num_of_classes = labels.size(1)
         half_classes = int(num_of_classes / 2)
-        losses = Variable(torch.FloatTensor(num_of_classes))
-        dices = Variable(torch.FloatTensor(num_of_classes))
-        pixel_reg_loss = Variable(torch.FloatTensor(batch_size, half_classes))
+        losses = torch.FloatTensor(num_of_classes)
+        dices = torch.FloatTensor(num_of_classes)
+        pixel_reg_loss = torch.FloatTensor(batch_size, half_classes)
         # compute sum of regression predictions per image-slice and class
         reg_loss_weight = 0.05
         adjusted_class_idx = [-1, 0, -1, 1, -1, 2, -1, 3]
         if self.use_regression_loss:
             regression_maps = torch.sum(regression_maps.view(batch_size, half_classes, -1), dim=2)
-        # brier_score = Variable(torch.FloatTensor(num_of_classes))
+
         self.hausdorff_list = []
         if self.use_cuda:
             losses = losses.cuda()
@@ -276,8 +270,8 @@ class BaseDilated2DCNN(nn.Module):
         voxel_spacing: we assume the image slices are 2D and have isotropic spacing. Hence voxel_spacing is a scaler
                        and for AC-DC equal to 1.4
 
-        :returns validation loss (autograd.Variable) and the label predictions [batch_size, classes, width, height]
-                 also as autograd.Variable
+        :returns validation loss (torch.Tensor) and the label predictions [batch_size, classes, width, height]
+                 also as torch.Tensor
         """
         self.eval(mc_dropout=mc_dropout)
         if not self.use_regression_loss:

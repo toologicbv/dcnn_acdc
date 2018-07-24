@@ -40,6 +40,10 @@ def training(exper_hdl):
     else:
         dcnn_model = load_model(exper_hdl)
 
+    # assign model to CPU or GPU if available
+    device = torch.device("cuda" if exper_hdl.exper.run_args.cuda else "cpu")
+    dcnn_model = dcnn_model.to(device)
+
     if exper_hdl.exper.run_args.guided_train:
         test_set = ACDC2017TestHandler(exper_config=exper_hdl.exper.config,
                                        search_mask=exper_hdl.exper.config.dflt_image_name + ".mhd", fold_ids=[0],
