@@ -9,7 +9,6 @@ import torch
 from pytz import timezone
 from skimage import segmentation
 from skimage import exposure
-import matplotlib.pyplot as plt
 
 
 def get_dice_diffs(diffs, num_of_slices, slice_stats, phase):

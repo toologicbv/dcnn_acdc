@@ -217,10 +217,11 @@ class TwoDimBatchHandler(BatchHandler):
          We will convert these values into binary values below and hence add (next to the batch dimension dim-0)
          a second dimension with the number of classes (in our case 4 * 2 = 8), see b_labels_per_class object.
         """
+        if self.batch_size != 1:
+            b_images = np.zeros((self.batch_size, 2, self.ps_wp, self.ps_wp))
+            b_labels_per_class = np.zeros((self.batch_size, self.num_classes, self.patch_size + 1, self.patch_size + 1))
+            b_labels_multiclass = np.zeros((self.batch_size, 2, self.patch_size + 1, self.patch_size + 1))
 
-        b_images = np.zeros((self.batch_size, 2, self.ps_wp, self.ps_wp))
-        b_labels_per_class = np.zeros((self.batch_size, self.num_classes, self.patch_size + 1, self.patch_size + 1))
-        b_labels_multiclass = np.zeros((self.batch_size, 2, self.patch_size + 1, self.patch_size + 1))
         b_num_labels_per_class = np.zeros((self.batch_size, self.num_classes))
         if num_of_slices is None:
             num_of_slices = len(images)
@@ -244,17 +245,32 @@ class TwoDimBatchHandler(BatchHandler):
             # track imageID/sliceID
             self.batch_stats[idx, :] = img_sliceID
             # note img tensor has 3-dim and the first is equal to 2, because we concatenated ED and ES images
-            offx = np.random.randint(0, img.shape[1] - self.ps_wp)
-            offy = np.random.randint(0, img.shape[2] - self.ps_wp)
+            # NOTE: if batch-size is 1 -> we process full image slice, but only one
+            if self.batch_size != 1:
+                offx = np.random.randint(0, img.shape[1] - self.ps_wp)
+                offy = np.random.randint(0, img.shape[2] - self.ps_wp)
+                img = img[:, offx:offx + self.ps_wp, offy:offy + self.ps_wp]
+                label_es = label[0, offx:offx + self.patch_size + 1, offy:offy + self.patch_size + 1]
+                label_ed = label[1, offx:offx + self.patch_size + 1, offy:offy + self.patch_size + 1]
+            else:
+                offx, offy = 0, 0
+                # process whole slices
+                img_width = img.shape[1]
+                img_height = img.shape[2]
+                lbl_width = label.shape[1]
+                lbl_height = label.shape[2]
+                b_images = np.zeros((self.batch_size, 2, img_width, img_height))
+                b_labels_per_class = np.zeros(
+                    (self.batch_size, self.num_classes, lbl_width, lbl_height))
+                b_labels_multiclass = np.zeros((self.batch_size, 2, lbl_width, lbl_height))
+                label_es = label[0]
+                label_ed = label[1]
             self.offsets.append(tuple((offx, offy)))
             if logger is not None:
                 logger.info("Random: {} {} {}".format(ind, offx, offy))
-            img = img[:, offx:offx + self.ps_wp, offy:offy + self.ps_wp]
-
             b_images[idx, :, :, :] = img
             # next convert class labels to binary class labels
-            label_es = label[0, offx:offx + self.patch_size + 1, offy:offy + self.patch_size + 1]
-            label_ed = label[1, offx:offx + self.patch_size + 1, offy:offy + self.patch_size + 1]
+
             b_labels_multiclass[idx, 0] = label_es.astype('int16')
             b_labels_multiclass[idx, 1] = label_ed.astype('int16')
             half_classes = int(self.num_classes / 2)
