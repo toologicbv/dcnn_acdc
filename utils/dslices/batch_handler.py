@@ -62,9 +62,9 @@ class BatchHandler(object):
         seg_exper_handlers[pfold_id].get_pred_labels(patient_id=self.patient_id)
         self.pred_labels = seg_exper_handlers[pfold_id].pred_labels
         seg_exper_handlers[pfold_id].get_referral_maps(u_threshold=0.001, per_class=False,
-                                                            patient_id=self.patient_id,
-                                                            aggregate_func="max", use_raw_maps=True,
-                                                            load_ref_map_blobs=False)
+                                                       patient_id=self.patient_id,
+                                                       aggregate_func="max", use_raw_maps=True,
+                                                       load_ref_map_blobs=False)
         self.u_maps = seg_exper_handlers[pfold_id].referral_umaps
         # for idx in item_num.numpy().astype(dtype=np.int):
         for idx in item_num:

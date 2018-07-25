@@ -9,6 +9,7 @@ from common.common import create_logger
 import models.slice_detector
 from common.dslices.config import config
 from common.dslices.helper import create_experiment
+from utils.referral_results import ReferralResults
 
 
 class ExperimentHandler(object):
@@ -213,6 +214,7 @@ class ExperHandlerEnsemble(object):
 
     def __init__(self, exper_dict):
         self.seg_exper_handlers = {}
+        self.exper_dict = exper_dict
         self.patient_fold = {}
         for exper_id in exper_dict.values():
             exp_handler = create_experiment(exper_id)
@@ -224,4 +226,17 @@ class ExperHandlerEnsemble(object):
 
     def get_patient_fold_id(self, patient_id):
         return self.patient_fold[patient_id]
+
+    def load_dice_without_referral(self, type_of_map="u_map", referral_thresholds=[0.001]):
+        """
+        :param type_of_map:
+        :param referral_thresholds:
+        :return:
+        """
+        if type_of_map == "entropy":
+            use_entropy_maps = True
+        else:
+            use_entropy_maps = False
+        ReferralResults(self.exper_dict, referral_thresholds, print_results=False,
+                        fold=None, slice_filter_type=None, use_entropy_maps=use_entropy_maps)
 
