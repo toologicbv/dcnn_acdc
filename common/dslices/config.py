@@ -105,9 +105,9 @@ class BaseConfig(object):
 
     def get_architecture(self, base_model="vgg11_bn"):
 
-        if base_model == "vgg11_bn":
+        if base_model == "sdvgg11_bn":
             self.architecture = {"base_model": "vgg11_bn"}
-        elif base_model == "vgg11":
+        elif base_model == "sdvgg11":
             self.architecture = {"base_model": "vgg11"}
 
         else:
@@ -115,6 +115,9 @@ class BaseConfig(object):
 
         self.architecture["num_of_spp_levels"] = 3
         self.architecture["num_of_classes"] = 2
+        self.architecture["drop_percentage"] = 0.5
+        self.architecture["weight_decay"] = 0.0001
+        self.architecture["optimizer"] = "adam"
 
 
 config = BaseConfig()

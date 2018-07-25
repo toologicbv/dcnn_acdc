@@ -7,7 +7,7 @@ def do_parse_args():
     # Training settings
     parser = argparse.ArgumentParser(description='PyTorch VGG slice detection model')
 
-    parser.add_argument('--model', default="sdvgg", choices=['sdvgg'])
+    parser.add_argument('--model', default="sdvgg11", choices=['sdvgg11', 'sdvgg11_bn'])
     parser.add_argument('--version', type=str, default='v1')
     # in case we retrain a previous model/checkpoint this parameter specifies the experiment directory
     # relative path (w.r.t. logs/ directory e.g. "20180330_09_56_01_dcnn_mcv1_150000E_lr2e02"

@@ -557,18 +557,27 @@ class ExperimentHandler(object):
                   " and property=test_results_per_epoch, dict (key=epoch) with tuple (4))".format(c))
 
     def get_referral_maps(self, u_threshold, per_class=True, aggregate_func="max", use_raw_maps=False,
-                          patient_id=None):
+                          patient_id=None, load_ref_map_blobs=True):
         """
 
         :param u_threshold: also called referral_threshold in other context.
         :param per_class:
         :param aggregate_func:
         :param patient_id:
+        :param load_ref_map_blobs: We only need this object when we referred specific slices
         :param use_raw_maps: if true, we use the thresholded/filtered u-maps with NO POST-PROCESSING steps
                              ONLY applicable for PER_CLASS = FALSE.
                              We use these maps also during referral to compare with entropy maps
         :return:
         """
+        if self.referral_umaps is None:
+            self.referral_umaps = OrderedDict()
+        if load_ref_map_blobs and self.ref_map_blobs is None:
+            self.ref_map_blobs = OrderedDict()
+        if patient_id is not None:
+            if patient_id in self.referral_umaps.keys():
+                return
+
         input_dir = os.path.join(self.exper.config.root_dir,
                                            os.path.join(self.exper.output_dir, config.u_map_dir))
         u_threshold = str(u_threshold).replace(".", "_")
@@ -585,8 +594,7 @@ class ExperimentHandler(object):
         files = glob.glob(search_path)
         if len(files) == 0:
             raise ImportError("ERROR - no referral u-maps found in {}".format(search_path))
-        self.referral_umaps = OrderedDict()
-        self.ref_map_blobs = OrderedDict()
+
         for fname in glob.glob(search_path):
             file_basename = os.path.splitext(os.path.basename(fname))[0]
             patientID = file_basename[:file_basename.find("_")]
@@ -603,11 +611,12 @@ class ExperimentHandler(object):
                     self.referral_umaps[patientID] = data["filtered_raw_umap"]
                 else:
                     self.referral_umaps[patientID] = data["filtered_umap"]
-            try:
-                self.ref_map_blobs[patientID] = data["filtered_stddev_blobs"]
-            except KeyError:
-                print("WARNING - ExperimentHandler.get_referral_maps - filtered_stddev_blobs "
-                      "object does not exist for {}".format(patientID))
+            if load_ref_map_blobs:
+                try:
+                    self.ref_map_blobs[patientID] = data["filtered_stddev_blobs"]
+                except KeyError:
+                    print("WARNING - ExperimentHandler.get_referral_maps - filtered_stddev_blobs "
+                          "object does not exist for {}".format(patientID))
 
     def get_referred_slices(self, referral_threshold, slice_filter_type=None, patient_id=None):
 
@@ -978,6 +987,9 @@ class ExperimentHandler(object):
     def get_pred_labels(self, patient_id=None, mc_dropout=True):
         if self.pred_labels is None:
             self.pred_labels = OrderedDict()
+        if patient_id is not None:
+            if patient_id in self.pred_labels.keys():
+                return
 
         pred_labels_input_dir = os.path.join(self.exper.config.root_dir,
                                              os.path.join(self.exper.output_dir, config.pred_lbl_dir))

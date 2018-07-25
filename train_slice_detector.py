@@ -43,15 +43,19 @@ def training(args):
                             exper_hdl.exper.run_args.batch_size,
                             exper_hdl.exper.batches_per_epoch))
 
-    new_batch = BatchHandlerSD(fold_id=args.fold_id, seg_exper_handlers=seg_exper_dict.seg_exper_handlers,
+    new_batch = BatchHandlerSD(fold_id=args.fold_id, exper_ensemble=seg_exper_dict,
                                data_set=dataset, cuda=args.cuda)
     for epoch_id in range(exper_hdl.exper.run_args.epochs):
         exper_hdl.next_epoch()
         # in order to store the 2 mean dice losses (ES/ED)
         losses = np.zeros(exper_hdl.exper.batches_per_epoch)
         start_time = time.time()
-        for x_input in new_batch(batch_size=1):
-            out = sd_vgg_model(x_input)
+        for x_input, y_lbl in new_batch(batch_size=args.batch_size, backward_freq=1):
+            loss = sd_vgg_model.do_train(x_input, y_lbl, new_batch)
+            print("Epoch ID: {} loss {:.3f}".format(exper_hdl.exper.epoch_id,
+                                                    loss.item()))
+
+
     #         new_batch.generate_batch_2d(dataset.train_images, dataset.train_labels,
     #                                         num_of_slices=dataset.train_num_slices,
     #                                         img_slice_ids=dataset.train_img_slice_ids)
@@ -105,7 +109,7 @@ if __name__ == '__main__':
     main()
 
 """
-python train_segmentation.py --lr=0.0002 --batch_size=4 --val_freq=10 --epochs=15 --use_cuda --fold_ids=0 
---print_freq=5 --weight_decay=0.0001 --model="dcnn_mc" --drop_prob=0.05 --cycle_length=10000 --loss_function=softdice 
---quick_run
+CUDA_VISIBLE_DEVICES=1 python train_slice_detector.py --use_cuda --batch_size=10  --val_freq=10 --print_freq=5 
+--fold_id=0 --quick_run --epochs=100 --model=sdvgg11_bn --lr=0.00005
+
 """

@@ -69,13 +69,13 @@ def load_slice_detector_model(exper_hdl, verbose=False):
         use_logger = True
 
     if exper_hdl.exper.run_args.model[:5] == 'sdvgg':
-        exper_hdl.exper.config.get_architecture()
+        exper_hdl.exper.config.get_architecture(base_model=exper_hdl.exper.run_args.model)
         message = "Creating new model DegenerateSliceDetector"
         if use_logger:
             exper_hdl.logger.info(message)
         else:
             print(message)
-        model = DegenerateSliceDetector(exper_hdl.exper.config.architecture)
+        model = DegenerateSliceDetector(exper_hdl.exper.config.architecture, lr=exper_hdl.exper.run_args.lr)
 
     else:
         raise ValueError("{} name is unknown and hence cannot be created".format(exper_hdl.exper.run_args.model))

@@ -213,8 +213,15 @@ class ExperHandlerEnsemble(object):
 
     def __init__(self, exper_dict):
         self.seg_exper_handlers = {}
-
+        self.patient_fold = {}
         for exper_id in exper_dict.values():
             exp_handler = create_experiment(exper_id)
+            exp_handler.get_testset_ids()
             fold_id = int(exp_handler.exper.run_args.fold_ids[0])
             self.seg_exper_handlers[fold_id] = exp_handler
+            for patient_id in exp_handler.test_set_ids.keys():
+                self.patient_fold[patient_id] = fold_id
+
+    def get_patient_fold_id(self, patient_id):
+        return self.patient_fold[patient_id]
+

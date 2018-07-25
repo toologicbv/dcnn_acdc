@@ -37,6 +37,7 @@ OPTIMIZER_DICT = {'sgd': torch.optim.SGD,  # Gradient Descent
                   'adadelta': torch.optim.Adadelta,  # Adadelta
                   'adagrad': torch.optim.Adagrad,  # Adagrad
                   'adam': torch.optim.Adam,  # Adam
+                  'sparse_adam': torch.optim.SparseAdam, # SparseAdam
                   'rmsprop': torch.optim.RMSprop  # RMSprop
                   }
 
