@@ -556,12 +556,14 @@ class ExperimentHandler(object):
                   " (property=outliers_per_epoch, dictionary (key=epoch) with tuple (6 elements)"
                   " and property=test_results_per_epoch, dict (key=epoch) with tuple (4))".format(c))
 
-    def get_referral_maps(self, u_threshold, per_class=True, aggregate_func="max", use_raw_maps=False):
+    def get_referral_maps(self, u_threshold, per_class=True, aggregate_func="max", use_raw_maps=False,
+                          patient_id=None):
         """
 
         :param u_threshold: also called referral_threshold in other context.
         :param per_class:
         :param aggregate_func:
+        :param patient_id:
         :param use_raw_maps: if true, we use the thresholded/filtered u-maps with NO POST-PROCESSING steps
                              ONLY applicable for PER_CLASS = FALSE.
                              We use these maps also during referral to compare with entropy maps
@@ -570,11 +572,16 @@ class ExperimentHandler(object):
         input_dir = os.path.join(self.exper.config.root_dir,
                                            os.path.join(self.exper.output_dir, config.u_map_dir))
         u_threshold = str(u_threshold).replace(".", "_")
+        if patient_id is None:
+            search_prefix = "*"
+        else:
+            search_prefix = patient_id
         if per_class:
-            search_path = os.path.join(input_dir, "*" + "_filtered_cls_umaps_" + aggregate_func +
+            search_path = os.path.join(input_dir, search_prefix + "_filtered_cls_umaps_" + aggregate_func +
                                        u_threshold + ".npz")
         else:
-            search_path = os.path.join(input_dir, "*" + "_filtered_umaps_" + aggregate_func + u_threshold + ".npz")
+            search_path = os.path.join(input_dir, search_prefix + "_filtered_umaps_" + aggregate_func + u_threshold
+                                       + ".npz")
         files = glob.glob(search_path)
         if len(files) == 0:
             raise ImportError("ERROR - no referral u-maps found in {}".format(search_path))

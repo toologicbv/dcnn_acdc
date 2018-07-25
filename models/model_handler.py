@@ -1,9 +1,10 @@
 from models.dilated_cnn import BaseDilated2DCNN
+from models.slice_detector import DegenerateSliceDetector
 import torch
 import shutil
 import os
 import torch.nn as nn
-import numpy as np
+
 
 
 def weights_init(m):
@@ -57,4 +58,29 @@ def load_model(exper_hdl, verbose=False):
     else:
         raise ValueError("{} name is unknown and hence cannot be created".format(exper_hdl.exper.run_args.model))
 
+    return model
+
+
+def load_slice_detector_model(exper_hdl, verbose=False):
+
+    if exper_hdl.logger is None:
+        use_logger = False
+    else:
+        use_logger = True
+
+    if exper_hdl.exper.run_args.model[:5] == 'sdvgg':
+        exper_hdl.exper.config.get_architecture()
+        message = "Creating new model DegenerateSliceDetector"
+        if use_logger:
+            exper_hdl.logger.info(message)
+        else:
+            print(message)
+        model = DegenerateSliceDetector(exper_hdl.exper.config.architecture)
+
+    else:
+        raise ValueError("{} name is unknown and hence cannot be created".format(exper_hdl.exper.run_args.model))
+
+    exper_hdl.device = torch.device("cuda" if exper_hdl.exper.run_args.cuda else "cpu")
+    # assign model to CPU or GPU if available
+    model = model.to(exper_hdl.device)
     return model

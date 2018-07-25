@@ -304,9 +304,11 @@ class ACDC2017DataSet(BaseImageDataSet):
                                    is_train=is_train, img_id=self.num_of_images)
             else:
                 # add "raw" images
-                raise NotImplementedError("Trying to load images without augmentation is currently not implemented")
+                self._add_raw_image(mri_scan_ed, reference_ed, mri_scan_es, reference_es,
+                                    is_train=is_train, img_id=self.num_of_images)
             self.num_of_images += 1
             files_loaded += 2
+
         return files_loaded
 
     def load_files(self):
@@ -376,7 +378,6 @@ class ACDC2017DataSet(BaseImageDataSet):
                 lbl_es_slice = np.rot90(lbl_es_slice)
 
         # for each image-slice rotate the img four times. We're doing that for all three orientations
-
         for z in range(image_ed.shape[2]):
             image_ed_slice = image_ed[:, :, z]
             label_ed_slice = label_ed[:, :, z]
@@ -406,6 +407,21 @@ class ACDC2017DataSet(BaseImageDataSet):
                 compute_missing_stats(label_es_slice, label_ed_slice, self.incomplete_stats)
                 rotate_slice(image_ed_slice, label_ed_slice, image_es_slice, label_es_slice, is_train,
                              img_slice_id=tuple((img_id, z)))
+
+    def _add_raw_image(self, image_ed, label_ed, image_es, label_es, is_train=False, img_id=None):
+
+        img = np.concatenate((np.expand_dims(image_es, axis=0),
+                              np.expand_dims(image_ed, axis=0)))
+        # same concatenation for the label files of ED and ES
+        label = np.concatenate((np.expand_dims(label_es, axis=0),
+                                np.expand_dims(label_ed, axis=0)))
+        if is_train:
+            self.train_images.append(img)
+            self.train_labels.append(label)
+            # img_slice_id is a combination of imageid and sliceID e.g. (10, 1)
+        else:
+            self.val_images.append(img)
+            self.val_labels.append(label)
 
     def _resample_images(self, file_list):
         files_loaded = 0
