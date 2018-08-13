@@ -187,16 +187,16 @@ def plot_reliability_diagram(cal_data, height=None, width=16, do_show=True, do_s
 
     row = 0
     bar_width = 0.09
-    tick_size = 30
-    legend_size = 30
-    axis_label_size = {'fontname': 'Monospace', 'size': '32', 'color': 'black', 'weight': 'normal'}
-    sub_title_size = {'fontname': 'Monospace', 'size': '32', 'color': 'black', 'weight': 'normal'}
+    tick_size = 42
+    legend_size = 42
+    axis_label_size = {'fontname': 'Monospace', 'size': '46', 'color': 'black', 'weight': 'normal'}
+    sub_title_size = {'fontname': 'Monospace', 'size': '46', 'color': 'black', 'weight': 'normal'}
     prob_bins = cal_data.prob_bin_edges
 
     model_info = "{}".format(cal_data.loss_function.title())
 
     fig = plt.figure(figsize=(width, height))
-    fig.suptitle(model_info, **{'fontname': 'Monospace', 'size': '42', 'color': 'black', 'weight': 'normal'})
+    fig.suptitle(model_info, **{'fontname': 'Monospace', 'size': '50', 'color': 'black', 'weight': 'normal'})
 
     for cls_idx in the_range:
         ax1 = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
@@ -217,6 +217,7 @@ def plot_reliability_diagram(cal_data, height=None, width=16, do_show=True, do_s
         ax1.set_xlim([0, 1.1])
         ax1.set_ylabel("Fraction of positive cases", **axis_label_size)
         ax1.set_xlabel("Probability", **axis_label_size)
+        ax1.set_xticks(np.array([0.2, 0.4, 0.6, 0.8, 1.0]))
         ax1.tick_params(axis='both', which='major', labelsize=tick_size)
         # plot the identify function i.e. bisector line
         ax1.plot(np.linspace(0, 1, 100), np.linspace(0, 1, 100), "--", c="gray", linewidth=6)
@@ -239,6 +240,8 @@ def plot_reliability_diagram(cal_data, height=None, width=16, do_show=True, do_s
         ax2.set_xlim([0, 1.1])
         ax2.set_xlabel("Probability", **axis_label_size)
         ax2.tick_params(axis='both', which='major', labelsize=tick_size)
+        ax2.set_yticks(np.array([0.2, 0.4, 0.6, 0.8, 1.0]))
+        ax2.set_xticks(np.array([0.2, 0.4, 0.6, 0.8, 1.0]))
         pylab.setp(ax2.get_yticklabels(), visible=False)
         # plot the identify function i.e. bisector line
         ax2.plot(np.linspace(0, 1, 100), np.linspace(0, 1, 100), "--", c="gray", linewidth=6)
