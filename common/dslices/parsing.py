@@ -23,6 +23,10 @@ def do_parse_args():
                         help='input batch size for training (default: 64)')
     parser.add_argument('--epochs', type=int, default=10, metavar='N',
                         help='number of epochs to train (default: [0])')
+
+    parser.add_argument('--exper_dict', choices=['exper_brier', 'exper_softdice', 'exper_centropy'],
+                        default="exper_brier",
+                        help="Experiments that are used as input for image, predicted seg-mask and uncertainty-map")
     parser.add_argument('--fold_id', type=int, default=None, help="Fold ID of experiment")
     parser.add_argument('--print_freq', type=int, default=10, metavar='N',
                         help='Frequency of printing training performance (expressed in epochs) (default: 10)')
@@ -51,4 +55,12 @@ def do_parse_args():
         raise ValueError("Parameter value of model {} is not supported".format(args.model))
 
     assert args.root_dir is not None
+    # set the dictionary that contains the experimental IDs for the four experiments serving as input to network
+    if args.exper_dict == "exper_brier":
+        args.exper_dict = config.exper_dict_brier
+    elif args.exper_dict == "exper_softdice":
+        args.exper_dict = config.exper_dict_softdice
+    else:
+        args.exper_dict = config.exper_dict_centropy
+
     return args

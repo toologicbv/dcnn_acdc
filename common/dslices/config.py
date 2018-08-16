@@ -10,10 +10,20 @@ class BaseConfig(object):
         # default data directory
         self.architecture = None
         # dictionary of experiment ids
-        self.exper_dict = {3: "20180426_14_14_57_dcnn_mc_f3p01_brier_150KE_lr2e02",
+        self.exper_dict_brier = {3: "20180426_14_14_57_dcnn_mc_f3p01_brier_150KE_lr2e02",
                            2: "20180426_14_14_39_dcnn_mc_f2p01_brier_150KE_lr2e02",
                            1: "20180426_14_13_46_dcnn_mc_f1p01_brier_150KE_lr2e02",
                            0: "20180418_15_02_05_dcnn_mcv1_150000E_lr2e02"}
+
+        self.exper_dict_softdice = {3: "20180630_10_26_32_dcnn_mc_f3p01_150KE_lr2e02",
+                             2: "20180630_10_27_07_dcnn_mc_f2p01_150KE_lr2e02",
+                             1: "20180629_11_28_29_dcnn_mc_f1p01_150KE_lr2e02",
+                             0: "20180629_10_33_08_dcnn_mc_f0p01_150KE_lr2e02"}
+
+        self.exper_dict_centropy = {3: "20180703_18_15_22_dcnn_mc_f3p01_entrpy_150KE_lr2e02",
+                             2: "20180703_18_11_10_dcnn_mc_f2p01_entrpy_150KE_lr2e02",
+                             1: "20180703_18_13_51_dcnn_mc_f1p01_entrpy_150KE_lr2e02",
+                             0: "20180703_18_09_33_dcnn_mc_f0p01_entrpy_150KE_lr2e02"}
         # remember to ADD env variable REPO_PATH on machine. REPO_PATH=<absolute path to repository >
         self.root_dir = self.get_rootpath()
         self.data_dir = os.path.join(self.root_dir, "data/Folds/")

@@ -240,3 +240,5 @@ class ExperHandlerEnsemble(object):
         ReferralResults(self.exper_dict, referral_thresholds, print_results=False,
                         fold=None, slice_filter_type=None, use_entropy_maps=use_entropy_maps)
 
+        # org_dice = np.concatenate((np.expand_dims(ref_result_obj.org_dice_stats[referral_threshold][0][0], axis=0),
+        #                           np.expand_dims(ref_result_obj.org_dice_stats[referral_threshold][1][0], axis=0)))

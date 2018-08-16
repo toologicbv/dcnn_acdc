@@ -114,7 +114,7 @@ class SpatialPyramidPoolLayer(nn.Module):
         self.num_of_levels = num_of_levels
         self.pool_type = pool_type
 
-    def forward(self, x_in, verbose=False):
+    def forward(self, x_in, verbose=True):
 
         bs, c, h, w = x_in.size()
         pooling_layers = []
@@ -128,8 +128,9 @@ class SpatialPyramidPoolLayer(nn.Module):
             else:
                 tensor = F.avg_pool2d(x_in, kernel_size=kernel_size,
                                       stride=stride).view(bs, -1)
-            if verbose:
-                print("SpatialPyramidPoolLayer - forward - tensor.size.out ", tensor.size())
             pooling_layers.append(tensor)
+
         x = torch.cat(pooling_layers, dim=-1)
+        if verbose:
+            print("SpatialPyramidPoolLayer - forward - x.size.out ", x.size())
         return x

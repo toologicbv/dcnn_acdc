@@ -3,7 +3,6 @@ import torch
 import numpy as np
 
 from common.dslices.parsing import do_parse_args, config
-from common.dslices.helper import create_experiment
 
 from utils.dslices.experiment import Experiment as ExperimentSD
 from utils.dslices.exper_handler import ExperimentHandler as ExperHandlerSD
@@ -20,7 +19,7 @@ def training(args):
     :return:
     """
     # first get experiment from segmentation run
-    seg_exper_dict = ExperHandlerEnsemble(config.exper_dict)
+    seg_exper_dict = ExperHandlerEnsemble(args.exper_dict)
     seg_exper_hdl = seg_exper_dict.seg_exper_handlers[args.fold_id]
     exper_hdl = ExperHandlerSD()
     exper_hdl.set_exper(ExperimentSD(config, seg_exper=seg_exper_hdl.exper, run_args=args), use_logfile=True)
