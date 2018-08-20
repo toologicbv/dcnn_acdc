@@ -10,6 +10,7 @@ from utils.dslices.exper_handler import ExperHandlerEnsemble
 from utils.dslices.batch_handler import BatchHandler as BatchHandlerSD
 from in_out.load_data import ACDC2017DataSet
 from models.model_handler import save_checkpoint, load_slice_detector_model
+from in_out.dataset_slice_detector import create_dataset
 
 
 def training(args):
@@ -30,6 +31,8 @@ def training(args):
                               fold_ids=seg_exper_hdl.exper.run_args.fold_ids, preprocess=False,
                               debug=exper_hdl.exper.run_args.quick_run, do_augment=False,
                               incomplete_only=False)
+    exper_hdl.logger.info("INFO - Creating dataset for slice detection. This may take a while, be patient!")
+    sd_dataset = create_dataset(dataset, seg_exper_dict, type_of_map="u_map")
     # Load model. In the same procedure the model is assigned to the CPU or GPU
     sd_vgg_model = load_slice_detector_model(exper_hdl)
 
@@ -42,16 +45,15 @@ def training(args):
                             exper_hdl.exper.run_args.batch_size,
                             exper_hdl.exper.batches_per_epoch))
 
-    new_batch = BatchHandlerSD(fold_id=args.fold_id, exper_ensemble=seg_exper_dict,
-                               data_set=dataset, cuda=args.cuda)
+    new_batch = BatchHandlerSD(data_set=sd_dataset, is_train=True, cuda=args.cuda)
     for epoch_id in range(exper_hdl.exper.run_args.epochs):
         exper_hdl.next_epoch()
         # in order to store the 2 mean dice losses (ES/ED)
         losses = np.zeros(exper_hdl.exper.batches_per_epoch)
         start_time = time.time()
-        for x_input, y_lbl in new_batch(batch_size=args.batch_size, backward_freq=1):
-            loss = sd_vgg_model.do_train(x_input, y_lbl, new_batch)
-            print("Epoch ID: {} loss {:.3f}".format(exper_hdl.exper.epoch_id,
+        x_input, y_lbl = new_batch(batch_size=args.batch_size, backward_freq=1)
+        loss = sd_vgg_model.do_train(x_input, y_lbl, new_batch)
+        print("Epoch ID: {} loss {:.3f}".format(exper_hdl.exper.epoch_id,
                                                     loss.item()))
 
 

@@ -216,6 +216,11 @@ class ExperHandlerEnsemble(object):
         self.seg_exper_handlers = {}
         self.exper_dict = exper_dict
         self.patient_fold = {}
+        # we will load the corresponding object from the ReferralResults because they also contain the
+        # non-referral dice scores per slice per patient. We use a "dummy" referral_threshold of 0.001
+        # but any other available will also do the job. Object is assigned in load_dice_without_referral method
+        # below.
+        self.dice_score_slices = None
         for exper_id in exper_dict.values():
             exp_handler = create_experiment(exper_id)
             exp_handler.get_testset_ids()
@@ -227,18 +232,17 @@ class ExperHandlerEnsemble(object):
     def get_patient_fold_id(self, patient_id):
         return self.patient_fold[patient_id]
 
-    def load_dice_without_referral(self, type_of_map="u_map", referral_thresholds=[0.001]):
+    def load_dice_without_referral(self, type_of_map="u_map", referral_threshold=0.001):
         """
         :param type_of_map:
-        :param referral_thresholds:
+        :param referral_threshold:
         :return:
         """
         if type_of_map == "entropy":
             use_entropy_maps = True
         else:
             use_entropy_maps = False
-        ReferralResults(self.exper_dict, referral_thresholds, print_results=False,
-                        fold=None, slice_filter_type=None, use_entropy_maps=use_entropy_maps)
 
-        # org_dice = np.concatenate((np.expand_dims(ref_result_obj.org_dice_stats[referral_threshold][0][0], axis=0),
-        #                           np.expand_dims(ref_result_obj.org_dice_stats[referral_threshold][1][0], axis=0)))
+        ref_result_obj = ReferralResults(self.exper_dict, [referral_threshold], print_results=False,
+                                         fold=None, slice_filter_type=None, use_entropy_maps=use_entropy_maps)
+        self.dice_score_slices = ref_result_obj.org_dice_slices[referral_threshold]

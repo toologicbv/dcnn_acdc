@@ -904,12 +904,17 @@ class ExperimentHandler(object):
         if do_save:
             print("INFO - Saved all entropy maps to {}".format(output_dir))
 
-    def get_entropy_maps(self):
+    def get_entropy_maps(self, patient_id=None):
         self.entropy_maps = OrderedDict()
         input_dir = os.path.join(self.exper.config.root_dir,
                                   os.path.join(self.exper.output_dir, config.u_map_dir))
+        search_suffix = "_entropy_map.npz"
+        if patient_id is None:
+            search_mask = "*" + search_suffix
+        else:
+            search_mask = patient_id + search_suffix
 
-        search_path = os.path.join(input_dir, "*" + "_entropy_map.npz")
+        search_path = os.path.join(input_dir, search_mask)
         if len(glob.glob(search_path)) == 0:
             self.create_entropy_maps(do_save=True)
         for fname in glob.glob(search_path):

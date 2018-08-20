@@ -1,5 +1,4 @@
 import os
-import torchvision
 import socket
 
 
@@ -70,6 +69,8 @@ class BaseConfig(object):
         self.class_lbl_myocardium = 1
         self.class_lbl_bloodpool = 2
 
+        # dice score threshold to identify "degenerate" slices (bad segmentations)
+        self.dice_threshold = 0.7
         # noise threshold
         self.noise_threshold = 0.01
 
@@ -123,7 +124,7 @@ class BaseConfig(object):
         else:
             raise ValueError("ERROR - {} is an unknown base model.".format(base_model))
 
-        self.architecture["num_of_spp_levels"] = 3
+        self.architecture["spp_pyramid"] = [4, 2, 1]
         self.architecture["num_of_classes"] = 2
         self.architecture["drop_percentage"] = 0.5
         self.architecture["weight_decay"] = 0.0001

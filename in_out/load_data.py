@@ -193,12 +193,13 @@ class ACDC2017DataSet(BaseImageDataSet):
         self.train_img_slice_ids = []
         # mean width, height, #slices per image
         self.img_stats = np.zeros(3)
+        self.img_slice_stats = {}
         self.train_spacings = []
         self.val_images = []
         self.val_labels = []
         self.val_img_slice_ids = []
         # patient_ids in the validation/test set
-        self.val_image_names = {}
+        self.val_image_names = []
         # the actual number of slices in val_images
         self.val_num_slices = 0
         self.val_spacings = []
@@ -277,6 +278,11 @@ class ACDC2017DataSet(BaseImageDataSet):
             mri_scan_ed, origin, spacing = self.load_func(img_file, data_type=ACDC2017DataSet.pixel_dta_type,
                                                           swap_axis=True)
             self.img_stats += mri_scan_ed.shape
+            num_of_slices = mri_scan_ed.shape[-1]
+            if num_of_slices in self.img_slice_stats.keys():
+                self.img_slice_stats[num_of_slices] += 1
+            else:
+                self.img_slice_stats[num_of_slices] = 1
             # ed_abs_file_name = os.path.dirname(img_file)  # without actual filename, just directory
             ed_file_name = os.path.splitext(os.path.basename(img_file))[0]
             # print("ED: Image file-name {}".format(es_file_name))
@@ -284,7 +290,7 @@ class ACDC2017DataSet(BaseImageDataSet):
             patientID = ed_file_name[:ed_file_name.find("_")]
             self.image_names.append(patientID)
             if not is_train:
-                self.val_image_names[patientID] = int(patientID.strip("patient"))
+                self.val_image_names.append(patientID)
             self.trans_dict[patientID] = self.num_of_images
             # print("INFO - Loading ES-file {}".format(img_file))
             reference_ed, origin, spacing = self.load_func(ref_file, data_type=ACDC2017DataSet.pixel_dta_type,
@@ -332,7 +338,7 @@ class ACDC2017DataSet(BaseImageDataSet):
         self.img_stats = self.img_stats.astype(np.int16)
         if self.incomplete_only:
             print("WARNING - Loading only images WITH INCOMPLETE slices (missing RV/MYO or LV)")
-        print("INFO - Using folds {} - loaded {} files: {} slices in train set, {} slices in validation set".format(
+        print("INFO - Using folds {} - loaded {} files: {} studies in train set, {} studies in validation set".format(
             self.fold_ids, files_loaded, self.train_num_slices, self.val_num_slices))
         print("INFO - Mean width/height/#slices per image {}/{}/{}".format(self.img_stats[0], self.img_stats[1],
                                                                            self.img_stats[2]))

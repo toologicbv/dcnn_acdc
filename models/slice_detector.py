@@ -3,24 +3,44 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
-
+import numpy as np
 from config.config import OPTIMIZER_DICT
 
 
 class DegenerateSliceDetector(nn.Module):
 
-    def __init__(self, architecture, lr=0.02, init_weights=True):
+    def __init__(self, architecture, lr=0.02, init_weights=True, verbose=False):
         super(DegenerateSliceDetector, self).__init__()
-        self.num_of_spp_levels = architecture["num_of_spp_levels"]
+        self.verbose = verbose
+        self.spp_pyramid = architecture["spp_pyramid"]
         self.num_of_classes = architecture["num_of_classes"]
         self.drop_perc = architecture["drop_percentage"]
         self.weight_decay = architecture["weight_decay"]
         self.sgd_optimizer = architecture["optimizer"]
+        # We assume that the last conv-block has this number of channels (could be more dynamic, yes)
+        self.channels_last_layer = 512
+        # compute the fixed length of the vector representation after the SPP layer
+        # total num of parameters = "num of channels last conv-layer" * num_of_spatial_bins
+        # how to calculate number of spatial bins
+        # spp_pyramid is assumed to be an array e.g. [4, 2, 1] which results in a pyramid of
+        # {4x4, 2x2, 1x1} which is equal to 16+4+1 = 21 bins
+        # see SPP paper for details: https://arxiv.org/abs/1406.4729
+        fc_no_params = self.channels_last_layer * np.sum(np.array(self.spp_pyramid)**2)
         model_name = getattr(torchvision.models, architecture["base_model"])
         self.base_model = model_name(pretrained=False)
+        # Begin exchange last MaxPool layer
+        # print("Last feature layer: ", self.base_model.features[-1].__class__.__name__)
+        # need to convert nn.Sequential back into list object, in order to exchange module
+        features = list(self.base_model.features)
+        del features[-1]
+        features += [SpatialPyramidPoolLayer(spp_pyramid=self.spp_pyramid, pool_type="max_pool",
+                                             verbose=self.verbose)]
+        self.base_model.features = nn.Sequential(*features)
+        del features
+        # End exchange last MaxPool2d layer
+        # Create classifier sequential module
         self.base_model.classifier = nn.Sequential(
-            SpatialPyramidPoolLayer(num_of_levels=self.num_of_spp_levels, pool_type="max_pool"),
-            nn.Linear(24064, 4096),
+            nn.Linear(fc_no_params, 4096),
             nn.ReLU(True),
             nn.Dropout(p=self.drop_perc),
             nn.Linear(4096, 4096),
@@ -28,6 +48,8 @@ class DegenerateSliceDetector(nn.Module):
             nn.Dropout(p=self.drop_perc),
             nn.Linear(4096, self.num_of_classes),
         )
+        if self.verbose:
+            print(self.base_model)
         self.softmax_layer = nn.Softmax(dim=1)
         self.log_softmax_layer = nn.LogSoftmax(dim=1)
         self.loss_function = nn.NLLLoss()
@@ -103,7 +125,7 @@ class DegenerateSliceDetector(nn.Module):
 
 class SpatialPyramidPoolLayer(nn.Module):
 
-    def __init__(self, num_of_levels=3, pool_type='max_pool'):
+    def __init__(self, spp_pyramid=[4, 2, 1], pool_type='max_pool', verbose=False):
         """
         num_of_levels: number of pooling levels
         pool_type: max- or average pooling is supported
@@ -111,26 +133,42 @@ class SpatialPyramidPoolLayer(nn.Module):
         returns: a tensor vector with shape [1 x n] is the concentration of multi-level pooling
         """
         super(SpatialPyramidPoolLayer, self).__init__()
-        self.num_of_levels = num_of_levels
+        self.spp_pyramid = spp_pyramid
         self.pool_type = pool_type
+        self.verbose = verbose
 
-    def forward(self, x_in, verbose=True):
+    def forward(self, x_in):
 
         bs, c, h, w = x_in.size()
+
         pooling_layers = []
-        for i in range(self.num_of_levels):
-            level = 2 ** i
+        for i in range(len(self.spp_pyramid)):
+            level = self.spp_pyramid[i]
             kernel_size = (math.ceil(h / level), math.ceil(w / level))
             stride = (math.floor(h / level), math.floor(w / level))
+            padding = (math.floor((kernel_size[0] * level - h + 1) / 2),
+                       math.floor((kernel_size[1] * level - w + 1) / 2))
             if self.pool_type == 'max_pool':
                 tensor = F.max_pool2d(x_in, kernel_size=kernel_size,
-                                      stride=stride).view(bs, -1)
+                                      stride=stride, padding=padding).view(bs, -1)
             else:
                 tensor = F.avg_pool2d(x_in, kernel_size=kernel_size,
-                                      stride=stride).view(bs, -1)
+                                      stride=stride, padding=padding).view(bs, -1)
             pooling_layers.append(tensor)
+            if self.verbose:
+                print("Input [c, h, w] [{}, {}, {}] tensor.out [{}]".format(c, h, w, tensor.size(1)))
 
         x = torch.cat(pooling_layers, dim=-1)
-        if verbose:
+        if self.verbose:
             print("SpatialPyramidPoolLayer - forward - x.size.out ", x.size())
         return x
+
+    def extra_repr(self):
+        r"""Set the extra representation of the module
+
+        To print customized extra information, you should reimplement
+        this method in your own modules. Both single-line and multi-line
+        strings are acceptable.
+        """
+        pyramid_str = "[" + ",".join([str(i) for i in self.spp_pyramid]) + "]"
+        return "pool-type=" + self.pool_type + ", num-of-levels=" + pyramid_str
