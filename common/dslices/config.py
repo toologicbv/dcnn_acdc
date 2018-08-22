@@ -75,7 +75,7 @@ class BaseConfig(object):
         self.noise_threshold = 0.01
 
         # validation settings, of running on GPU with low RAM we choose a smaller val set size
-        if socket.gethostname() == "qiaubuntu" or socket.gethostname() == "toologic-ubuntu2":
+        if socket.gethostname() == "toologic-ubuntu2":
             self.val_set_size = 128
             self.val_batch_size = 16
         else:

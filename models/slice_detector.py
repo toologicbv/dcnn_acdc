@@ -53,6 +53,7 @@ class DegenerateSliceDetector(nn.Module):
         self.softmax_layer = nn.Softmax(dim=1)
         self.log_softmax_layer = nn.LogSoftmax(dim=1)
         self.loss_function = nn.NLLLoss()
+
         if self.sgd_optimizer == "sparse_adam":
             self.optimizer = OPTIMIZER_DICT[self.sgd_optimizer](
                 self.parameters(), lr=lr)
@@ -87,29 +88,25 @@ class DegenerateSliceDetector(nn.Module):
 
         return out
 
-    def get_loss(self, pred, lbls, average=False):
+    def get_loss(self, output, lbls, average=False):
         # The input given through a forward call is expected to contain log-probabilities of each class
-
-        b_loss = self.loss_function(pred, lbls)
+        b_loss = self.loss_function(output["log_softmax"], lbls)
+        ones = torch.ones(lbls.size(0))
+        ones = ones.cuda()
+        fp_soft = torch.mean((ones - lbls.float()) * output["softmax"][:, 1])
+        fn_soft = torch.mean(output["softmax"][:, 0] * lbls.float())
+        # print("fp_soft, fn_soft ", fp_soft.item(), fn_soft.item())
+        # b_loss = b_loss + (0.1 * fn_soft) + fp_soft
         if average:
             # assuming first dim contains batch dimension
             b_loss = torch.mean(b_loss, dim=0)
         return b_loss
 
-    def do_train(self, x_in, y_lbl, batch, verbose=False):
-        out = self(x_in)
-        loss = self.get_loss(out["log_softmax"], y_lbl, average=False)
-        batch.add_loss(loss)
-        if batch.do_backward:
-            self.zero_grad()
-            batch.mean_loss()
-            # print("do_train - loss {:.3f}".format(batch.loss.item()))
-            batch.loss.backward(retain_graph=False)
-            self.optimizer.step()
-            if verbose:
-                print("do_train - sum-grads {:.3f}".format(self.sum_grads()))
-            batch.reset()
-        return loss
+    def do_forward_pass(self, x_input, y_labels):
+        out = self(x_input)
+        loss = self.get_loss(out, y_labels, average=False)
+
+        return loss, out["softmax"]
 
     def sum_grads(self, verbose=False):
         sum_grads = 0.

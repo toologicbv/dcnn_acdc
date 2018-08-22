@@ -5,31 +5,35 @@ import numpy as np
 class BatchHandler(object):
 
     def __init__(self, data_set, is_train=True, cuda=False):
+        """
+            data_set  of object type SliceDetectorDataSet
 
+        """
         self.cuda = cuda
         self.is_train = is_train
-        self.images = None
-        self.labels = None
-        self.patient_ids = None
-        self.number_of_images = 0
-        self._prepare(data_set)
+        self.number_of_patients = data_set.get_size(is_train=is_train)
+        self.data_set = data_set
         self.loss = torch.zeros(1)
         self.num_sub_batches = torch.zeros(1)
         self.backward_freq = None
+        self.current_patient_id = None
+        if not is_train:
+            self.patient_ids = data_set.get_patient_ids(is_train=False)
+            self.item_num = 0
+        else:
+            self.patient_ids = None
+            self.item_num = None
+
         if self.cuda:
             self.loss = self.loss.cuda()
             self.num_sub_batches = self.num_sub_batches.cuda()
 
-    def _prepare(self, data_set):
-        if self.is_train:
-            self.images = data_set.train_images
-            self.labels = data_set.train_labels
-
-        else:
-            self.images = self.data_set.test_images
-            self.labels = self.data_set.test_labels
-        self.patient_ids = self.images.keys()
-        self.number_of_images = len(self.patient_ids)
+    def next_patient_id(self):
+        if self.item_num == self.number_of_patients:
+            self.item_num = 0
+        patient_id = self.patient_ids[self.item_num]
+        self.item_num += 1
+        return patient_id
 
     def add_loss(self, loss):
         self.num_sub_batches += 1
@@ -53,37 +57,61 @@ class BatchHandler(object):
         else:
             return True
 
-    def __call__(self, batch_size=2, backward_freq=None):
+    def __call__(self, batch_size=None, backward_freq=None, patient_id=None):
         """
-        Construct a batch of shape [batch_size, w, h, 3channels]
+        Construct a batch of shape [batch_size, 3channels, w, h]
                                    3channels: (1) input image
                                               (2) predicted segmentation mask
                                               (3) generated (raw/unfiltered) u-map/entropy map
 
         :param batch_size:
-        :return:
+        :param patient_id: if not None than we use all slices
+        :return: input batch and corresponding references
         """
-        if batch_size % 2 != 0:
-            raise ValueError("ERROR - Batch size must be multiple of 2. Got {}".format(batch_size))
         self.backward_freq = backward_freq
-        half_batch = batch_size / 2
-        item_num = np.random.randint(low=0, high=self.number_of_images, size=1)[0]
-        patient_id = self.patient_ids[item_num]
-        image = self.images[patient_id]
-        print(image.shape)
-        labels = self.labels[patient_id]
-        num_of_slices = image.shape[4]
-        if half_batch > num_of_slices:
-            batch_size = image.shape[4]
-            half_batch = batch_size / 2
-        # get half of batch size from ES and the other from ED
-        slice_idx_es = np.random.randint(low=0, high=num_of_slices, size=(half_batch,))
-        slice_idx_ed = np.random.randint(low=0, high=num_of_slices, size=(half_batch,))
-        es_img_slices = image[0, :, :, :, slice_idx_es]
-        es_label_slices = labels[0, slice_idx_es]
-        ed_img_slices = image[1, :, :, :, slice_idx_ed]
-        ed_label_slices = labels[1, slice_idx_ed]
-        print("ed_img_slices.shape ", ed_img_slices.shape)
+        if self.is_train:
+            # (1) Sample ONE patient ID
+            if patient_id is None:
+                item_num = np.random.randint(low=0, high=self.number_of_patients, size=1)[0]
+                patient_id = self.data_set.get_patient_ids(is_train=self.is_train)[item_num]
+        else:
+            # testing or validation
+            if patient_id is None:
+                patient_id = self.next_patient_id()
+        self.current_patient_id = patient_id
+        # IMPORTANT:
+        # REMEMBER. the dataset contains input tensors of shape [2, 3channels, w, h, #slices]
+        #           WHEREAS the label object of dataset has shape [2, #slices] (binary encoding)
+        input_3c, label = self.data_set.get(patient_id, self.is_train)
+        num_of_slices = int(input_3c.shape[0])
+        # if batch_size is None we set it to the total number of slices for ES/ED
+        # This can happen during testing/validation
+        if batch_size is None:
+            batch_size = num_of_slices
+        if num_of_slices < batch_size:
+            # reduce batch size
+            batch_size = num_of_slices
+            # print("WARNING - #slices {} - new batch-size {}".format(num_of_slices, batch_size))
+
+        # (2) Sample half of batch size from ES and the other from ED image slices
+        if self.is_train:
+            slice_idx = np.random.randint(low=0, high=num_of_slices, size=(batch_size,))
+        else:
+            # testing or validation: we take all slices for this patient
+            slice_idx = np.arange(int(num_of_slices))
+        # image shape: [#slices, 3channels, w, h] and we sample a couple of slices (batch-size)
+        #              The result is [batch-size, 3channels, w, h]
+        img_slices = input_3c[slice_idx, :, :, :]
+        # we need to reshape the input from [3, w, h, batch-size] to [batch-size, 3, w, h]
+        # img_slices = np.reshape(img_slices, (img_slices.shape[3], img_slices.shape[0], img_slices.shape[1],
+        #                                     img_slices.shape[2]))
+        label_slices = label[slice_idx]
+        # concatenate along dim0 = batch dimension
+        # x_batch = np.concatenate((es_img_slices, ed_img_slices), axis=0)
+        x_batch = torch.FloatTensor(torch.from_numpy(img_slices).float())
+        # y_batch = np.concatenate((es_label_slices, ed_label_slices), axis=0)
+        y_batch = torch.LongTensor(torch.from_numpy(label_slices).long())
+        # print("x_batch.shape ", x_batch.shape)
         if self.cuda:
             x_batch = x_batch.cuda()
             y_batch = y_batch.cuda()

@@ -3,8 +3,6 @@ import os
 
 from datetime import datetime
 from pytz import timezone
-from common.common import create_exper_label
-
 
 class Experiment(object):
 
@@ -46,10 +44,13 @@ class Experiment(object):
                 # one extra run because max epoch is not divided by val_freq
                 self.num_val_runs += 1
         self.epoch_stats = {'lr': np.zeros(self.run_args.epochs),
-                            'mean_loss': np.zeros(self.run_args.epochs),
-                            'mean_reg_loss': np.zeros(self.run_args.epochs)}
+                            'loss': np.zeros(self.run_args.epochs)}
         self.val_stats = {'epoch_ids': np.zeros(self.num_val_runs),
-                          'mean_loss': np.zeros(self.num_val_runs)}
+                          'loss': np.zeros(self.num_val_runs),
+                          'f1': np.zeros(self.num_val_runs),
+                          'roc_auc': np.zeros(self.num_val_runs),
+                          'pr_auc': np.zeros(self.num_val_runs),
+                          'acc': np.zeros(self.num_val_runs)}
 
     def get_loss(self, validation=False):
 
@@ -114,7 +115,7 @@ class Experiment(object):
             raise ValueError("ERROR - {} as loss functional is not supported!".format(seg_exper.run_args.loss_function))
 
         prob = "p" + str(seg_exper.run_args.drop_prob).replace(".", "")
-        prob += "_" + loss_func_name
+        prob += "_" + loss_func_name + "_" + self.run_args.type_of_map.replace("_", "")
         exper_label = self.run_args.model + "_f" + str(seg_exper.run_args.fold_ids[0]) + \
                       prob + "_" + str(self.run_args.epochs / 1000) + "KE"
 

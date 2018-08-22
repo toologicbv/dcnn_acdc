@@ -1,15 +1,18 @@
 import sys
 import dill
 import os
+import time
 import shutil
 import torch
 from collections import OrderedDict
-
+import numpy as np
 from common.common import create_logger
 import models.slice_detector
 from common.dslices.config import config
 from common.dslices.helper import create_experiment
 from utils.referral_results import ReferralResults
+from utils.dslices.batch_handler import BatchHandler as BatchHandlerSD
+from utils.dslices.accuracies import compute_eval_metrics
 
 
 class ExperimentHandler(object):
@@ -36,6 +39,13 @@ class ExperimentHandler(object):
         self.referred_slices = None
         self.device = None
 
+    def set_loss(self, loss, val_run_id=None):
+
+        if val_run_id is None:
+            self.exper.epoch_stats["loss"][self.exper.epoch_id - 1] = loss
+        else:
+            self.exper.val_stats["loss"][val_run_id-1] = loss
+
     def set_exper(self, exper, use_logfile=False):
         self.exper = exper
         if use_logfile:
@@ -54,6 +64,59 @@ class ExperimentHandler(object):
         self.exper.val_run_id += 1
         self.num_val_runs += 1
         self.exper.val_stats["epoch_ids"][self.exper.val_run_id] = self.exper.epoch_id
+
+    def eval(self, data_set, model, val_set_size=None):
+        start_time = time.time()
+        # set the size of the validation set. If not passed as argument, use config setting (depends on machine)
+        # make sure it's never bigger than the actual size of the validation set
+        if val_set_size is None or val_set_size > data_set.get_size(is_train=False):
+            val_set_size = len(data_set.get_patient_ids(is_train=False))
+        self.next_val_run()
+
+        arr_val_loss = np.zeros(val_set_size)
+        arr_val_eval = np.zeros((val_set_size, 4))  # array of 2 values for f1, roc_auc, pr_auc and accuracy scores
+        # create batch object
+        val_batch = BatchHandlerSD(data_set=data_set, is_train=False, cuda=self.exper.run_args.cuda)
+        self.logger.info("---> BEGIN VALIDATION epoch {}".format(self.exper.epoch_id))
+        all_labels = []
+        all_pred_lbls = []
+        for chunk in np.arange(val_set_size):
+            # New in pytorch 0.4.0, use local context manager to turn off history tracking
+            with torch.set_grad_enabled(False):
+                x_input, y_labels = val_batch(batch_size=None, backward_freq=1)
+                val_loss, pred_probs = model.do_forward_pass(x_input, y_labels)
+            pred_labels = np.argmax(pred_probs.data.cpu().numpy(), axis=1)
+            all_labels.append(y_labels.data.cpu().numpy())
+            all_pred_lbls.append(pred_labels)
+            f1, roc_auc, pr_auc, acc = compute_eval_metrics(y_labels.data.cpu().numpy(), pred_labels)
+            arr_val_loss[chunk] = val_loss.item()
+            arr_val_eval[chunk] = np.array([f1, roc_auc, pr_auc, acc])
+            self.logger.info("GT labels")
+            self.logger.info(y_labels.data.cpu().numpy())
+            self.logger.info("Predicted labels")
+            self.logger.info(pred_labels)
+            self.logger.info("VALIDATION - patient {} - f1={:.3f} - roc_auc={:.3f} "
+                             "- pr_auc={:.3f}".format(val_batch.current_patient_id, f1, roc_auc, pr_auc))
+
+        all_labels = np.concatenate(all_labels)
+        all_pred_lbls = np.concatenate(all_pred_lbls)
+        f1, roc_auc, pr_auc, acc = compute_eval_metrics(all_labels, all_pred_lbls)
+        print(f1, roc_auc, pr_auc)
+        val_loss = np.mean(arr_val_loss)
+        # arr_val_acc *= 1./float(num_of_chunks)
+        # arr_val_dice *= 1./float(num_of_chunks)
+        self.exper.val_stats["loss"][self.num_val_runs - 1] = val_loss
+        arr_val_eval = np.mean(arr_val_eval, axis=0)
+        self.exper.val_stats["f1"][self.num_val_runs - 1] = arr_val_eval[0]
+        self.exper.val_stats["roc_auc"][self.num_val_runs - 1] = arr_val_eval[1]
+        self.exper.val_stats["pr_auc"][self.num_val_runs - 1] = arr_val_eval[2]
+        self.exper.val_stats["acc"][self.num_val_runs - 1] = arr_val_eval[3]
+        duration = time.time() - start_time
+        self.logger.info("---> END VALIDATION epoch {} - mean-f1/roc-auc/pr-auc/acc "
+                         "{:.3f}/{:.3f}/{:.3f}/{:.3f} - {:.2f} seconds".format(self.exper.epoch_id, arr_val_eval[0],
+                                                                               arr_val_eval[1], arr_val_eval[2],
+                                                                               arr_val_eval[3], duration))
+        del val_batch
 
     def save_experiment(self, file_name=None, final_run=False):
 
@@ -238,7 +301,7 @@ class ExperHandlerEnsemble(object):
         :param referral_threshold:
         :return:
         """
-        if type_of_map == "entropy":
+        if type_of_map == "e_map":
             use_entropy_maps = True
         else:
             use_entropy_maps = False
