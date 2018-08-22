@@ -17,6 +17,7 @@ class DegenerateSliceDetector(nn.Module):
         self.drop_perc = architecture["drop_percentage"]
         self.weight_decay = architecture["weight_decay"]
         self.sgd_optimizer = architecture["optimizer"]
+        self.fp_penalty_weight = architecture["fp_penalty_weight"]
         # We assume that the last conv-block has this number of channels (could be more dynamic, yes)
         self.channels_last_layer = 512
         # compute the fixed length of the vector representation after the SPP layer
@@ -91,12 +92,24 @@ class DegenerateSliceDetector(nn.Module):
     def get_loss(self, output, lbls, average=False):
         # The input given through a forward call is expected to contain log-probabilities of each class
         b_loss = self.loss_function(output["log_softmax"], lbls)
-        ones = torch.ones(lbls.size(0))
-        ones = ones.cuda()
-        fp_soft = torch.mean((ones - lbls.float()) * output["softmax"][:, 1])
-        fn_soft = torch.mean(output["softmax"][:, 0] * lbls.float())
-        # print("fp_soft, fn_soft ", fp_soft.item(), fn_soft.item())
-        # b_loss = b_loss + (0.1 * fn_soft) + fp_soft
+        # add SOFT FP and FN to the loss
+        if self.fp_penalty_weight is not None:
+            ones = torch.ones(lbls.size(0))
+            ones = ones.cuda()
+            fp_soft = (ones - lbls.float()) * output["softmax"][:, 1]
+            fp_nonzero = np.count_nonzero(fp_soft.data.cpu().numpy())
+            if fp_nonzero != 0:
+                fp_soft = torch.sum(fp_soft) * 1/float(fp_nonzero)
+            else:
+                fp_soft = torch.mean(fp_soft)
+            fn_soft = output["softmax"][:, 0] * lbls.float()
+            fn_nonzero = np.count_nonzero(fn_soft.data.cpu().numpy())
+            if fn_nonzero != 0:
+                fn_soft = torch.sum(fn_soft) * 1/float(fn_nonzero)
+            else:
+                fn_soft = torch.mean(fn_soft)
+            # print("fp_soft, fn_soft ", fp_soft.item(), fn_soft.item())
+            b_loss = b_loss + fn_soft + self.fp_penalty_weight * fp_soft
         if average:
             # assuming first dim contains batch dimension
             b_loss = torch.mean(b_loss, dim=0)

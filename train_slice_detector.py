@@ -34,7 +34,7 @@ def training(args):
                               incomplete_only=False)
     exper_hdl.logger.info("INFO - Creating dataset for slice detection. This may take a while, be patient!")
     sd_dataset = create_dataset(dataset, seg_exper_dict, type_of_map=exper_hdl.exper.run_args.type_of_map,
-                                degenerate_type="mean")
+                                degenerate_type="mean", extra_augs=1)
     exper_hdl.logger.info("INFO - Ready")
     # Load model. In the same procedure the model is assigned to the CPU or GPU
     sd_vgg_model = load_slice_detector_model(exper_hdl)
@@ -52,7 +52,7 @@ def training(args):
     for epoch_id in range(exper_hdl.exper.run_args.epochs):
         exper_hdl.next_epoch()
         start_time = time.time()
-        x_input, y_lbl = train_batch(batch_size=args.batch_size, backward_freq=1)
+        x_input, y_lbl, _ = train_batch(batch_size=args.batch_size, backward_freq=1)
         # returns cross-entropy loss (binary) and predicted probabilities [batch-size, 2] for this batch
         loss, pred_probs = sd_vgg_model.do_forward_pass(x_input, y_lbl)
         train_batch.add_loss(loss)
@@ -61,6 +61,8 @@ def training(args):
             train_batch.mean_loss()
             train_batch.loss.backward(retain_graph=False)
             sd_vgg_model.optimizer.step()
+            # grads = sd_vgg_model.sum_grads()
+            # print("---> Sum-grads {:.3f}".format(grads))
             train_batch.reset()
             exper_hdl.set_loss(loss)
         if exper_hdl.exper.run_args.val_freq != 0 and (exper_hdl.exper.epoch_id % exper_hdl.exper.run_args.val_freq == 0
@@ -82,12 +84,15 @@ def training(args):
         total_time = end_time - start_time
         if exper_hdl.exper.epoch_id % exper_hdl.exper.run_args.print_freq == 0 or \
                 exper_hdl.exper.epoch_id == exper_hdl.exper.run_args.epochs:
-            f1, roc_auc, pr_auc, acc = compute_eval_metrics(y_lbl.data.cpu().numpy(),
-                                                                  np.argmax(pred_probs.data.cpu().numpy(), axis=1))
-            print("End epoch ID: {} loss {:.3f} / f1={:.3f} / roc_auc={:.3f} / "
-                  "pr_auc={:.3f} / acc={:.3f} "
-                  "duration {:.2f} seconds".format(exper_hdl.exper.epoch_id, loss.item(), f1, roc_auc,
-                                                   pr_auc, acc, total_time))
+            np_pred_probs = pred_probs.data.cpu().numpy()
+            f1, roc_auc, pr_auc, acc, prec, rec = compute_eval_metrics(y_lbl.data.cpu().numpy(),
+                                                                       np.argmax(pred_probs.data.cpu().numpy(), axis=1),
+                                                                       np_pred_probs[:, 1])
+
+            exper_hdl.logger.info("End epoch ID: {} loss {:.3f} / f1={:.3f} / roc_auc={:.3f} / "
+                                  "pr_auc={:.3f} / acc={:.3f} / prec={:.3f} / rec={:.3f} "
+                                  "duration {:.2f} seconds".format(exper_hdl.exper.epoch_id, loss.item(), f1, roc_auc,
+                                                   pr_auc, acc, prec, rec, total_time))
 
     exper_hdl.save_experiment(final_run=True)
     del dataset
@@ -101,6 +106,7 @@ def main():
     torch.cuda.manual_seed(SEED)
     if args.cuda:
         torch.backends.cudnn.enabled = True
+        torch.backends.cudnn.deterministic = True
 
     np.random.seed(SEED)
     training(args)
@@ -110,7 +116,7 @@ if __name__ == '__main__':
     main()
 
 """
-CUDA_VISIBLE_DEVICES=1 python train_slice_detector.py --use_cuda --batch_size=10  --val_freq=10 --print_freq=5 
---fold_id=0 --quick_run --epochs=100 --model=sdvgg11_bn --lr=0.00005
+CUDA_VISIBLE_DEVICES=0 python train_slice_detector.py --use_cuda --batch_size=16  --val_freq=200 --print_freq=25 
+--epochs=2000 --model=sdvgg11_bn --lr=0.00001 --fold_id=1 --type_of_map=u_map --chkpnt
 
 """

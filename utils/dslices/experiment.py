@@ -50,7 +50,8 @@ class Experiment(object):
                           'f1': np.zeros(self.num_val_runs),
                           'roc_auc': np.zeros(self.num_val_runs),
                           'pr_auc': np.zeros(self.num_val_runs),
-                          'acc': np.zeros(self.num_val_runs)}
+                          'prec': np.zeros(self.num_val_runs),
+                          'rec': np.zeros(self.num_val_runs)}
 
     def get_loss(self, validation=False):
 

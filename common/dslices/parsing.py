@@ -7,7 +7,7 @@ def do_parse_args():
     # Training settings
     parser = argparse.ArgumentParser(description='PyTorch VGG slice detection model')
 
-    parser.add_argument('--model', default="sdvgg11_bn", choices=['sdvgg11', 'sdvgg11_bn'])
+    parser.add_argument('--model', default="sdvgg11_bn", choices=['sdvgg11', 'sdvgg11_bn', 'sdvgg16', 'sdvgg16_bn'])
     parser.add_argument('--version', type=str, default='v1')
     # basics
     parser.add_argument('--use_cuda', action='store_true', default=False,

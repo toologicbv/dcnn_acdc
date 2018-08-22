@@ -120,6 +120,10 @@ class BaseConfig(object):
             self.architecture = {"base_model": "vgg11_bn"}
         elif base_model == "sdvgg11":
             self.architecture = {"base_model": "vgg11"}
+        elif base_model == "sdvgg16_bn":
+            self.architecture = {"base_model": "vgg16_bn"}
+        elif base_model == "sdvgg16":
+            self.architecture = {"base_model": "vgg16"}
 
         else:
             raise ValueError("ERROR - {} is an unknown base model.".format(base_model))
@@ -127,8 +131,9 @@ class BaseConfig(object):
         self.architecture["spp_pyramid"] = [4, 2, 1]
         self.architecture["num_of_classes"] = 2
         self.architecture["drop_percentage"] = 0.5
-        self.architecture["weight_decay"] = 0.0001
+        self.architecture["weight_decay"] = 0.001
         self.architecture["optimizer"] = "adam"
+        self.architecture["fp_penalty_weight"] = 20  # None disables additional loss of fp_soft + fn_soft
 
 
 config = BaseConfig()

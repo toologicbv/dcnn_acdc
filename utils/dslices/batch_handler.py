@@ -82,7 +82,7 @@ class BatchHandler(object):
         # IMPORTANT:
         # REMEMBER. the dataset contains input tensors of shape [2, 3channels, w, h, #slices]
         #           WHEREAS the label object of dataset has shape [2, #slices] (binary encoding)
-        input_3c, label = self.data_set.get(patient_id, self.is_train)
+        input_3c, label, extra_label = self.data_set.get(patient_id, self.is_train)
         num_of_slices = int(input_3c.shape[0])
         # if batch_size is None we set it to the total number of slices for ES/ED
         # This can happen during testing/validation
@@ -95,17 +95,24 @@ class BatchHandler(object):
 
         # (2) Sample half of batch size from ES and the other from ED image slices
         if self.is_train:
+            # randomly select slices
             slice_idx = np.random.randint(low=0, high=num_of_slices, size=(batch_size,))
+            # randomly determine rotation: 90 * num_rotations (k-factor for np.rot90)
+            num_rotations = np.random.randint(low=0, high=3, size=(1,))[0]
         else:
             # testing or validation: we take all slices for this patient
             slice_idx = np.arange(int(num_of_slices))
+            num_rotations = 0
         # image shape: [#slices, 3channels, w, h] and we sample a couple of slices (batch-size)
         #              The result is [batch-size, 3channels, w, h]
         img_slices = input_3c[slice_idx, :, :, :]
+        if num_rotations != 0:
+            img_slices = np.rot90(img_slices, k=num_rotations, axes=(2, 3)).copy()
         # we need to reshape the input from [3, w, h, batch-size] to [batch-size, 3, w, h]
         # img_slices = np.reshape(img_slices, (img_slices.shape[3], img_slices.shape[0], img_slices.shape[1],
         #                                     img_slices.shape[2]))
         label_slices = label[slice_idx]
+        y_extra_labels = extra_label[slice_idx]
         # concatenate along dim0 = batch dimension
         # x_batch = np.concatenate((es_img_slices, ed_img_slices), axis=0)
         x_batch = torch.FloatTensor(torch.from_numpy(img_slices).float())
@@ -115,6 +122,6 @@ class BatchHandler(object):
         if self.cuda:
             x_batch = x_batch.cuda()
             y_batch = y_batch.cuda()
-        return x_batch, y_batch
+        return x_batch, y_batch, y_extra_labels
 
 

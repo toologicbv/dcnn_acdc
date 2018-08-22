@@ -73,49 +73,66 @@ class ExperimentHandler(object):
             val_set_size = len(data_set.get_patient_ids(is_train=False))
         self.next_val_run()
 
-        arr_val_loss = np.zeros(val_set_size)
-        arr_val_eval = np.zeros((val_set_size, 4))  # array of 2 values for f1, roc_auc, pr_auc and accuracy scores
+        arr_val_loss = []
+        arr_val_eval = []  # store f1, roc_auc, pr_auc, precision, recall scores
         # create batch object
         val_batch = BatchHandlerSD(data_set=data_set, is_train=False, cuda=self.exper.run_args.cuda)
         self.logger.info("---> BEGIN VALIDATION epoch {}".format(self.exper.epoch_id))
         all_labels = []
         all_pred_lbls = []
+        all_pred_probs = []
         for chunk in np.arange(val_set_size):
             # New in pytorch 0.4.0, use local context manager to turn off history tracking
             with torch.set_grad_enabled(False):
-                x_input, y_labels = val_batch(batch_size=None, backward_freq=1)
+                x_input, y_labels, _ = val_batch(batch_size=None, backward_freq=1)
                 val_loss, pred_probs = model.do_forward_pass(x_input, y_labels)
             pred_labels = np.argmax(pred_probs.data.cpu().numpy(), axis=1)
-            all_labels.append(y_labels.data.cpu().numpy())
-            all_pred_lbls.append(pred_labels)
-            f1, roc_auc, pr_auc, acc = compute_eval_metrics(y_labels.data.cpu().numpy(), pred_labels)
-            arr_val_loss[chunk] = val_loss.item()
-            arr_val_eval[chunk] = np.array([f1, roc_auc, pr_auc, acc])
+            np_pred_probs = pred_probs.data.cpu().numpy()
+            f1, roc_auc, pr_auc, acc, prec, rec = compute_eval_metrics(y_labels.data.cpu().numpy(), pred_labels,
+                                                                       np_pred_probs[:, 1])
+
+            if f1 != -1:
+                arr_val_loss.append([val_loss.item()])
+                arr_val_eval.append([np.array([f1, roc_auc, pr_auc, prec, rec])])
+                all_labels.append(y_labels.data.cpu().numpy())
+                all_pred_lbls.append(pred_labels)
+                all_pred_probs.append(np_pred_probs)
+            else:
+                self.logger.info("***WARNING*** - OMITTING validation example due to no TP")
             self.logger.info("GT labels")
             self.logger.info(y_labels.data.cpu().numpy())
             self.logger.info("Predicted labels")
             self.logger.info(pred_labels)
+            # self.logger.info(np_pred_probs[:, 1])
             self.logger.info("VALIDATION - patient {} - f1={:.3f} - roc_auc={:.3f} "
-                             "- pr_auc={:.3f}".format(val_batch.current_patient_id, f1, roc_auc, pr_auc))
-
+                             "- pr_auc={:.3f} - prec={:.3f} - rec={:.3f}".format(val_batch.current_patient_id,
+                                                                                 f1, roc_auc, pr_auc, prec, rec))
+        arr_val_loss = np.concatenate(arr_val_loss)
+        arr_val_eval = np.concatenate(arr_val_eval)
         all_labels = np.concatenate(all_labels)
         all_pred_lbls = np.concatenate(all_pred_lbls)
-        f1, roc_auc, pr_auc, acc = compute_eval_metrics(all_labels, all_pred_lbls)
-        print(f1, roc_auc, pr_auc)
-        val_loss = np.mean(arr_val_loss)
-        # arr_val_acc *= 1./float(num_of_chunks)
-        # arr_val_dice *= 1./float(num_of_chunks)
+        all_pred_probs = np.concatenate(all_pred_probs)
+        f1, roc_auc, pr_auc, acc, prec, rec = compute_eval_metrics(all_labels, all_pred_lbls, all_pred_probs[:, 1])
+        if arr_val_loss.shape[0] > 1:
+            val_loss = np.mean(arr_val_loss)
+        else:
+            val_loss = arr_val_loss[0]
+        if arr_val_eval.ndim > 1:
+            arr_val_eval = np.mean(arr_val_eval, axis=0)
         self.exper.val_stats["loss"][self.num_val_runs - 1] = val_loss
-        arr_val_eval = np.mean(arr_val_eval, axis=0)
         self.exper.val_stats["f1"][self.num_val_runs - 1] = arr_val_eval[0]
         self.exper.val_stats["roc_auc"][self.num_val_runs - 1] = arr_val_eval[1]
         self.exper.val_stats["pr_auc"][self.num_val_runs - 1] = arr_val_eval[2]
-        self.exper.val_stats["acc"][self.num_val_runs - 1] = arr_val_eval[3]
+        self.exper.val_stats["prec"][self.num_val_runs - 1] = arr_val_eval[3]
+        self.exper.val_stats["rec"][self.num_val_runs - 1] = arr_val_eval[4]
         duration = time.time() - start_time
-        self.logger.info("---> END VALIDATION epoch {} - mean-f1/roc-auc/pr-auc/acc "
-                         "{:.3f}/{:.3f}/{:.3f}/{:.3f} - {:.2f} seconds".format(self.exper.epoch_id, arr_val_eval[0],
-                                                                               arr_val_eval[1], arr_val_eval[2],
-                                                                               arr_val_eval[3], duration))
+        self.logger.info("---> END VALIDATION epoch {} - mean: f1={:.3f} - roc_auc={:.3f} "
+                         "- pr_auc={:.3f} - prec={:.3f} - rec={:.3f} "
+                         "- {:.2f} seconds".format(self.exper.epoch_id, arr_val_eval[0],
+                                                   arr_val_eval[1], arr_val_eval[2],
+                                                   arr_val_eval[3], arr_val_eval[4], duration))
+        self.logger.info("\t\t     Final computation mean: f1={:.3f} - roc_auc={:.3f} "
+                         "- pr_auc={:.3f} - prec={:.3f} - rec={:.3f}".format(f1, roc_auc, pr_auc, prec, rec))
         del val_batch
 
     def save_experiment(self, file_name=None, final_run=False):
