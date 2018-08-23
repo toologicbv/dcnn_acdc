@@ -1,5 +1,5 @@
 # dcnn_acdc project
 
-## Bayesian DCNN and SliceDetector (PyTorch 0.4.0)
-The Bayesian DCNN is not changed, except it was upgraded to pytorch 0.4.0 version. The SliceDetector VGG like network with SPP layer worked in a preliminary version. Dataset creation does not take into account unbalanced classes (degenerate versus non-degenerate slices).
+## SliceDetector (PyTorch 0.4.0)
+Working on a detector than can identify cardiac mri slices with dice score below a certain predefined threshold that could be then referred to a medical expert. Using results of Bayesian DCNN on ACDC dataset as input to the detector network which is a VGG like network with spatial pyramid pooling layer to enable processing of input slices of different sizes.
 
