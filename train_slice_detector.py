@@ -34,7 +34,7 @@ def training(args):
                               incomplete_only=False)
     exper_hdl.logger.info("INFO - Creating dataset for slice detection. This may take a while, be patient!")
     sd_dataset = create_dataset(dataset, seg_exper_dict, type_of_map=exper_hdl.exper.run_args.type_of_map,
-                                degenerate_type="mean", extra_augs=1)
+                                degenerate_type="mean", extra_augs=1, pos_label=1)
     exper_hdl.logger.info("INFO - Ready")
     # Load model. In the same procedure the model is assigned to the CPU or GPU
     sd_vgg_model = load_slice_detector_model(exper_hdl)
@@ -119,4 +119,7 @@ if __name__ == '__main__':
 CUDA_VISIBLE_DEVICES=0 python train_slice_detector.py --use_cuda --batch_size=16  --val_freq=200 --print_freq=25 
 --epochs=2000 --model=sdvgg11_bn --lr=0.00001 --fold_id=1 --type_of_map=u_map --chkpnt
 
+
+CUDA_VISIBLE_DEVICES=0 nohup python train_slice_detector.py --use_cuda --batch_size=8  --val_freq=200 --print_freq=100 
+--epochs=6000 --model=sdvgg11_bn --lr=0.00001 --fold_id=3 --type_of_map=u_map --chkpnt  > /home/jorg/tmp/tr_sdvgg_f3_6000_bs8.log 2>&1&
 """

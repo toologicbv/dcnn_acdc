@@ -133,7 +133,7 @@ class BaseConfig(object):
         self.architecture["drop_percentage"] = 0.5
         self.architecture["weight_decay"] = 0.001
         self.architecture["optimizer"] = "adam"
-        self.architecture["fp_penalty_weight"] = 20  # None disables additional loss of fp_soft + fn_soft
+        self.architecture["fp_penalty_weight"] = 5  # None disables additional loss of fp_soft + fn_soft
 
 
 config = BaseConfig()

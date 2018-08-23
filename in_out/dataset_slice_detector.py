@@ -13,6 +13,7 @@ class SliceDetectorDataSet(object):
         self.test_images = OrderedDict()
         self.test_labels = OrderedDict()
         self.test_extra_labels = OrderedDict()
+        # actually "size" here is relate to number of patients
         self.size_train = 0
         self.size_test = 0
         self.train_patient_ids = None
@@ -46,18 +47,20 @@ class SliceDetectorDataSet(object):
 
 
 def create_dataset(acdc_dataset, exper_ensemble, type_of_map="u_map", referral_threshold=0.001,
-                   extra_augs=3, degenerate_type="mean"):
+                   extra_augs=1, degenerate_type="mean", pos_label=1):
 
     exper_ensemble.load_dice_without_referral(type_of_map=type_of_map, referral_threshold=0.001)
     exper_handlers = exper_ensemble.seg_exper_handlers
     # instead of using class labels 0, 1, 2, 3 for the seg-masks we will use values between [0, 1]
     labels_float = [0., 0.3, 0.6, 0.9]
+    # set negative label based on positive label
+    neg_label = 1 - pos_label
     dataset = SliceDetectorDataSet()
     # slice stats
-    t_num_slices = np.zeros((2, 2, 1))
-    t_num_deg = np.zeros((2, 2, 1))
+    t_num_slices = np.zeros((2, 2))
+    t_num_deg = np.zeros((2, 2))
     t_num_deg_pat = np.zeros(2)
-    t_num_deg_non = np.zeros((2, 2, 1))
+    t_num_deg_non = np.zeros((2, 2))
     # loop over training images
     for patient_id in tqdm(acdc_dataset.trans_dict.keys()):
         # found a degenerate slice
@@ -150,7 +153,7 @@ def create_dataset(acdc_dataset, exper_ensemble, type_of_map="u_map", referral_t
                         aug_size = 1
                     for e in np.arange(aug_size):
                         img_3dim[s_counter + e, :, :, :] = x
-                        label_slices[s_counter + e] = 1
+                        label_slices[s_counter + e] = pos_label
                         extra_label_slices[s_counter + e, 0] = phase
                         extra_label_slices[s_counter + e, 1] = s
                         extra_label_slices[s_counter + e, 2] = slice_dice
@@ -163,7 +166,7 @@ def create_dataset(acdc_dataset, exper_ensemble, type_of_map="u_map", referral_t
                 else:
                     t_num_slices[phase, stats_idx] += 1
                     img_3dim[s_counter, :, :, :] = x
-                    label_slices[s_counter] = 0
+                    label_slices[s_counter] = neg_label
                     extra_label_slices[s_counter, 0] = phase
                     extra_label_slices[s_counter, 1] = s
                     extra_label_slices[s_counter, 2] = slice_dice
@@ -186,25 +189,31 @@ def create_dataset(acdc_dataset, exper_ensemble, type_of_map="u_map", referral_t
     dataset.test_patient_ids = dataset.test_images.keys()
     perc_deg = t_num_deg[0, 0] / float(t_num_slices[0, 0])
     perc_deg_non = t_num_deg_non[0, 0] / float(t_num_slices[0, 0])
-    print("INFO - ES - train data-set stats: total {} / degenerate {:.2f} % / {:.2f} %".format(t_num_slices[0, 0, 0],
-                                                                                          perc_deg[0] * 100,
-                                                                                          perc_deg_non[0] * 100))
+
+    total_perc_deg = np.sum(t_num_deg) / float(np.sum(t_num_slices))
+    total_perc_deg_non = np.sum(t_num_deg_non) / float(np.sum(t_num_slices))
+    print("INFO - Total degenerate over ES/ED and train/test set {:.2f}% / {:.2f}%".format(total_perc_deg * 100,
+                                                                                           total_perc_deg_non * 100))
+    print(" --- ")
+    print("INFO - ES - train data-set stats: total {} / degenerate {:.2f} % / {:.2f} %".format(t_num_slices[0, 0],
+                                                                                          perc_deg * 100,
+                                                                                          perc_deg_non * 100))
     perc_deg = t_num_deg[1, 0] / float(t_num_slices[1, 0])
     perc_deg_non = t_num_deg_non[1, 0] / float(t_num_slices[1, 0])
-    print("INFO - ED - train data-set stats: total {} / degenerate {:.2f} % / {:.2f} %".format(t_num_slices[1, 0, 0],
-                                                                                          perc_deg[0] * 100,
-                                                                                          perc_deg_non[0] * 100))
+    print("INFO - ED - train data-set stats: total {} / degenerate {:.2f} % / {:.2f} %".format(t_num_slices[1, 0],
+                                                                                          perc_deg * 100,
+                                                                                          perc_deg_non * 100))
 
     perc_deg = t_num_deg[0, 1] / float(t_num_slices[0, 1])
     perc_deg_non = t_num_deg_non[0, 1] / float(t_num_slices[0, 1])
-    print("INFO - ES - test data-set stats: total {} / degenerate {:.2f} % / {:.2f} %".format(t_num_slices[0, 1, 0],
-                                                                                         perc_deg[0] * 100,
-                                                                                         perc_deg_non[0] * 100))
+    print("INFO - ES - test data-set stats: total {} / degenerate {:.2f} % / {:.2f} %".format(t_num_slices[0, 1],
+                                                                                         perc_deg * 100,
+                                                                                         perc_deg_non * 100))
     perc_deg = t_num_deg[1, 1] / float(t_num_slices[1, 1])
     perc_deg_non = t_num_deg_non[1, 1] / float(t_num_slices[1, 1])
-    print("INFO - ED - test data-set stats: total {} / degenerate {:.2f} % / {:.2f} %".format(t_num_slices[1, 1, 0],
-                                                                                              perc_deg[0] * 100,
-                                                                                              perc_deg_non[0] * 100))
+    print("INFO - ED - test data-set stats: total {} / degenerate {:.2f} % / {:.2f} %".format(t_num_slices[1, 1],
+                                                                                              perc_deg * 100,
+                                                                                              perc_deg_non * 100))
     print("INFO - Patients with degenerate slices train/test {} / {}".format(t_num_deg_pat[0], t_num_deg_pat[1]))
     return dataset
 

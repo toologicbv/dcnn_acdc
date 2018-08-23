@@ -14,7 +14,8 @@ def compute_eval_metrics(gt_labels, pred_labels, probs_pos_cls=None):
     :return:
     """
     # mean_fpr = np.linspace(0, 1, 100)
-    if np.sum(gt_labels) != 0:
+    # In case we have no TP (degenerate label=1) or no TN (degenerate label 0) we can't compute AUC measure
+    if np.sum(gt_labels) != 0 or np.sum(gt_labels) == gt_labels.shape[0]:
         # fpr, tpr, thresholds = roc_curve(gt_labels, pred_labels)
 
         if probs_pos_cls is not None:

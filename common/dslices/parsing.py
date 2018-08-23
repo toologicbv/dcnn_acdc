@@ -44,8 +44,8 @@ def do_parse_args():
     # Checkpoints and storing models
     parser.add_argument('--chkpnt', action='store_true')
     parser.add_argument('--quick_run', action='store_true')
-    parser.add_argument('--chkpnt_freq', type=int, default=1000, metavar='N',
-                        help='Checkpoint frequency (saving model state) (default: 1000)')
+    parser.add_argument('--chkpnt_freq', type=int, default=3000, metavar='N',
+                        help='Checkpoint frequency (saving model state) (default: 3000)')
 
     args = parser.parse_args()
     args.cuda = args.use_cuda and torch.cuda.is_available()
