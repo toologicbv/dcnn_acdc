@@ -57,7 +57,7 @@ class BatchHandler(object):
         else:
             return True
 
-    def __call__(self, batch_size=None, backward_freq=None, patient_id=None):
+    def __call__(self, batch_size=None, backward_freq=None, patient_id=None, do_balance=True):
         """
         Construct a batch of shape [batch_size, 3channels, w, h]
                                    3channels: (1) input image
@@ -66,6 +66,7 @@ class BatchHandler(object):
 
         :param batch_size:
         :param patient_id: if not None than we use all slices
+        :param do_balance: if True batch is balanced w.r.t. normal and degenerate slices
         :return: input batch and corresponding references
         """
         self.backward_freq = backward_freq
@@ -80,39 +81,10 @@ class BatchHandler(object):
                 patient_id = self.next_patient_id()
         self.current_patient_id = patient_id
         # IMPORTANT:
-        # REMEMBER. the dataset contains input tensors of shape [2, 3channels, w, h, #slices]
-        #           WHEREAS the label object of dataset has shape [2, #slices] (binary encoding)
-        input_3c, label, extra_label = self.data_set.get(patient_id, self.is_train)
-        num_of_slices = int(input_3c.shape[0])
-        # if batch_size is None we set it to the total number of slices for ES/ED
-        # This can happen during testing/validation
-        if batch_size is None:
-            batch_size = num_of_slices
-        if num_of_slices < batch_size:
-            # reduce batch size
-            batch_size = num_of_slices
-            # print("WARNING - #slices {} - new batch-size {}".format(num_of_slices, batch_size))
-
-        # (2) Sample half of batch size from ES and the other from ED image slices
-        if self.is_train:
-            # randomly select slices
-            slice_idx = np.random.randint(low=0, high=num_of_slices, size=(batch_size,))
-            # randomly determine rotation: 90 * num_rotations (k-factor for np.rot90)
-            num_rotations = np.random.randint(low=0, high=3, size=(1,))[0]
-        else:
-            # testing or validation: we take all slices for this patient
-            slice_idx = np.arange(int(num_of_slices))
-            num_rotations = 0
-        # image shape: [#slices, 3channels, w, h] and we sample a couple of slices (batch-size)
-        #              The result is [batch-size, 3channels, w, h]
-        img_slices = input_3c[slice_idx, :, :, :]
-        if num_rotations != 0:
-            img_slices = np.rot90(img_slices, k=num_rotations, axes=(2, 3)).copy()
-        # we need to reshape the input from [3, w, h, batch-size] to [batch-size, 3, w, h]
-        # img_slices = np.reshape(img_slices, (img_slices.shape[3], img_slices.shape[0], img_slices.shape[1],
-        #                                     img_slices.shape[2]))
-        label_slices = label[slice_idx]
-        y_extra_labels = extra_label[slice_idx]
+        # REMEMBER. the dataset contains input tensors of shape [3channels, w, h, #slices]
+        #           WHEREAS the label object of dataset has shape [#slices] (binary encoding)
+        img_slices, label_slices, additional_labels, batch_size = self.determine_slices(patient_id,
+                                                                                        do_balance, batch_size)
         # concatenate along dim0 = batch dimension
         # x_batch = np.concatenate((es_img_slices, ed_img_slices), axis=0)
         x_batch = torch.FloatTensor(torch.from_numpy(img_slices).float())
@@ -122,6 +94,62 @@ class BatchHandler(object):
         if self.cuda:
             x_batch = x_batch.cuda()
             y_batch = y_batch.cuda()
-        return x_batch, y_batch, y_extra_labels
+        return x_batch, y_batch, additional_labels
 
+    def determine_slices(self, patient_id, do_balance, batch_size):
+        input_3c, label, extra_label = self.data_set.get(patient_id, self.is_train, do_merge_sets=not do_balance)
+        # if do_balance is TRUE the previous method returns a tuple per variable (normal-slices, degenerate slices)
+        # otherwise the method returns a concatenated numpy tensor in which the first dim is #slices per object
+        if do_balance:
+            half_batch_size = batch_size / 2
+            num_of_slices = int(input_3c[0].shape[0])
+            deg_num_of_slices = int(input_3c[1].shape[0])
+            # print("INFO - #slices {}/{}".format(num_of_slices, deg_num_of_slices))
+            if self.is_train:
+                # currently assuming that batch_size = 2
+                slice_ids = np.random.randint(low=0, high=num_of_slices, size=half_batch_size)
+                deg_slice_ids = np.random.randint(low=0, high=deg_num_of_slices, size=half_batch_size)
+            else:
+                # during testing we make sure all degenrate slices are selected and the batch is adjusted on this size
+                # furthermore we select the "normal" slices randomly.
+                batch_size = int(2 * deg_num_of_slices)
+                slice_ids = np.random.randint(low=0, high=num_of_slices, size=deg_num_of_slices)
+                deg_slice_ids = np.arange(deg_num_of_slices)
+            # image shape: [#slices, 3channels, w, h] and we sample a couple of slices (batch-size)
+            #              The result is [batch-size, 3channels, w, h]
+            img_slices = np.concatenate((input_3c[0][slice_ids, :, :, :], input_3c[1][deg_slice_ids, :, :, :]), axis=0)
+            label_slices = np.concatenate((label[0][slice_ids], label[1][deg_slice_ids]), axis=0)
+            additional_labels = np.concatenate((extra_label[0][slice_ids], extra_label[1][deg_slice_ids]), axis=0)
+        else:
+            # We don't balance the batch. Hence for training we just randomly pick the slices
+            # and for testing we take all slices of this patient id
+            # input3c is of shape [#slices, 3, w, h]
+            num_of_slices = int(input_3c.shape[0])
+            # if batch_size is None we set it to the total number of slices for ES/ED
+            # This can happen during testing/validation
+            if batch_size is None:
+                batch_size = num_of_slices
+            if num_of_slices < batch_size:
+                # reduce batch size
+                batch_size = num_of_slices
+            if self.is_train:
+                slice_ids = np.random.randint(low=0, high=num_of_slices, size=batch_size)
+            else:
+                # during testing we take the complete volume
+                slice_ids = np.arange(int(num_of_slices))
+            img_slices = input_3c[slice_ids]
+            label_slices = label[slice_ids]
+            additional_labels = extra_label[slice_ids]
 
+        if self.is_train:
+            # randomly determine rotation: 90 * num_rotations (k-factor for np.rot90)
+            num_rotations = np.random.randint(low=0, high=3, size=(1,))[0]
+        else:
+            # testing or validation: we take all slices for this patient
+            slice_idx = np.arange(int(num_of_slices))
+            num_rotations = 0
+
+        if num_rotations != 0:
+            img_slices = np.rot90(img_slices, k=num_rotations, axes=(2, 3)).copy()
+
+        return img_slices, label_slices, additional_labels, batch_size

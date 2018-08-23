@@ -7,11 +7,17 @@ from tqdm import tqdm
 class SliceDetectorDataSet(object):
 
     def __init__(self):
+        # The key of the dictionaries is patient_id. Each entry contains another dictionary with 2 keys,
+        # that is (1) normal slices key="slices" (2) degenerate slices key="deg_slices"
+        # the 2nd dictionary contains 2 numpy arrays of different size (because of #slices
         self.train_images = OrderedDict()
         self.train_labels = OrderedDict()
         self.train_extra_labels = OrderedDict()
+        # contain numpy array with shape [#slices, 3, w, h]
         self.test_images = OrderedDict()
+        # contain numpy array with shape [#slices]
         self.test_labels = OrderedDict()
+        # contain numpy array with shape [#slices, 4] 1) phase 2) slice id 3) mean-dice/slice 4) patient id
         self.test_extra_labels = OrderedDict()
         # actually "size" here is relate to number of patients
         self.size_train = 0
@@ -19,7 +25,14 @@ class SliceDetectorDataSet(object):
         self.train_patient_ids = None
         self.test_patient_ids = None
 
-    def get(self, patient_id, is_train=True):
+    def get(self, patient_id, is_train=True, do_merge_sets=False):
+        """
+
+        :param patient_id:
+        :param is_train:
+        :param do_merge_sets: if True, the two numpy arrays [#slices,...] are concatenated along dim0
+        :return:
+        """
         if is_train:
             image = self.train_images[patient_id]
             label = self.train_labels[patient_id]
@@ -28,6 +41,14 @@ class SliceDetectorDataSet(object):
             image = self.test_images[patient_id]
             label = self.test_labels[patient_id]
             extra_label = self.test_extra_labels[patient_id]
+        if do_merge_sets:
+            image = np.concatenate((image["slices"], image["deg_slices"]), axis=0)
+            label = np.concatenate((label["slices"], label["deg_slices"]), axis=0)
+            extra_label = np.concatenate((extra_label["slices"], extra_label["deg_slices"]), axis=0)
+        else:
+            image = tuple((image["slices"], image["deg_slices"]))
+            label = tuple((label["slices"], label["deg_slices"]))
+            extra_label = tuple((extra_label["slices"], extra_label["deg_slices"]))
         return image, label, extra_label
 
     def get_patient_ids(self, is_train=True):
@@ -47,7 +68,7 @@ class SliceDetectorDataSet(object):
 
 
 def create_dataset(acdc_dataset, exper_ensemble, type_of_map="u_map", referral_threshold=0.001,
-                   extra_augs=1, degenerate_type="mean", pos_label=1):
+                   degenerate_type="mean", pos_label=1):
 
     exper_ensemble.load_dice_without_referral(type_of_map=type_of_map, referral_threshold=0.001)
     exper_handlers = exper_ensemble.seg_exper_handlers
@@ -82,7 +103,12 @@ def create_dataset(acdc_dataset, exper_ensemble, type_of_map="u_map", referral_t
             image_num = acdc_dataset.val_image_names.index(patient_id)
             image = acdc_dataset.val_images[image_num]
             # print("Test --- patient id/image_num {}/{}".format(patient_id, image_num))
-        num_of_slices = image.shape[3]
+        # merge the first dimension ES/ED [2, w, h, #slices] to [w, h, 2*#slices]
+        image = np.concatenate((image[0], image[1]), axis=2)
+        num_of_slices = image.shape[2]
+        width = image.shape[0]
+        height = image.shape[1]
+        half_slices = num_of_slices / 2
         # image has shape [2, w, h, #slices] ES/ED
         # get fold_id, patient belongs to. we need the fold in order to retrieve the predicted seg-mask and the
         # u-map/e-map from the exper_ensemble. The results (dice) of the 75 training cases are distributed over the
@@ -109,77 +135,85 @@ def create_dataset(acdc_dataset, exper_ensemble, type_of_map="u_map", referral_t
            
             
         """
+        # merge the first dimension ES/ED [2, w, h, #slices] to [w, h, 2*#slices]
+        u_maps = np.concatenate((u_maps[0], u_maps[1]), axis=2)
         img_dice_scores = exper_ensemble.dice_score_slices[patient_id]
-        deg_slices, no_augs = determine_augmentation_factor(img_dice_scores, extra_augs=extra_augs,
-                                                            degenerate_type=degenerate_type)
-        mean_img_dices = np.mean(img_dice_scores[:, 1:, :], axis=1)
-        if not is_train:
-            no_augs = np.zeros(2)
-        total_augs = np.sum(no_augs)
-        total_slices = int((2 * num_of_slices) + total_augs)
-        img_3dim = np.zeros((total_slices, 3, image.shape[1], image.shape[2]))
-        # do the same for the labels, but we only need one position per slice
-        label_slices = np.zeros(total_slices)
-        extra_label_slices = np.zeros((total_slices, 3))  # (1) phase (2) original sliceID (3) mean-dice
-        s_counter = 0
-        # loop over ES and then ED for all slices
-        for phase in np.arange(image.shape[0]):
-            cls_offset = 4 * phase
-
+        # also merge first dimension of ES/ED img_dice_scores obj
+        img_dice_scores = np.concatenate((img_dice_scores[0], img_dice_scores[1]), axis=1)
+        deg_slices, class_count, skip_patient = determine_degenerate_slices(img_dice_scores, config.dice_threshold,
+                                                                            degenerate_type=degenerate_type)
+        if not skip_patient:
+            # we compute "again" the mean dice (without BG) for each slice, because we store this as extra label info
+            mean_img_dices = np.mean(img_dice_scores[1:, :], axis=0)
+            non_deg_num_slices = int(class_count[0])
+            deg_num_slices = int(class_count[1])
+            img_3dim = np.zeros((non_deg_num_slices, 3, width, height))
+            img_3dim_deg = np.zeros((deg_num_slices, 3, width, height))
+            # do the same for the labels, but we only need one position per slice
+            label_slices = np.zeros(non_deg_num_slices)
+            extra_label_slices = np.zeros((non_deg_num_slices, 3))  # (1) phase (2) original sliceID (3) mean-dice
+            label_slices_deg = np.zeros(deg_num_slices)
+            extra_label_slices_deg = np.zeros((deg_num_slices, 3))  # (1) phase (2) original sliceID (3) mean-dice
+            s_counter = 0
+            s_counter_deg = 0
             # loop over slices
-            for s in np.arange(image.shape[3]):
+            for s in np.arange(num_of_slices):
+                if s >= half_slices:
+                    #ED
+                    phase = 1
+                    cls_offset = pred_labels.shape[0] / 2
+                    phase_slice_counter = s - half_slices
+                else:
+                    #ES
+                    phase = 0
+                    cls_offset = 0
+                    phase_slice_counter = s
                 # merge 4 class labels into one dimesion: use labels 0, 1, 2, 3
                 # please NOTE that pred_labels has shape [8, w, h, #slices]
                 p_lbl = np.zeros((pred_labels.shape[1], pred_labels.shape[2]))
                 # loop over LV, MY and RV class (omit BG)
                 for cls in np.arange(1, pred_labels.shape[0] / 2):
-                    p_lbl[pred_labels[cls + cls_offset, :, :, s] == 1] = labels_float[cls]
+                    p_lbl[pred_labels[cls + cls_offset, :, :, phase_slice_counter] == 1] = labels_float[cls]
 
-                x = np.concatenate((np.expand_dims(image[phase, :, :, s], axis=0),
+                x = np.concatenate((np.expand_dims(image[:, :, s], axis=0),
                                           np.expand_dims(p_lbl, axis=0),
-                                          np.expand_dims(u_maps[phase, :, :, s], axis=0)), axis=0)
+                                          np.expand_dims(u_maps[:, :, s], axis=0)), axis=0)
 
                 # get indicator whether we're dealing with a degenerate slice (below dice threshold)
-                is_degenerate = deg_slices[phase, s]
-                slice_dice = mean_img_dices[phase, s]
+                is_degenerate = deg_slices[s]
+                slice_dice = mean_img_dices[s]
+                t_num_slices[phase, stats_idx] += 1
                 # if the mean dice score for this slice is equal or below threshold (0.7) then set label to 1
                 if is_degenerate:
                     pat_with_deg = True
-                    # add slice/label plus extra augmentations to balance data set
-                    # IMPORTANT:
-                    if is_train:
-                        aug_size = extra_augs + 1
-                    else:
-                        aug_size = 1
-                    for e in np.arange(aug_size):
-                        img_3dim[s_counter + e, :, :, :] = x
-                        label_slices[s_counter + e] = pos_label
-                        extra_label_slices[s_counter + e, 0] = phase
-                        extra_label_slices[s_counter + e, 1] = s
-                        extra_label_slices[s_counter + e, 2] = slice_dice
-                        t_num_slices[phase, stats_idx] += 1
-                        t_num_deg[phase, stats_idx] += 1
-                        if s != 0 and s != image.shape[3] - 1:
-                            t_num_deg_non[phase, stats_idx] += 1
-
-                    s_counter += (e + 1)
+                    t_num_deg[phase, stats_idx] += 1
+                    if s != 0 and phase_slice_counter != half_slices - 1:
+                        t_num_deg_non[phase, stats_idx] += 1
+                    img_3dim_deg[s_counter_deg, :, :, :] = x
+                    label_slices_deg[s_counter_deg] = pos_label
+                    extra_label_slices_deg[s_counter_deg, 0] = phase
+                    extra_label_slices_deg[s_counter_deg, 1] = phase_slice_counter
+                    extra_label_slices_deg[s_counter_deg, 2] = slice_dice
+                    s_counter_deg += 1
                 else:
-                    t_num_slices[phase, stats_idx] += 1
                     img_3dim[s_counter, :, :, :] = x
                     label_slices[s_counter] = neg_label
                     extra_label_slices[s_counter, 0] = phase
-                    extra_label_slices[s_counter, 1] = s
+                    extra_label_slices[s_counter, 1] = phase_slice_counter
                     extra_label_slices[s_counter, 2] = slice_dice
                     s_counter += 1
 
-        if is_train:
-            dataset.train_images[patient_id] = img_3dim
-            dataset.train_labels[patient_id] = label_slices
-            dataset.train_extra_labels[patient_id] = extra_label_slices
-        else:
-            dataset.test_images[patient_id] = img_3dim
-            dataset.test_labels[patient_id] = label_slices
-            dataset.test_extra_labels[patient_id] = extra_label_slices
+            if is_train:
+                dataset.train_images[patient_id] = {"slices": img_3dim, "deg_slices": img_3dim_deg}
+                dataset.train_labels[patient_id] = {"slices": label_slices, "deg_slices": label_slices_deg}
+                dataset.train_extra_labels[patient_id] = {"slices": extra_label_slices,
+                                                          "deg_slices": extra_label_slices_deg}
+            else:
+                dataset.test_images[patient_id] = {"slices": img_3dim, "deg_slices": img_3dim_deg}
+                dataset.test_labels[patient_id] = {"slices": label_slices, "deg_slices": label_slices_deg}
+                dataset.test_extra_labels[patient_id] = {"slices": extra_label_slices,
+                                                         "deg_slices": extra_label_slices_deg}
+        # if one of the slices is degenerate, this is True and we increase the counter for "degenerated patients"
         if pat_with_deg:
             t_num_deg_pat[stats_idx] += 1
 
@@ -218,36 +252,34 @@ def create_dataset(acdc_dataset, exper_ensemble, type_of_map="u_map", referral_t
     return dataset
 
 
-def determine_augmentation_factor(img_dices, extra_augs=3, degenerate_type="mean"):
+def determine_degenerate_slices(img_dices, dice_threshold=0.7, degenerate_type="mean"):
     """
 
-    :param img_dices: shape [2, 4classes, #slices]
-    :param extra_augs: num of extra augmentations per degenerate slice
+    :param img_dices: shape [4classes, 2*#slices] ES/ED concatenated
+    :param dice_threshold: decimal between [0, 1.] indicating the dice threshold to be used to determine a
+                           so called "degenerate" slice. Should be in config object.
     :param degenerate_type: "mean" dice score over 3 classes <= threshold (e.g. 70%)
                         OR  "any" any of the dice scores of the 3 classes is below threshold
-    :return:
+    :return: boolean vector [#slices] indicating the degenerate slices
+             class_count: shape 2, 0=#normal slices 1=#degenerate slices
     """
-    num_of_slices = img_dices.shape[2]
-    num_degenerate_augs = np.zeros(2)
-    # output matrix of shape [2, #slices]
-    deg_slices = np.zeros((img_dices.shape[0], num_of_slices))
-    # COMBAT IMBALANCES IN THE DATA SET:
-    # loop over ES/ED phases
-    for ph in np.arange(img_dices.shape[0]):
-        # img_dices has shape [2, 4, #slices], want to average over the last three classes LV, MYO, RV per slice
-        if degenerate_type == "mean":
-            mean_img_dices = np.mean(img_dices[ph, 1:, :], axis=0)
-            deg_slices[ph] = mean_img_dices <= config.dice_threshold
-        else:
-            # this results in a boolean matrix with shape [3classes, #slices]
-            b_slices = img_dices[ph, 1:, :] <= config.dice_threshold
-            # perform logical OR on axis=0 <- classes. Should result in tensor with shape [#slices]
-            deg_slices[ph] = np.any(b_slices, axis=0)
 
-        if np.any(deg_slices[ph]):
-            no_augs = np.count_nonzero(deg_slices[ph]) * extra_augs
-        else:
-            no_augs = 0
+    if degenerate_type == "mean":
+        mean_img_dices = np.mean(img_dices[1:, :], axis=0)
+        deg_slices = mean_img_dices <= dice_threshold
+    else:
+        # this results in a boolean matrix with shape [3classes, #slices]
+        b_slices = img_dices[1:, :] <= dice_threshold
+        # perform logical OR on axis=0 <- classes. Should result in tensor with shape [#slices]
+        deg_slices = np.any(b_slices, axis=0)
 
-        num_degenerate_augs[ph] = no_augs
-    return deg_slices, num_degenerate_augs
+    class_count = np.zeros(2)
+    if np.any(deg_slices):
+        skip_patient = False
+        deg_count = np.count_nonzero(deg_slices)
+        class_count[0] = deg_slices.shape[0] - deg_count
+        class_count[1] = deg_count
+    else:
+        skip_patient = True
+
+    return deg_slices, class_count, skip_patient

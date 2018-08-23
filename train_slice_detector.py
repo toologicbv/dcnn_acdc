@@ -34,7 +34,7 @@ def training(args):
                               incomplete_only=False)
     exper_hdl.logger.info("INFO - Creating dataset for slice detection. This may take a while, be patient!")
     sd_dataset = create_dataset(dataset, seg_exper_dict, type_of_map=exper_hdl.exper.run_args.type_of_map,
-                                degenerate_type="mean", extra_augs=1, pos_label=1)
+                                degenerate_type="mean", pos_label=1)
     exper_hdl.logger.info("INFO - Ready")
     # Load model. In the same procedure the model is assigned to the CPU or GPU
     sd_vgg_model = load_slice_detector_model(exper_hdl)
@@ -52,7 +52,7 @@ def training(args):
     for epoch_id in range(exper_hdl.exper.run_args.epochs):
         exper_hdl.next_epoch()
         start_time = time.time()
-        x_input, y_lbl, _ = train_batch(batch_size=args.batch_size, backward_freq=1)
+        x_input, y_lbl, _ = train_batch(batch_size=args.batch_size, backward_freq=1, do_balance=True)
         # returns cross-entropy loss (binary) and predicted probabilities [batch-size, 2] for this batch
         loss, pred_probs = sd_vgg_model.do_forward_pass(x_input, y_lbl)
         train_batch.add_loss(loss)
