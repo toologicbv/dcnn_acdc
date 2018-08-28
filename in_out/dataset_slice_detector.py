@@ -3,6 +3,8 @@ from collections import OrderedDict
 from common.dslices.config import config
 from tqdm import tqdm
 
+from in_out.load_data import ACDC2017DataSet
+
 
 class SliceDetectorDataSet(object):
 
@@ -67,9 +69,17 @@ class SliceDetectorDataSet(object):
         raise NotImplementedError()
 
 
-def create_dataset(acdc_dataset, exper_ensemble, type_of_map="u_map", referral_threshold=0.001,
-                   degenerate_type="mean", pos_label=1):
-
+def create_dataset(fold_id, exper_ensemble, type_of_map="u_map", referral_threshold=0.001,
+                   degenerate_type="mean", pos_label=1, acdc_dataset=None, logger=None, verbose=False):
+    # if acdc_dataset is None:
+    if acdc_dataset is None:
+        seg_exper_hdl = exper_ensemble.seg_exper_handlers[fold_id]
+        acdc_dataset = ACDC2017DataSet(seg_exper_hdl.exper.config,
+                                       search_mask=seg_exper_hdl.exper.config.dflt_image_name + ".mhd",
+                                       fold_ids=[fold_id], preprocess=False,
+                                       debug=seg_exper_hdl.exper.run_args.quick_run, do_augment=False,
+                                       incomplete_only=False)
+    num_of_input_chnls = 3
     exper_ensemble.load_dice_without_referral(type_of_map=type_of_map, referral_threshold=0.001)
     exper_handlers = exper_ensemble.seg_exper_handlers
     # instead of using class labels 0, 1, 2, 3 for the seg-masks we will use values between [0, 1]
@@ -124,11 +134,14 @@ def create_dataset(acdc_dataset, exper_ensemble, type_of_map="u_map", referral_t
                                                        aggregate_func="max", use_raw_maps=True,
                                                        load_ref_map_blobs=False)
             u_maps = exper_handlers[pfold_id].referral_umaps[patient_id]
-
-        else:
+        elif type_of_map == "e_map":
             # get entropy maps
             exper_handlers[pfold_id].get_entropy_maps(patient_id=patient_id)
             u_maps = exper_handlers[pfold_id].entropy_maps[patient_id]
+        else:
+            # We don't use any uncertainty map. So dimension 1 is equal to 2 instead of 2
+            num_of_input_chnls = 2
+            type_of_map = None
         """
             We construct a numpy array as input to our model with the following shape:
                 [#slices, 3channels, w, h]
@@ -136,7 +149,8 @@ def create_dataset(acdc_dataset, exper_ensemble, type_of_map="u_map", referral_t
             
         """
         # merge the first dimension ES/ED [2, w, h, #slices] to [w, h, 2*#slices]
-        u_maps = np.concatenate((u_maps[0], u_maps[1]), axis=2)
+        if type_of_map is not None:
+            u_maps = np.concatenate((u_maps[0], u_maps[1]), axis=2)
         img_dice_scores = exper_ensemble.dice_score_slices[patient_id]
         # also merge first dimension of ES/ED img_dice_scores obj
         img_dice_scores = np.concatenate((img_dice_scores[0], img_dice_scores[1]), axis=1)
@@ -147,8 +161,8 @@ def create_dataset(acdc_dataset, exper_ensemble, type_of_map="u_map", referral_t
             mean_img_dices = np.mean(img_dice_scores[1:, :], axis=0)
             non_deg_num_slices = int(class_count[0])
             deg_num_slices = int(class_count[1])
-            img_3dim = np.zeros((non_deg_num_slices, 3, width, height))
-            img_3dim_deg = np.zeros((deg_num_slices, 3, width, height))
+            img_3dim = np.zeros((non_deg_num_slices, num_of_input_chnls, width, height))
+            img_3dim_deg = np.zeros((deg_num_slices, num_of_input_chnls, width, height))
             # do the same for the labels, but we only need one position per slice
             label_slices = np.zeros(non_deg_num_slices)
             extra_label_slices = np.zeros((non_deg_num_slices, 3))  # (1) phase (2) original sliceID (3) mean-dice
@@ -175,9 +189,14 @@ def create_dataset(acdc_dataset, exper_ensemble, type_of_map="u_map", referral_t
                 for cls in np.arange(1, pred_labels.shape[0] / 2):
                     p_lbl[pred_labels[cls + cls_offset, :, :, phase_slice_counter] == 1] = labels_float[cls]
 
-                x = np.concatenate((np.expand_dims(image[:, :, s], axis=0),
-                                          np.expand_dims(p_lbl, axis=0),
-                                          np.expand_dims(u_maps[:, :, s], axis=0)), axis=0)
+                if type_of_map is not None:
+                    x = np.concatenate((np.expand_dims(image[:, :, s], axis=0),
+                                              np.expand_dims(p_lbl, axis=0),
+                                              np.expand_dims(u_maps[:, :, s], axis=0)), axis=0)
+                else:
+                    # only concatenate original image and segmentation mask (predicted)
+                    x = np.concatenate((np.expand_dims(image[:, :, s], axis=0),
+                                        np.expand_dims(p_lbl, axis=0)), axis=0)
 
                 # get indicator whether we're dealing with a degenerate slice (below dice threshold)
                 is_degenerate = deg_slices[s]
@@ -226,29 +245,51 @@ def create_dataset(acdc_dataset, exper_ensemble, type_of_map="u_map", referral_t
 
     total_perc_deg = np.sum(t_num_deg) / float(np.sum(t_num_slices))
     total_perc_deg_non = np.sum(t_num_deg_non) / float(np.sum(t_num_slices))
-    print("INFO - Total degenerate over ES/ED and train/test set {:.2f}% / {:.2f}%".format(total_perc_deg * 100,
-                                                                                           total_perc_deg_non * 100))
-    print(" --- ")
-    print("INFO - ES - train data-set stats: total {} / degenerate {:.2f} % / {:.2f} %".format(t_num_slices[0, 0],
+
+    msg1 = "INFO - Total degenerate over ES/ED and train/test set {:.2f}% / {:.2f}%".format(total_perc_deg * 100,
+                                                                                           total_perc_deg_non * 100)
+
+    msg2 = "INFO - ES - train data-set stats: total {} / degenerate {:.2f} % / {:.2f} %".format(t_num_slices[0, 0],
                                                                                           perc_deg * 100,
-                                                                                          perc_deg_non * 100))
+                                                                                          perc_deg_non * 100)
     perc_deg = t_num_deg[1, 0] / float(t_num_slices[1, 0])
     perc_deg_non = t_num_deg_non[1, 0] / float(t_num_slices[1, 0])
-    print("INFO - ED - train data-set stats: total {} / degenerate {:.2f} % / {:.2f} %".format(t_num_slices[1, 0],
+    msg3 = "INFO - ED - train data-set stats: total {} / degenerate {:.2f} % / {:.2f} %".format(t_num_slices[1, 0],
                                                                                           perc_deg * 100,
-                                                                                          perc_deg_non * 100))
+                                                                                          perc_deg_non * 100)
 
     perc_deg = t_num_deg[0, 1] / float(t_num_slices[0, 1])
     perc_deg_non = t_num_deg_non[0, 1] / float(t_num_slices[0, 1])
-    print("INFO - ES - test data-set stats: total {} / degenerate {:.2f} % / {:.2f} %".format(t_num_slices[0, 1],
+    msg4 = "INFO - ES - test data-set stats: total {} / degenerate {:.2f} % / {:.2f} %".format(t_num_slices[0, 1],
                                                                                          perc_deg * 100,
-                                                                                         perc_deg_non * 100))
+                                                                                         perc_deg_non * 100)
     perc_deg = t_num_deg[1, 1] / float(t_num_slices[1, 1])
     perc_deg_non = t_num_deg_non[1, 1] / float(t_num_slices[1, 1])
-    print("INFO - ED - test data-set stats: total {} / degenerate {:.2f} % / {:.2f} %".format(t_num_slices[1, 1],
+    msg5 = "INFO - ED - test data-set stats: total {} / degenerate {:.2f} % / {:.2f} %".format(t_num_slices[1, 1],
                                                                                               perc_deg * 100,
-                                                                                              perc_deg_non * 100))
-    print("INFO - Patients with degenerate slices train/test {} / {}".format(t_num_deg_pat[0], t_num_deg_pat[1]))
+                                                                                              perc_deg_non * 100)
+    msg6 = "INFO - Patients with degenerate slices train/test {} / {}".format(t_num_deg_pat[0], t_num_deg_pat[1])
+    if verbose:
+        if logger is None:
+            print(msg1)
+            print("--------------------------------")
+            print(msg2)
+            print(msg3)
+            print(msg4)
+            print(msg5)
+        else:
+            logger.info(msg1)
+            logger.info("--------------------------------")
+            logger.info(msg2)
+            logger.info(msg3)
+            logger.info(msg4)
+            logger.info(msg5)
+
+    del acdc_dataset
+    if logger is not None:
+        logger.info(msg6)
+    else:
+        print(msg6)
     return dataset
 
 

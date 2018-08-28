@@ -9,9 +9,10 @@ from config.config import OPTIMIZER_DICT
 
 class DegenerateSliceDetector(nn.Module):
 
-    def __init__(self, architecture, lr=0.02, init_weights=True, verbose=False):
+    def __init__(self, architecture, lr=0.02, init_weights=True, verbose=False, num_of_input_chnls=3):
         super(DegenerateSliceDetector, self).__init__()
         self.verbose = verbose
+        self.num_of_input_chnls = num_of_input_chnls
         self.spp_pyramid = architecture["spp_pyramid"]
         self.num_of_classes = architecture["num_of_classes"]
         self.drop_perc = architecture["drop_percentage"]
@@ -29,6 +30,14 @@ class DegenerateSliceDetector(nn.Module):
         fc_no_params = self.channels_last_layer * np.sum(np.array(self.spp_pyramid)**2)
         model_name = getattr(torchvision.models, architecture["base_model"])
         self.base_model = model_name(pretrained=False)
+        if self.num_of_input_chnls != 3:
+            # Begin change number of input channels in first conv layer, because we'll use 2 instead of 3
+            features = list(self.base_model.features)
+            del features[0]
+            # add the input conv layer to the front of the list
+            features = [nn.Conv2d(self.num_of_input_chnls, 64, kernel_size=3, stride=1, padding=1)] + features
+            self.base_model.features = nn.Sequential(*features)
+            # End change number of input channels
         # Begin exchange last MaxPool layer
         # print("Last feature layer: ", self.base_model.features[-1].__class__.__name__)
         # need to convert nn.Sequential back into list object, in order to exchange module
@@ -51,6 +60,7 @@ class DegenerateSliceDetector(nn.Module):
         )
         if self.verbose:
             print(self.base_model)
+
         self.softmax_layer = nn.Softmax(dim=1)
         self.log_softmax_layer = nn.LogSoftmax(dim=1)
         self.loss_function = nn.NLLLoss()

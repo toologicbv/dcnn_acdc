@@ -1,0 +1,50 @@
+INFO - type_of_map : u_map
+INFO - retrain_chkpnt : None
+INFO - retrain_exper : None
+INFO - root_dir : /home/jorg/repository/dcnn_acdc
+INFO - quick_run : False
+INFO - val_freq : 200
+INFO - chkpnt_freq : 3000
+INFO - print_freq : 25
+INFO - exper_dict : {0: '20180418_15_02_05_dcnn_mcv1_150000E_lr2e02', 1: '20180426_14_13_46_dcnn_mc_f1p01_brier_150KE_lr2e02', 2: '20180426_14_14_39_dcnn_mc_f2p01_brier_150KE_lr2e02', 3: '20180426_14_14_57_dcnn_mc_f3p01_brier_150KE_lr2e02'}
+INFO - batch_size : 4
+INFO - epochs : 3000
+INFO - chkpnt : False
+INFO - version : v1
+INFO - lr : 1e-05
+INFO - use_cuda : True
+INFO - fold_id : 1
+INFO - model : sdvgg11_bn
+INFO - cuda : True
+INFO - log_dir : 20180824_09_38_01_sdvgg11_bn_f1p01_brier_umap_3KE_lr1e05
+INFO -  *** RUNNING ON GPU *** 
+  0%|          | 0/75 [00:00<?, ?it/s]Load experiment from /home/jorg/repository/dcnn_acdc/logs/20180418_15_02_05_dcnn_mcv1_150000E_lr2e02/stats/exper_stats.dll
+INFO - Experimental details extracted:: dcnn_mc p=0.10 fold=['0'] loss=brier
+Load experiment from /home/jorg/repository/dcnn_acdc/logs/20180426_14_13_46_dcnn_mc_f1p01_brier_150KE_lr2e02/stats/exper_stats.dll
+INFO - Experimental details extracted:: dcnn_mc p=0.10 fold=['1'] loss=brier
+Load experiment from /home/jorg/repository/dcnn_acdc/logs/20180426_14_14_39_dcnn_mc_f2p01_brier_150KE_lr2e02/stats/exper_stats.dll
+INFO - Experimental details extracted:: dcnn_mc p=0.10 fold=['2'] loss=brier
+Load experiment from /home/jorg/repository/dcnn_acdc/logs/20180426_14_14_57_dcnn_mc_f3p01_brier_150KE_lr2e02/stats/exper_stats.dll
+INFO - Experimental details extracted:: dcnn_mc p=0.10 fold=['3'] loss=brier
+INFO - Using folds ['1'] - busy loading images/references...this may take a while!
+INFO - >>> Search for /home/jorg/repository/dcnn_acdc/data/Folds/fold1/train/images_iso/*patient*.mhd <<<
+  4%|4         | 3/75 [00:00<00:03, 21.11it/s]  8%|8         | 6/75 [00:00<00:03, 20.83it/s] 12%|#2        | 9/75 [00:00<00:03, 21.48it/s] 16%|#6        | 12/75 [00:00<00:02, 22.35it/s] 20%|##        | 15/75 [00:00<00:02, 23.17it/s] 24%|##4       | 18/75 [00:00<00:02, 23.74it/s] 28%|##8       | 21/75 [00:00<00:02, 24.38it/s] 32%|###2      | 24/75 [00:00<00:02, 24.72it/s] 36%|###6      | 27/75 [00:01<00:01, 24.95it/s] 41%|####1     | 31/75 [00:01<00:01, 25.80it/s] 45%|####5     | 34/75 [00:01<00:01, 25.38it/s] 49%|####9     | 37/75 [00:01<00:01, 25.40it/s] 55%|#####4    | 41/75 [00:01<00:01, 25.94it/s] 60%|######    | 45/75 [00:01<00:01, 26.32it/s] 65%|######5   | 49/75 [00:01<00:00, 26.72it/s] 69%|######9   | 52/75 [00:01<00:00, 26.76it/s] 75%|#######4  | 56/75 [00:02<00:00, 27.02it/s] 80%|########  | 60/75 [00:02<00:00, 27.41it/s] 85%|########5 | 64/75 [00:02<00:00, 27.07it/s] 91%|######### | 68/75 [00:02<00:00, 27.17it/s] 95%|#########4| 71/75 [00:02<00:00, 27.13it/s] 99%|#########8| 74/75 [00:02<00:00, 27.16it/s]100%|##########| 75/75 [00:02<00:00, 27.24it/s]
+  0%|          | 0/25 [00:00<?, ?it/s] 12%|#2        | 3/25 [00:00<00:00, 27.32it/s] 24%|##4       | 6/25 [00:00<00:00, 28.22it/s] 36%|###6      | 9/25 [00:00<00:00, 25.91it/s] 44%|####4     | 11/25 [00:00<00:00, 24.05it/s] 60%|######    | 15/25 [00:00<00:00, 26.03it/s] 72%|#######2  | 18/25 [00:00<00:00, 26.37it/s] 84%|########4 | 21/25 [00:00<00:00, 26.15it/s] 96%|#########6| 24/25 [00:00<00:00, 26.25it/s]100%|##########| 25/25 [00:00<00:00, 26.05it/s]
+INFO - INFO - Creating dataset for slice detection. This may take a while, be patient!
+  0%|          | 0/100 [00:00<?, ?it/s]  1%|1         | 1/100 [00:00<00:10,  9.14it/s]  3%|3         | 3/100 [00:00<00:10,  8.99it/s]  5%|5         | 5/100 [00:00<00:09,  9.64it/s]  6%|6         | 6/100 [00:00<00:10,  8.70it/s]  7%|7         | 7/100 [00:00<00:11,  8.40it/s]  8%|8         | 8/100 [00:00<00:10,  8.55it/s] 10%|#         | 10/100 [00:01<00:10,  8.91it/s] 12%|#2        | 12/100 [00:01<00:09,  9.48it/s] 14%|#4        | 14/100 [00:01<00:08,  9.73it/s] 16%|#6        | 16/100 [00:01<00:08,  9.50it/s] 18%|#8        | 18/100 [00:01<00:08,  9.88it/s] 20%|##        | 20/100 [00:01<00:07, 10.04it/s] 22%|##2       | 22/100 [00:02<00:07, 10.16it/s] 24%|##4       | 24/100 [00:02<00:07, 10.15it/s] 26%|##6       | 26/100 [00:02<00:07, 10.38it/s] 28%|##8       | 28/100 [00:02<00:06, 10.53it/s] 30%|###       | 30/100 [00:02<00:06, 10.49it/s] 32%|###2      | 32/100 [00:03<00:06, 10.52it/s] 34%|###4      | 34/100 [00:03<00:06, 10.42it/s]
+INFO - Using folds ['1'] - loaded 200 files: 75 studies in train set, 25 studies in validation set
+INFO - Mean width/height/#slices per image 235/263/9
+---------------------- Image incompleteness statistics -------------------------
+ES: slices missing RV/MYO/LV 0/0/0 (0.00/0.00/0.00) / complete 0 wo-all 0
+ED: slices missing RV/MYO/LV 0/0/0 (0.00/0.00/0.00) / complete 0 wo-all 0
+INFO - Loading referral results for thresholds [0.001]
+Traceback (most recent call last):
+  File "train_slice_detector.py", line 120, in <module>
+    main()
+  File "train_slice_detector.py", line 116, in main
+    training(args)
+  File "train_slice_detector.py", line 37, in training
+    degenerate_type="mean", pos_label=1)
+  File "/mnt/u_drive/repository/dcnn_acdc/in_out/dataset_slice_detector.py", line 176, in create_dataset
+    p_lbl[pred_labels[cls + cls_offset, :, :, phase_slice_counter] == 1] = labels_float[cls]
+KeyboardInterrupt

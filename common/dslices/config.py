@@ -75,6 +75,10 @@ class BaseConfig(object):
         self.noise_threshold = 0.01
 
         # validation settings, of running on GPU with low RAM we choose a smaller val set size
+        # Number of iterations over the validation/test set. Because we balance the test/val set between classes
+        # and we've much more negatives than TP, we sample non-degenerate slices for each test-batch (equal to
+        # num-of degenerate slices for that patient). Hence we want each non-degenerate slice once in the test batch.
+        self.val_iterations = 10
         if socket.gethostname() == "toologic-ubuntu2":
             self.val_set_size = 128
             self.val_batch_size = 16
@@ -133,7 +137,7 @@ class BaseConfig(object):
         self.architecture["drop_percentage"] = 0.5
         self.architecture["weight_decay"] = 0.001
         self.architecture["optimizer"] = "adam"
-        self.architecture["fp_penalty_weight"] = 5  # None disables additional loss of fp_soft + fn_soft
+        self.architecture["fp_penalty_weight"] = 1  # None disables additional loss of fp_soft + fn_soft
 
 
 config = BaseConfig()

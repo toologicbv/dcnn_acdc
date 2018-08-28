@@ -24,7 +24,7 @@ def do_parse_args():
                         default="exper_brier",
                         help="Experiments that are used as input for image, predicted seg-mask and uncertainty-map")
     parser.add_argument('--fold_id', type=int, default=None, help="Fold ID of experiment")
-    parser.add_argument('--type_of_map', choices=['u_map', 'e_map'], default="u_map",
+    parser.add_argument('--type_of_map', choices=['u_map', 'e_map', "None"], default="u_map",
                         help="Type of uncertainty map to use as input: u_map versus e_map")
 
     # in case we retrain a previous model/checkpoint this parameter specifies the experiment directory
@@ -49,6 +49,11 @@ def do_parse_args():
 
     args = parser.parse_args()
     args.cuda = args.use_cuda and torch.cuda.is_available()
+    if args.type_of_map == "None":
+        args.num_input_chnls = 2
+        args.type_of_map = "nomap"
+    else:
+        args.num_input_chnls = 3
 
     if args.model[:5] == "sdvgg":
         pass

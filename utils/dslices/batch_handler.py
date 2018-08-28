@@ -17,6 +17,7 @@ class BatchHandler(object):
         self.num_sub_batches = torch.zeros(1)
         self.backward_freq = None
         self.current_patient_id = None
+        self.current_slice_ids = None
         if not is_train:
             self.patient_ids = data_set.get_patient_ids(is_train=False)
             self.item_num = 0
@@ -29,6 +30,8 @@ class BatchHandler(object):
             self.num_sub_batches = self.num_sub_batches.cuda()
 
     def next_patient_id(self):
+        # we use this method during testing/validation to get all patient ids in sequence. If last item is reached
+        # counter is reset and first patient id is returned again
         if self.item_num == self.number_of_patients:
             self.item_num = 0
         patient_id = self.patient_ids[self.item_num]
@@ -96,16 +99,18 @@ class BatchHandler(object):
             y_batch = y_batch.cuda()
         return x_batch, y_batch, additional_labels
 
-    def determine_slices(self, patient_id, do_balance, batch_size):
+    def determine_slices(self, patient_id, do_balance, batch_size, do_permute=True):
         input_3c, label, extra_label = self.data_set.get(patient_id, self.is_train, do_merge_sets=not do_balance)
         # if do_balance is TRUE the previous method returns a tuple per variable (normal-slices, degenerate slices)
         # otherwise the method returns a concatenated numpy tensor in which the first dim is #slices per object
         if do_balance:
-            half_batch_size = batch_size / 2
+
             num_of_slices = int(input_3c[0].shape[0])
             deg_num_of_slices = int(input_3c[1].shape[0])
             # print("INFO - #slices {}/{}".format(num_of_slices, deg_num_of_slices))
             if self.is_train:
+                # we assert that batch_size is given during TRAINING (not necessarily the case for testing)
+                half_batch_size = batch_size / 2
                 # currently assuming that batch_size = 2
                 slice_ids = np.random.randint(low=0, high=num_of_slices, size=half_batch_size)
                 deg_slice_ids = np.random.randint(low=0, high=deg_num_of_slices, size=half_batch_size)
@@ -114,6 +119,7 @@ class BatchHandler(object):
                 # furthermore we select the "normal" slices randomly.
                 batch_size = int(2 * deg_num_of_slices)
                 slice_ids = np.random.randint(low=0, high=num_of_slices, size=deg_num_of_slices)
+                self.current_slice_ids = slice_ids
                 deg_slice_ids = np.arange(deg_num_of_slices)
             # image shape: [#slices, 3channels, w, h] and we sample a couple of slices (batch-size)
             #              The result is [batch-size, 3channels, w, h]
@@ -137,6 +143,7 @@ class BatchHandler(object):
             else:
                 # during testing we take the complete volume
                 slice_ids = np.arange(int(num_of_slices))
+            self.current_slice_ids = slice_ids
             img_slices = input_3c[slice_ids]
             label_slices = label[slice_ids]
             additional_labels = extra_label[slice_ids]
@@ -151,5 +158,11 @@ class BatchHandler(object):
 
         if num_rotations != 0:
             img_slices = np.rot90(img_slices, k=num_rotations, axes=(2, 3)).copy()
+        if do_permute:
+            # shuffle the indices of arrays
+            perm_idx = np.random.permutation(np.arange(int(batch_size)))
+            img_slices = img_slices[perm_idx]
+            label_slices = label_slices[perm_idx]
+            additional_labels = additional_labels[perm_idx]
 
         return img_slices, label_slices, additional_labels, batch_size

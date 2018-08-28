@@ -7,12 +7,15 @@ import torch
 from collections import OrderedDict
 import numpy as np
 from common.common import create_logger
-import models.slice_detector
+from sklearn.metrics import precision_recall_curve, roc_curve
+
+from models.model_handler import load_slice_detector_model
 from common.dslices.config import config
 from common.dslices.helper import create_experiment
 from utils.referral_results import ReferralResults
 from utils.dslices.batch_handler import BatchHandler as BatchHandlerSD
 from utils.dslices.accuracies import compute_eval_metrics
+from in_out.dataset_slice_detector import create_dataset
 
 
 class ExperimentHandler(object):
@@ -38,6 +41,15 @@ class ExperimentHandler(object):
         self.patients = None
         self.referred_slices = None
         self.device = None
+        # store reference to object ExperHandlerEnsemble
+        self.seg_exper_ensemble = None
+        # ID for different test runs (after training)
+        self.last_test_id = 0
+        # not consequent, but we'll add a dictionary for the test runs to the handler instead of the experiment object
+        self.test_stats = {}
+
+    def set_seg_ensemble(self, seg_ensemble):
+        self.seg_exper_ensemble = seg_ensemble
 
     def set_loss(self, loss, val_run_id=None):
 
@@ -65,7 +77,11 @@ class ExperimentHandler(object):
         self.num_val_runs += 1
         self.exper.val_stats["epoch_ids"][self.exper.val_run_id] = self.exper.epoch_id
 
-    def eval(self, data_set, model, val_set_size=None):
+    def next_test_id(self):
+        self.last_test_id += 1
+        return self.last_test_id
+
+    def eval(self, data_set, model, val_set_size=None, verbose=False):
         start_time = time.time()
         # set the size of the validation set. If not passed as argument, use config setting (depends on machine)
         # make sure it's never bigger than the actual size of the validation set
@@ -81,10 +97,13 @@ class ExperimentHandler(object):
         all_labels = []
         all_pred_lbls = []
         all_pred_probs = []
-        for chunk in np.arange(val_set_size):
+
+        for _ in np.arange(val_set_size):
             # New in pytorch 0.4.0, use local context manager to turn off history tracking
             with torch.set_grad_enabled(False):
-                x_input, y_labels, _ = val_batch(batch_size=None, backward_freq=1, do_balance=False)
+                # batch_size=None and do_balance=True => number of degenerate slices/per patient determines
+                #                                        the batch_size.
+                x_input, y_labels, _ = val_batch(batch_size=None, backward_freq=1, do_balance=True)
                 val_loss, pred_probs = model.do_forward_pass(x_input, y_labels)
             pred_labels = np.argmax(pred_probs.data.cpu().numpy(), axis=1)
             np_pred_probs = pred_probs.data.cpu().numpy()
@@ -99,10 +118,14 @@ class ExperimentHandler(object):
                 all_pred_probs.append(np_pred_probs)
             else:
                 self.logger.info("***WARNING*** - OMITTING validation example due to no TP")
-            self.logger.info("GT labels")
-            self.logger.info(y_labels.data.cpu().numpy())
-            self.logger.info("Predicted labels")
-            self.logger.info(pred_labels)
+            str_slice_ids = ", ".join([str(i) for i in val_batch.current_slice_ids])
+            if verbose:
+                self.logger.info("Patient {}: current non-deg slice ids {}".format(val_batch.current_patient_id,
+                                                                                   str_slice_ids))
+            # self.logger.info("GT labels")
+            # self.logger.info(y_labels.data.cpu().numpy())
+            # self.logger.info("Predicted labels")
+            # self.logger.info(pred_labels)
             # self.logger.info(np_pred_probs[:, 1])
             # self.logger.info("VALIDATION - patient {} - f1={:.3f} - roc_auc={:.3f} "
             #                 "- pr_auc={:.3f} - prec={:.3f} - rec={:.3f}".format(val_batch.current_patient_id,
@@ -112,14 +135,13 @@ class ExperimentHandler(object):
         all_labels = np.concatenate(all_labels)
         all_pred_lbls = np.concatenate(all_pred_lbls)
         all_pred_probs = np.concatenate(all_pred_probs)
-        print("INFO - all_pred_probs[:, 1].shape {}", all_pred_probs.shape)
+        total_num_of_slices = all_pred_probs.shape[0]
         f1, roc_auc, pr_auc, acc, prec, rec = compute_eval_metrics(all_labels, all_pred_lbls, all_pred_probs[:, 1])
         if arr_val_loss.shape[0] > 1:
             val_loss = np.mean(arr_val_loss)
         else:
             val_loss = arr_val_loss[0]
-        if arr_val_eval.ndim > 1:
-            arr_val_eval = np.mean(arr_val_eval, axis=0)
+
         self.exper.val_stats["loss"][self.num_val_runs - 1] = val_loss
         self.exper.val_stats["f1"][self.num_val_runs - 1] = f1
         self.exper.val_stats["roc_auc"][self.num_val_runs - 1] = roc_auc
@@ -127,15 +149,97 @@ class ExperimentHandler(object):
         self.exper.val_stats["prec"][self.num_val_runs - 1] = prec
         self.exper.val_stats["rec"][self.num_val_runs - 1] = rec
         duration = time.time() - start_time
-        # self.logger.info("---> END VALIDATION epoch {} - mean: f1={:.3f} - roc_auc={:.3f} "
-        #                 "- pr_auc={:.3f} - prec={:.3f} - rec={:.3f} "
-        #                 "- {:.2f} seconds".format(self.exper.epoch_id, arr_val_eval[0],
-        #                                           arr_val_eval[1], arr_val_eval[2],
-        #                                           arr_val_eval[3], arr_val_eval[4], duration))
-        self.logger.info("---> END VALIDATION epoch {}: f1={:.3f} - roc_auc={:.3f} "
-                         "- pr_auc={:.3f} - prec={:.3f} - rec={:.3f}".format(self.exper.epoch_id,
-                                                                             f1, roc_auc, pr_auc, prec, rec))
+
+        self.logger.info("---> END VALIDATION epoch {} #slices={}: f1={:.3f} - roc_auc={:.3f} "
+                         "- pr_auc={:.3f} - prec={:.3f} - rec={:.3f} "
+                         "- {:.2f} seconds".format(self.exper.epoch_id, total_num_of_slices,
+                                                                             f1, roc_auc, pr_auc, prec, rec, duration))
         del val_batch
+
+    def test(self, data_set=None, model=None, test_id=None, verbose=False):
+        if model is None:
+            # get model. 1st arg=experiment label "20180824_13_06_44_sdvgg11_bn_f1p01_brier_umap_6KE_lr1e05"
+            #            2nd arg=last epoch id aka checkpoint
+            model = self.load_checkpoint(self.exper.run_args.log_dir, checkpoint=self.exper.epoch_id)
+        if data_set is None:
+            data_set = self.load_dataset()
+        if test_id is None:
+            test_id = self.next_test_id()
+        start_time = time.time()
+        test_set_size = len(data_set.get_patient_ids(is_train=False))
+        # create batch object
+        test_batch = BatchHandlerSD(data_set=data_set, is_train=False, cuda=self.exper.run_args.cuda)
+        self.info("INFO - Begin test run {}".format(test_id))
+        arr_test_loss = []
+        all_labels = []
+        all_pred_lbls = []
+        all_pred_probs = []
+        test_stats = {}
+
+        for _ in np.arange(test_set_size):
+            # New in pytorch 0.4.0, use local context manager to turn off history tracking
+            with torch.set_grad_enabled(False):
+                # batch_size=None and do_balance=True => number of degenerate slices/per patient determines
+                #                                        the batch_size.
+                x_input, y_labels, _ = test_batch(batch_size=None, backward_freq=1, do_balance=True)
+                test_loss, pred_probs = model.do_forward_pass(x_input, y_labels)
+            pred_labels = np.argmax(pred_probs.data.cpu().numpy(), axis=1)
+            np_pred_probs = pred_probs.data.cpu().numpy()
+            f1, roc_auc, pr_auc, acc, prec, rec = compute_eval_metrics(y_labels.data.cpu().numpy(), pred_labels,
+                                                                       np_pred_probs[:, 1])
+
+            if f1 != -1:
+                arr_test_loss.append([test_loss.item()])
+                all_labels.append(y_labels.data.cpu().numpy())
+                all_pred_lbls.append(pred_labels)
+                all_pred_probs.append(np_pred_probs)
+            else:
+                self.info("***WARNING*** - OMITTING validation example due to no TP")
+            str_slice_ids = ", ".join([str(i) for i in test_batch.current_slice_ids])
+            if verbose:
+                self.info("Patient {}: current non-deg slice ids {}".format(test_batch.current_patient_id,
+                                                                                   str_slice_ids))
+
+        arr_test_loss = np.concatenate(arr_test_loss)
+        all_labels = np.concatenate(all_labels)
+        all_pred_lbls = np.concatenate(all_pred_lbls)
+        all_pred_probs = np.concatenate(all_pred_probs)
+        total_num_of_slices = all_pred_probs.shape[0]
+        precision, recall, thresholds = precision_recall_curve(all_labels, all_pred_probs[:, 1])
+        fpr, tpr, thresholds = roc_curve(all_labels, all_pred_probs[:, 1])
+
+        f1, roc_auc, pr_auc, acc, prec, rec = compute_eval_metrics(all_labels, all_pred_lbls, all_pred_probs[:, 1])
+        if arr_test_loss.shape[0] > 1:
+            val_loss = np.mean(arr_test_loss)
+        else:
+            val_loss = arr_test_loss[0]
+
+        test_stats["loss"] = val_loss
+        test_stats["f1"] = f1
+        test_stats["roc_auc"] = roc_auc
+        test_stats["pr_auc"] = pr_auc
+        test_stats["prec"] = prec
+        test_stats["rec"] = rec
+        test_stats["pr_curve"] = tuple((precision, recall, thresholds))
+        test_stats["roc_curve"] = tuple((fpr, tpr, thresholds))
+        self.test_stats[test_id] = test_stats
+        duration = time.time() - start_time
+        self.info("INFO - End test run {} #slices={}: f1={:.3f} - roc_auc={:.3f} "
+                         "- pr_auc={:.3f} - prec={:.3f} - rec={:.3f} "
+                         "- {:.2f} seconds".format(test_id, total_num_of_slices,
+                                                   f1, roc_auc, pr_auc, prec, rec, duration))
+        del test_batch
+        del data_set
+        del model
+
+    def load_dataset(self):
+        if self.seg_exper_ensemble is None:
+            raise ValueError("ERROR - parameter data_set is None and I don't have a reference to the"
+                             " segmentation handler ensemble. Hence, can't load the dataset.")
+        data_set = create_dataset(self.exper.run_args.fold_id, self.seg_exper_ensemble,
+                                  type_of_map=self.exper.run_args.type_of_map,
+                                  degenerate_type="mean", pos_label=1, logger=self.logger)
+        return data_set
 
     def save_experiment(self, file_name=None, final_run=False):
 
@@ -172,16 +276,6 @@ class ExperimentHandler(object):
             # chkpnt_dir should be /home/jorg/repository/dcnn_acdc/logs/<experiment dir>/checkpoints/
             chkpnt_dir = os.path.join(self.exper.config.root_dir, self.exper.chkpnt_dir)
             # will be concatenated with "<checkpoint dir> further below
-        elif retrain:
-            # if we retrain a model exper_dir should be a relative path of the experiment:
-            # e.g. "20180330_09_56_01_dcnn_mcv1_150000E_lr2e02".
-            # first we concatenate root_dir (/home/jorg/repo/dcnn_acdc/) with self.log_root_path (e.g. "logs/")
-            chkpnt_dir = os.path.join(self.exper.config.root_dir, self.exper.config.log_root_path)
-            # then concatenate with the exper_dir (name of experiment abbreviation)
-            chkpnt_dir = os.path.join(chkpnt_dir, exper_dir)
-            # and then finally with the checkpoint_path e.g. "checkpoints/"
-            chkpnt_dir = os.path.join(chkpnt_dir, self.exper.config.checkpoint_path)
-
         else:
             chkpnt_dir = os.path.join(self.exper.config.root_dir, self.exper.chkpnt_dir)
 
@@ -190,9 +284,7 @@ class ExperimentHandler(object):
 
         str_classname = config.base_class
         checkpoint_file = str_classname + "checkpoint" + str(checkpoint).zfill(5) + ".pth.tar"
-        act_class = getattr(models.slice_detector, str_classname)
-
-        model = act_class()
+        model = load_slice_detector_model(self)
         abs_checkpoint_dir = os.path.join(chkpnt_dir, checkpoint_file)
         if os.path.exists(abs_checkpoint_dir):
             model_state_dict = torch.load(abs_checkpoint_dir)
@@ -200,14 +292,20 @@ class ExperimentHandler(object):
             if self.exper.run_args.cuda:
                 model.cuda()
             if verbose and not retrain:
-                self.info("INFO - loaded existing model with checkpoint {} from dir {}".format(abs_checkpoint_dir,
-                                                                                               checkpoint))
+                self.info("INFO - loaded existing model with checkpoint {} from dir {}".format(checkpoint,
+                                                                                               abs_checkpoint_dir ))
             else:
-                self.info("Loading existing model with checkpoint {} from dir {}".format(chkpnt_dir, checkpoint))
+                self.info("Loading existing model with checkpoint {} from dir {}".format(checkpoint, chkpnt_dir))
         else:
             raise IOError("Path to checkpoint not found {}".format(abs_checkpoint_dir))
 
         return model
+
+    def info(self, message):
+        if self.logger is None:
+            print(message)
+        else:
+            self.logger.info(message)
 
     def set_config_object(self, new_config):
         self.exper.config = new_config
@@ -281,11 +379,11 @@ class ExperimentHandler(object):
             print "Unexpected error:", sys.exc_info()[0]
             raise
 
-        self.exper = ExperimentHandler.check_compatibility(experiment)
-        self.model_name = "{} p={:.2f} fold={} loss={}".format(self.exper.run_args.model,
-                                                               self.exper.run_args.drop_prob,
-                                                               self.exper.run_args.fold_ids[0],
-                                                               self.exper.run_args.loss_function)
+        # self.exper = ExperimentHandler.check_compatibility(experiment)
+        self.exper = experiment
+        self.model_name = "{}-{}-f{} ".format(self.exper.run_args.model,
+                                                    self.exper.run_args.type_of_map,
+                                                    self.exper.run_args.fold_id)
         if use_logfile:
             self.logger = create_logger(self.exper, file_handler=use_logfile)
         else:

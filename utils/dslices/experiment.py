@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 from pytz import timezone
 
+
 class Experiment(object):
 
     def __init__(self, config, seg_exper, run_args=None):
@@ -25,6 +26,7 @@ class Experiment(object):
         self.model_name = ""
         self.epoch_stats = None
         self.val_stats = None
+        self.test_stats = None
         self.stats_path = None
         self.num_val_runs = 0
         self.val_run_id = -1
@@ -52,6 +54,13 @@ class Experiment(object):
                           'pr_auc': np.zeros(self.num_val_runs),
                           'prec': np.zeros(self.num_val_runs),
                           'rec': np.zeros(self.num_val_runs)}
+        self.test_stats = {'test_id': None,
+                           'loss': None,
+                           'f1': None,
+                           'roc_auc': None,
+                           'pr_auc': None,
+                           'prec': None,
+                           'rec': None}
 
     def get_loss(self, validation=False):
 

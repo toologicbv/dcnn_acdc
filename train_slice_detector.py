@@ -21,34 +21,23 @@ def training(args):
     :return:
     """
     # first get experiment from segmentation run
-    seg_exper_dict = ExperHandlerEnsemble(args.exper_dict)
-    seg_exper_hdl = seg_exper_dict.seg_exper_handlers[args.fold_id]
+    seg_exper_ensemble = ExperHandlerEnsemble(args.exper_dict)
+    seg_exper_hdl = seg_exper_ensemble.seg_exper_handlers[args.fold_id]
     exper_hdl = ExperHandlerSD()
     exper_hdl.set_exper(ExperimentSD(config, seg_exper=seg_exper_hdl.exper, run_args=args), use_logfile=True)
     exper_hdl.print_flags()
-
-    # create dataset, complementary to segmentation experiments, we load images without augmentation and padding
-    dataset = ACDC2017DataSet(seg_exper_hdl.exper.config, search_mask=config.dflt_image_name + ".mhd",
-                              fold_ids=seg_exper_hdl.exper.run_args.fold_ids, preprocess=False,
-                              debug=exper_hdl.exper.run_args.quick_run, do_augment=False,
-                              incomplete_only=False)
     exper_hdl.logger.info("INFO - Creating dataset for slice detection. This may take a while, be patient!")
-    sd_dataset = create_dataset(dataset, seg_exper_dict, type_of_map=exper_hdl.exper.run_args.type_of_map,
-                                degenerate_type="mean", pos_label=1)
-    exper_hdl.logger.info("INFO - Ready")
+    sd_dataset = create_dataset(exper_hdl.exper.run_args.fold_id, seg_exper_ensemble,
+                                type_of_map=exper_hdl.exper.run_args.type_of_map,
+                                degenerate_type="mean", pos_label=1, logger=exper_hdl.logger)
+
     # Load model. In the same procedure the model is assigned to the CPU or GPU
     sd_vgg_model = load_slice_detector_model(exper_hdl)
 
     # IMPORTANT: I AM CURRENTLY NOT USING THE FUNCTIONALITY TO RUN MULTIPLE BATCHES PER EPOCH!!!
     exper_hdl.exper.batches_per_epoch = 1
-    exper_hdl.logger.info("Size train/val-data-set {}/{} :: number of epochs {} "
-                          ":: batch-size {} "
-                          ":: batches/epoch {}".format(
-                            dataset.__len__()[0], dataset.__len__()[1], exper_hdl.exper.run_args.epochs,
-                            exper_hdl.exper.run_args.batch_size,
-                            exper_hdl.exper.batches_per_epoch))
-
     train_batch = BatchHandlerSD(data_set=sd_dataset, is_train=True, cuda=args.cuda)
+    mean_epoch_loss = []
     for epoch_id in range(exper_hdl.exper.run_args.epochs):
         exper_hdl.next_epoch()
         start_time = time.time()
@@ -56,6 +45,7 @@ def training(args):
         # returns cross-entropy loss (binary) and predicted probabilities [batch-size, 2] for this batch
         loss, pred_probs = sd_vgg_model.do_forward_pass(x_input, y_lbl)
         train_batch.add_loss(loss)
+        mean_epoch_loss.append(loss.item())
         if train_batch.do_backward:
             sd_vgg_model.zero_grad()
             train_batch.mean_loss()
@@ -65,12 +55,6 @@ def training(args):
             # print("---> Sum-grads {:.3f}".format(grads))
             train_batch.reset()
             exper_hdl.set_loss(loss)
-        if exper_hdl.exper.run_args.val_freq != 0 and (exper_hdl.exper.epoch_id % exper_hdl.exper.run_args.val_freq == 0
-                                                       or
-                                                       exper_hdl.exper.epoch_id == exper_hdl.exper.run_args.epochs):
-            # validate model
-            exper_hdl.eval(sd_dataset, sd_vgg_model)
-
         if exper_hdl.exper.run_args.chkpnt and (exper_hdl.exper.epoch_id % exper_hdl.exper.run_args.chkpnt_freq == 0 or
                                                 exper_hdl.exper.epoch_id == exper_hdl.exper.run_args.epochs):
             save_checkpoint(exper_hdl, {'epoch': exper_hdl.exper.epoch_id,
@@ -85,17 +69,24 @@ def training(args):
         if exper_hdl.exper.epoch_id % exper_hdl.exper.run_args.print_freq == 0 or \
                 exper_hdl.exper.epoch_id == exper_hdl.exper.run_args.epochs:
             np_pred_probs = pred_probs.data.cpu().numpy()
+            mean_epoch_loss = np.mean(mean_epoch_loss)
             f1, roc_auc, pr_auc, acc, prec, rec = compute_eval_metrics(y_lbl.data.cpu().numpy(),
                                                                        np.argmax(pred_probs.data.cpu().numpy(), axis=1),
                                                                        np_pred_probs[:, 1])
 
             exper_hdl.logger.info("End epoch ID: {} loss {:.3f} / f1={:.3f} / roc_auc={:.3f} / "
                                   "pr_auc={:.3f} / acc={:.3f} / prec={:.3f} / rec={:.3f} "
-                                  "duration {:.2f} seconds".format(exper_hdl.exper.epoch_id, loss.item(), f1, roc_auc,
+                                  "duration {:.2f} seconds".format(exper_hdl.exper.epoch_id, mean_epoch_loss, f1, roc_auc,
                                                    pr_auc, acc, prec, rec, total_time))
+            mean_epoch_loss = []
+        if exper_hdl.exper.run_args.val_freq != 0 and (exper_hdl.exper.epoch_id % exper_hdl.exper.run_args.val_freq == 0
+                                                       or
+                                                       exper_hdl.exper.epoch_id == exper_hdl.exper.run_args.epochs):
+            # validate model
+            exper_hdl.eval(sd_dataset, sd_vgg_model)
 
     exper_hdl.save_experiment(final_run=True)
-    del dataset
+    del sd_dataset
     del sd_vgg_model
 
 

@@ -75,7 +75,8 @@ def load_slice_detector_model(exper_hdl, verbose=False):
             exper_hdl.logger.info(message)
         else:
             print(message)
-        model = DegenerateSliceDetector(exper_hdl.exper.config.architecture, lr=exper_hdl.exper.run_args.lr)
+        model = DegenerateSliceDetector(exper_hdl.exper.config.architecture, lr=exper_hdl.exper.run_args.lr,
+                                        num_of_input_chnls=exper_hdl.exper.run_args.num_input_chnls)
 
     else:
         raise ValueError("{} name is unknown and hence cannot be created".format(exper_hdl.exper.run_args.model))

@@ -981,13 +981,13 @@ class ExperimentHandler(object):
     def set_model_name(self, model_name):
         self.exper.model_name = model_name
 
-    def get_test_set(self):
+    def get_test_set(self, load_train=False, load_val=True, use_cuda=True):
         if self.test_set is None:
             fold_id = self.exper.run_args.fold_ids[0]
             self.test_set = ACDC2017TestHandler.get_testset_instance(self.exper.config,
                                                                      fold_id,
-                                                                     load_train=False, load_val=True,
-                                                                     batch_size=None, use_cuda=True)
+                                                                     load_train=load_train, load_val=load_val,
+                                                                     batch_size=None, use_cuda=use_cuda)
 
     def get_pred_labels(self, patient_id=None, mc_dropout=True):
         if self.pred_labels is None:
