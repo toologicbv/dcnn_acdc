@@ -46,7 +46,13 @@ class Experiment(object):
                 # one extra run because max epoch is not divided by val_freq
                 self.num_val_runs += 1
         self.epoch_stats = {'lr': np.zeros(self.run_args.epochs),
-                            'loss': np.zeros(self.run_args.epochs)}
+                            'loss': np.zeros(self.run_args.epochs),
+                            'f1': np.zeros(self.num_val_runs),
+                            'roc_auc': np.zeros(self.num_val_runs),
+                            'pr_auc': np.zeros(self.num_val_runs),
+                            'prec': np.zeros(self.num_val_runs),
+                            'rec': np.zeros(self.num_val_runs)
+                            }
         self.val_stats = {'epoch_ids': np.zeros(self.num_val_runs),
                           'loss': np.zeros(self.num_val_runs),
                           'f1': np.zeros(self.num_val_runs),
@@ -65,9 +71,9 @@ class Experiment(object):
     def get_loss(self, validation=False):
 
         if not validation:
-            return self.epoch_stats["mean_loss"]
+            return self.epoch_stats["loss"]
         else:
-            return self.val_stats["mean_loss"]
+            return self.val_stats["loss"]
 
     @property
     def validation_epoch_ids(self):

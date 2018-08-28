@@ -7,7 +7,7 @@ import os
 
 
 def loss_plot(exper, fig_name=None, height=8, width=6, save=False, show=True, validation=False,
-              log_scale=False, epoch_range=None, do_average=False):
+              log_scale=False, epoch_range=None, do_average=False, window_size=10):
 
     """
     Simple plots of training and validation loss (if enabled).
@@ -30,8 +30,7 @@ def loss_plot(exper, fig_name=None, height=8, width=6, save=False, show=True, va
 
     train_loss = exper.get_loss()
     if do_average:
-        window_len = 10
-        w = np.ones(window_len, 'd')
+        w = np.ones(window_size, 'd')
         train_loss = np.convolve(w / w.sum(), train_loss, mode='same')
         print(len(train_loss))
     last_epoch = exper.epoch_id
@@ -79,7 +78,7 @@ def loss_plot(exper, fig_name=None, height=8, width=6, save=False, show=True, va
     plt.legend(loc="best")
     p_title = "Learning curve "
 
-    plt.title(p_title, **config.title_font)
+    plt.title(p_title, **config.title_font_small)
 
     if save:
         if fig_name is None:

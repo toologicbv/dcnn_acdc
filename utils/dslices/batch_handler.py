@@ -43,7 +43,6 @@ class BatchHandler(object):
         self.loss += loss
 
     def mean_loss(self):
-        f = 1./self.num_sub_batches
         self.loss = 1./self.num_sub_batches * self.loss
 
     def reset(self):

@@ -9,7 +9,7 @@ from config.config import OPTIMIZER_DICT
 
 class DegenerateSliceDetector(nn.Module):
 
-    def __init__(self, architecture, lr=0.02, init_weights=True, verbose=False, num_of_input_chnls=3):
+    def __init__(self, architecture, lr=0.02, init_weights=True, verbose=True, num_of_input_chnls=3):
         super(DegenerateSliceDetector, self).__init__()
         self.verbose = verbose
         self.num_of_input_chnls = num_of_input_chnls
@@ -19,6 +19,7 @@ class DegenerateSliceDetector(nn.Module):
         self.weight_decay = architecture["weight_decay"]
         self.sgd_optimizer = architecture["optimizer"]
         self.fp_penalty_weight = architecture["fp_penalty_weight"]
+        self.lr = lr
         # We assume that the last conv-block has this number of channels (could be more dynamic, yes)
         self.channels_last_layer = 512
         # compute the fixed length of the vector representation after the SPP layer
@@ -64,16 +65,20 @@ class DegenerateSliceDetector(nn.Module):
         self.softmax_layer = nn.Softmax(dim=1)
         self.log_softmax_layer = nn.LogSoftmax(dim=1)
         self.loss_function = nn.NLLLoss()
+        self.optimizer = None
+        self.set_learning_rate(lr=lr)
+        self.modelName = 'Degenerate Slice Detector'
+        if init_weights:
+            self._initialize_weights()
 
+    def set_learning_rate(self, lr):
         if self.sgd_optimizer == "sparse_adam":
             self.optimizer = OPTIMIZER_DICT[self.sgd_optimizer](
                 self.parameters(), lr=lr)
         else:
             self.optimizer = OPTIMIZER_DICT[self.sgd_optimizer](
                 self.parameters(), lr=lr, weight_decay=self.weight_decay, betas=(0.9, 0.999))
-        self.modelName = 'Degenerate Slice Detector'
-        if init_weights:
-            self._initialize_weights()
+        self.lr = lr
 
     def _initialize_weights(self):
         for m in self.modules():
@@ -142,6 +147,15 @@ class DegenerateSliceDetector(nn.Module):
 
         return sum_grads
 
+    @staticmethod
+    def print_architecture_params(architecture, logger=None):
+        for param_name, param_value in architecture.iteritems():
+            msg_str = "INFO - model-param {}: {}".format(param_name, param_value)
+            if logger is None:
+                print(msg_str)
+            else:
+                logger.info(msg_str)
+
 
 class SpatialPyramidPoolLayer(nn.Module):
 
@@ -165,9 +179,11 @@ class SpatialPyramidPoolLayer(nn.Module):
         for i in range(len(self.spp_pyramid)):
             level = self.spp_pyramid[i]
             kernel_size = (math.ceil(h / level), math.ceil(w / level))
+            if i == 3:
+                print("KERNEL size (level={}): ({}/{})".format(level, kernel_size[0], kernel_size[1]))
             stride = (math.floor(h / level), math.floor(w / level))
-            padding = (math.floor((kernel_size[0] * level - h + 1) / 2),
-                       math.floor((kernel_size[1] * level - w + 1) / 2))
+            padding = (math.floor((int(kernel_size[0]) * level - h + 1) / 2),
+                       math.floor((int(kernel_size[1]) * level - w + 1) / 2))
             if self.pool_type == 'max_pool':
                 tensor = F.max_pool2d(x_in, kernel_size=kernel_size,
                                       stride=stride, padding=padding).view(bs, -1)

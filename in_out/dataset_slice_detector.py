@@ -69,15 +69,16 @@ class SliceDetectorDataSet(object):
         raise NotImplementedError()
 
 
-def create_dataset(fold_id, exper_ensemble, type_of_map="u_map", referral_threshold=0.001,
+def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_threshold=0.001,
                    degenerate_type="mean", pos_label=1, acdc_dataset=None, logger=None, verbose=False):
     # if acdc_dataset is None:
+    fold_id = exper_hdl.exper.run_args.fold_id
     if acdc_dataset is None:
         seg_exper_hdl = exper_ensemble.seg_exper_handlers[fold_id]
         acdc_dataset = ACDC2017DataSet(seg_exper_hdl.exper.config,
                                        search_mask=seg_exper_hdl.exper.config.dflt_image_name + ".mhd",
                                        fold_ids=[fold_id], preprocess=False,
-                                       debug=seg_exper_hdl.exper.run_args.quick_run, do_augment=False,
+                                       debug=exper_hdl.exper.run_args.quick_run, do_augment=False,
                                        incomplete_only=False)
     num_of_input_chnls = 3
     exper_ensemble.load_dice_without_referral(type_of_map=type_of_map, referral_threshold=0.001)
