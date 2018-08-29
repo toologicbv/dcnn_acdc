@@ -132,7 +132,7 @@ class BaseConfig(object):
         else:
             raise ValueError("ERROR - {} is an unknown base model.".format(base_model))
 
-        self.architecture["spp_pyramid"] = [6, 4, 2, 1]
+        self.architecture["spp_pyramid"] = [4, 2, 1]
         self.architecture["num_of_classes"] = 2
         self.architecture["drop_percentage"] = 0.5
         self.architecture["weight_decay"] = 5.
@@ -140,6 +140,8 @@ class BaseConfig(object):
         # None disables additional loss of fp_soft + fn_soft.
         # Should increase precision by penalizing false positives.
         self.architecture["fp_penalty_weight"] = 7.
+        # number of batches before performing a pytorch backward operation
+        self.architecture["backward_freq"] = 10
 
 
 config = BaseConfig()

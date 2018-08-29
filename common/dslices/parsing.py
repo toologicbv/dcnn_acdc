@@ -26,6 +26,7 @@ def do_parse_args():
     parser.add_argument('--fold_id', type=int, default=None, help="Fold ID of experiment")
     parser.add_argument('--type_of_map', choices=['u_map', 'e_map', "None"], default="u_map",
                         help="Type of uncertainty map to use as input: u_map versus e_map")
+    parser.add_argument('--use_no_map', action='store_true', help="whether or not to use the map for prediction")
 
     # in case we retrain a previous model/checkpoint this parameter specifies the experiment directory
     # relative path (w.r.t. logs/ directory e.g. "20180330_09_56_01_dcnn_mcv1_150000E_lr2e02"
@@ -49,9 +50,8 @@ def do_parse_args():
 
     args = parser.parse_args()
     args.cuda = args.use_cuda and torch.cuda.is_available()
-    if args.type_of_map == "None":
+    if args.use_no_map:
         args.num_input_chnls = 2
-        args.type_of_map = "nomap"
     else:
         args.num_input_chnls = 3
 

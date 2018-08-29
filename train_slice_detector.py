@@ -28,6 +28,7 @@ def training(args):
     exper_hdl.print_flags()
     exper_hdl.logger.info("INFO - Creating dataset for slice detection. This may take a while, be patient!")
     sd_dataset = create_dataset(exper_hdl, seg_exper_ensemble,
+                                num_of_input_chnls=exper_hdl.exper.run_args.num_input_chnls,
                                 type_of_map=exper_hdl.exper.run_args.type_of_map,
                                 degenerate_type="mean", pos_label=1, logger=exper_hdl.logger)
 
@@ -42,7 +43,8 @@ def training(args):
     for epoch_id in range(exper_hdl.exper.run_args.epochs):
         exper_hdl.next_epoch()
         start_time = time.time()
-        x_input, y_lbl, _ = train_batch(batch_size=args.batch_size, backward_freq=8, do_balance=True)
+        x_input, y_lbl, _ = train_batch(batch_size=args.batch_size, backward_freq=sd_vgg_model.backward_freq,
+                                        do_balance=True)
         # returns cross-entropy loss (binary) and predicted probabilities [batch-size, 2] for this batch
         loss, pred_probs = sd_vgg_model.do_forward_pass(x_input, y_lbl)
         train_batch.add_loss(loss)
@@ -93,7 +95,7 @@ def training(args):
                                                        or
                                                        exper_hdl.exper.epoch_id == exper_hdl.exper.run_args.epochs):
             # validate model
-            exper_hdl.eval(sd_dataset, sd_vgg_model)
+            exper_hdl.eval(sd_dataset, sd_vgg_model, verbose=False)
 
     exper_hdl.save_experiment(final_run=True)
     del sd_dataset
@@ -121,6 +123,7 @@ CUDA_VISIBLE_DEVICES=0 python train_slice_detector.py --use_cuda --batch_size=16
 --epochs=2000 --model=sdvgg11_bn --lr=0.00001 --fold_id=1 --type_of_map=u_map --chkpnt
 
 
-CUDA_VISIBLE_DEVICES=0 nohup python train_slice_detector.py --use_cuda --batch_size=8  --val_freq=200 --print_freq=100 
---epochs=6000 --model=sdvgg11_bn --lr=0.00001 --fold_id=3 --type_of_map=u_map --chkpnt  > /home/jorg/tmp/tr_sdvgg_f3_6000_bs8.log 2>&1&
+CUDA_VISIBLE_DEVICES=0 nohup python train_slice_detector.py --use_cuda --batch_size=4 --val_freq=100 --print_freq=25
+--epochs=5000 --model=sdvgg11_bn --lr=0.00005 --fold_id=0 --type_of_map=e_map --chkpnt --chkpnt_freq=1500
+> /home/jorg/tmp/tr_sdvgg_f3_6000_bs8.log 2>&1&
 """

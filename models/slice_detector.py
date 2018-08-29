@@ -9,7 +9,7 @@ from config.config import OPTIMIZER_DICT
 
 class DegenerateSliceDetector(nn.Module):
 
-    def __init__(self, architecture, lr=0.02, init_weights=True, verbose=True, num_of_input_chnls=3):
+    def __init__(self, architecture, lr=0.02, init_weights=True, verbose=False, num_of_input_chnls=3):
         super(DegenerateSliceDetector, self).__init__()
         self.verbose = verbose
         self.num_of_input_chnls = num_of_input_chnls
@@ -19,6 +19,7 @@ class DegenerateSliceDetector(nn.Module):
         self.weight_decay = architecture["weight_decay"]
         self.sgd_optimizer = architecture["optimizer"]
         self.fp_penalty_weight = architecture["fp_penalty_weight"]
+        self.backward_freq = architecture["backward_freq"]
         self.lr = lr
         # We assume that the last conv-block has this number of channels (could be more dynamic, yes)
         self.channels_last_layer = 512
@@ -68,6 +69,7 @@ class DegenerateSliceDetector(nn.Module):
         self.optimizer = None
         self.set_learning_rate(lr=lr)
         self.modelName = 'Degenerate Slice Detector'
+        self.features = None
         if init_weights:
             self._initialize_weights()
 
@@ -94,9 +96,11 @@ class DegenerateSliceDetector(nn.Module):
                 m.weight.data.normal_(0, 0.01)
                 m.bias.data.zero_()
 
-    def forward(self, x_in):
+    def forward(self, x_in, keep_features=False):
 
         features = self.base_model.features(x_in)
+        if keep_features:
+            self.features = features
         y = self.base_model.classifier(features)
         # we return softmax probs and log-softmax. The last for computation of NLLLoss
         out = {"softmax": self.softmax_layer(y),

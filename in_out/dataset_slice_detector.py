@@ -69,7 +69,7 @@ class SliceDetectorDataSet(object):
         raise NotImplementedError()
 
 
-def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_threshold=0.001,
+def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_threshold=0.001, num_of_input_chnls=3,
                    degenerate_type="mean", pos_label=1, acdc_dataset=None, logger=None, verbose=False):
     # if acdc_dataset is None:
     fold_id = exper_hdl.exper.run_args.fold_id
@@ -80,7 +80,7 @@ def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_thre
                                        fold_ids=[fold_id], preprocess=False,
                                        debug=exper_hdl.exper.run_args.quick_run, do_augment=False,
                                        incomplete_only=False)
-    num_of_input_chnls = 3
+
     exper_ensemble.load_dice_without_referral(type_of_map=type_of_map, referral_threshold=0.001)
     exper_handlers = exper_ensemble.seg_exper_handlers
     # instead of using class labels 0, 1, 2, 3 for the seg-masks we will use values between [0, 1]
@@ -129,19 +129,18 @@ def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_thre
         # please NOTE that pred_labels has shape [8, w, h, #slices]
         pred_labels = exper_handlers[pfold_id].pred_labels[patient_id]
         # get Bayesian uncertainty map or entropy map, shape [2, w, h, #slices]
-        if type_of_map == "u_map":
+        if type_of_map == "u_map" and num_of_input_chnls == 3:
             exper_handlers[pfold_id].get_referral_maps(u_threshold=referral_threshold, per_class=False,
                                                        patient_id=patient_id,
                                                        aggregate_func="max", use_raw_maps=True,
                                                        load_ref_map_blobs=False)
             u_maps = exper_handlers[pfold_id].referral_umaps[patient_id]
-        elif type_of_map == "e_map":
+        elif type_of_map == "e_map" and num_of_input_chnls == 3:
             # get entropy maps
             exper_handlers[pfold_id].get_entropy_maps(patient_id=patient_id)
             u_maps = exper_handlers[pfold_id].entropy_maps[patient_id]
         else:
             # We don't use any uncertainty map. So dimension 1 is equal to 2 instead of 2
-            num_of_input_chnls = 2
             type_of_map = None
         """
             We construct a numpy array as input to our model with the following shape:
@@ -233,6 +232,7 @@ def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_thre
                 dataset.test_labels[patient_id] = {"slices": label_slices, "deg_slices": label_slices_deg}
                 dataset.test_extra_labels[patient_id] = {"slices": extra_label_slices,
                                                          "deg_slices": extra_label_slices_deg}
+
         # if one of the slices is degenerate, this is True and we increase the counter for "degenerated patients"
         if pat_with_deg:
             t_num_deg_pat[stats_idx] += 1
@@ -270,6 +270,7 @@ def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_thre
                                                                                               perc_deg * 100,
                                                                                               perc_deg_non * 100)
     msg6 = "INFO - Patients with degenerate slices train/test {} / {}".format(t_num_deg_pat[0], t_num_deg_pat[1])
+    msg7 = "INFO - #Patients in train/test set {}/{}".format(dataset.size_train, dataset.size_test)
     if verbose:
         if logger is None:
             print(msg1)
@@ -289,8 +290,10 @@ def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_thre
     del acdc_dataset
     if logger is not None:
         logger.info(msg6)
+        logger.info(msg7)
     else:
         print(msg6)
+        print(msg7)
     return dataset
 
 
@@ -315,6 +318,7 @@ def determine_degenerate_slices(img_dices, dice_threshold=0.7, degenerate_type="
         # perform logical OR on axis=0 <- classes. Should result in tensor with shape [#slices]
         deg_slices = np.any(b_slices, axis=0)
 
+    # counter for non-degenerate (index 0) and degenerate count
     class_count = np.zeros(2)
     if np.any(deg_slices):
         skip_patient = False
@@ -322,6 +326,7 @@ def determine_degenerate_slices(img_dices, dice_threshold=0.7, degenerate_type="
         class_count[0] = deg_slices.shape[0] - deg_count
         class_count[1] = deg_count
     else:
+        class_count[0] = deg_slices.shape[0]
         skip_patient = True
 
     return deg_slices, class_count, skip_patient
