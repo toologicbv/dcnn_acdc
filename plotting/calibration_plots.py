@@ -72,6 +72,8 @@ def compute_calibration_terms(exper_dict, patient_id=None, mc_dropout=False, for
     # acc_bins: accuracy per bin. numerator="# of positive predicted class labels for this bin";
     #                             denominator="# of predictions in this bin"
     acc_bins = np.zeros((2, 4, num_of_bins))
+    probs_per_bin = np.zeros((2, 4, num_of_bins))
+    probs_per_bin_denom = np.zeros((2, 4, num_of_bins))
     acc_bins_used = np.zeros((2, 4, num_of_bins))
     mean_counts_per_bin = np.zeros((2, 4, num_of_bins))
     # confidence measure = mean predicted probability in this bin
@@ -110,10 +112,16 @@ def compute_calibration_terms(exper_dict, patient_id=None, mc_dropout=False, for
                         # get all predicted probabilities that "predicted" correctly the pos-class label
                         pred_probs_cls_cor = pred_probs_cls[pos_voxels_idx]
                         counts_pred_probs, _ = np.histogram(pred_probs_cls, bins=prob_bins)
+                        cls_idx_probs_per_bin = np.digitize(pred_probs_cls, bins=prob_bins)
                         # bin the predicted probabilities with correct predictions (class labels)
                         counts_pred_probs_cor, _ = np.histogram(pred_probs_cls_cor, bins=prob_bins)
                         acc_per_bin = np.zeros(num_of_bins)
                         for bin_idx in np.arange(len(acc_per_bin)):
+                            # do the stuff to compute the conf(B_m) metric from the Guo & Pleiss paper
+                            cls_probs_per_bin = pred_probs_cls[cls_idx_probs_per_bin == bin_idx + 1]
+                            probs_per_bin[phase, cls_idx, bin_idx] += np.sum(cls_probs_per_bin)
+                            probs_per_bin_denom[phase, cls_idx, bin_idx] += cls_probs_per_bin.shape[0]
+                            # do the stuff to compute the acc(B_m) metric from the Guo&Pleiss paper
                             if counts_pred_probs[bin_idx] != 0:
                                 acc_per_bin[bin_idx] = counts_pred_probs_cor[bin_idx] * 1./counts_pred_probs[bin_idx]
                                 acc_bins[phase, cls_idx, bin_idx] += acc_per_bin[bin_idx]
@@ -134,6 +142,8 @@ def compute_calibration_terms(exper_dict, patient_id=None, mc_dropout=False, for
             for bin_idx in np.arange(len(prob_bins[1:])):
                 if acc_bins_used[phase, cls_idx, bin_idx] != 0:
                     acc_bins[phase, cls_idx, bin_idx] *= 1./acc_bins_used[phase, cls_idx, bin_idx]
+                if probs_per_bin_denom[phase, cls_idx, bin_idx] != 0:
+                    probs_per_bin[phase, cls_idx, bin_idx] *= 1./probs_per_bin_denom[phase, cls_idx, bin_idx]
 
     # compute final mean ECE value per class, omit the BACKGROUND class
     mean_ece_per_class = np.nan_to_num(np.divide(ece_per_class[:, 1:], ece_counts_per_class[:, 1:]))
@@ -144,14 +154,16 @@ def compute_calibration_terms(exper_dict, patient_id=None, mc_dropout=False, for
             e_suffix = ""
             if with_bg:
                 e_suffix = "_wbg"
-            file_name = "calibration_" + exper_args.model + "_" + exper_args.loss_function + e_suffix + ".npz"
+            loss_function = exper_args.loss_function.replace("-", "")
+            file_name = "calibration_" + exper_args.model + "_" + loss_function + e_suffix + ".npz"
             file_name = os.path.join(config.data_dir, file_name)
-            np.savez(file_name, prob_bins=prob_bins, acc_bins=acc_bins, mean_ece_per_class=mean_ece_per_class)
+            np.savez(file_name, prob_bins=prob_bins, acc_bins=acc_bins, mean_ece_per_class=mean_ece_per_class,
+                     probs_per_bin=probs_per_bin)
             print("INFO - Successfully saved numpy arrays to location {}".format(file_name))
         except IOError:
             raise IOError("ERROR - can't save numpy arrays to location {}".format(file_name))
 
-    return prob_bins, acc_bins, mean_ece_per_class
+    return prob_bins, acc_bins, mean_ece_per_class, probs_per_bin
 
 
 def plot_reliability_diagram(cal_data, height=None, width=16, do_show=True, do_save=False, per_class=False):
@@ -184,6 +196,7 @@ def plot_reliability_diagram(cal_data, height=None, width=16, do_show=True, do_s
         the_range = np.arange(0, 1)
         # average per phase over classes ignoring background class
         acc_bins = np.mean(cal_data.acc_per_bin[:, 1:], axis=1)
+        probs_per_bin = np.mean(cal_data.probs_per_bin[:, 1:], axis=1)
 
     row = 0
     bar_width = 0.09
@@ -208,7 +221,8 @@ def plot_reliability_diagram(cal_data, height=None, width=16, do_show=True, do_s
             # print(acc_ed)
             ax1.set_title("{} ".format(phase_labels[1]), **sub_title_size)
         # compute the gap between fraction of forcast and identiy. Set to zero if bin was empty (2nd line)
-        y_gaps = np.abs(prob_bins[1:] - acc_ed)
+        # old version how we computed miscalibration (wrong): y_gaps = np.abs(prob_bins[1:] - acc_ed)
+        y_gaps = np.abs(probs_per_bin[1] - acc_ed)
         y_gaps[y_gaps == prob_bins[1:]] = 0
         ax1.bar(prob_bins[1:], acc_ed, bar_width, color="b", alpha=0.4)
         ax1.bar(prob_bins[1:], y_gaps, bar_width, bottom=acc_ed, color="r", alpha=0.3, hatch='/',
@@ -231,7 +245,8 @@ def plot_reliability_diagram(cal_data, height=None, width=16, do_show=True, do_s
             # print(acc_es)
             ax2.set_title("{} ".format(phase_labels[0]), **sub_title_size)
         # compute the gap between fraction of forcast and identiy. Set to zero if bin was empty (2nd line)
-        y_gaps = np.abs(prob_bins[1:] - acc_es)
+        # old version how we computed miscalibration (wrong): y_gaps = np.abs(prob_bins[1:] - acc_es)
+        y_gaps = np.abs(probs_per_bin[0] - acc_es)
         y_gaps[y_gaps == prob_bins[1:]] = 0
         ax2.bar(prob_bins[1:], acc_es, bar_width, color="g", alpha=0.4)  # yerr=y_gaps,
         ax2.bar(prob_bins[1:], y_gaps, bar_width, bottom=acc_es, color="r", alpha=0.3, label="Miscalibration",
@@ -306,10 +321,12 @@ class CalibrationData(object):
         self.prob_bin_edges = None
         self.acc_per_bin = None
         self.mean_ece_per_class = None
+        # is actually equal to conf(B_m) metric from Guo & Pleiss paper, has shape [2, 4, #bins]
+        self.probs_per_bin = None
 
     def load(self):
-
-        file_name = CalibrationData.file_prefix + self.model_name + "_" + self.loss_function + ".npz"
+        loss_function = self.loss_function.replace("-", "")
+        file_name = CalibrationData.file_prefix + self.model_name + "_" + loss_function + ".npz"
         file_name = os.path.join(config.data_dir, file_name)
         if len(glob.glob(file_name)) != 1:
             raise ValueError("ERROR - found {} files with name {}. Must be one".format(len(glob.glob(file_name)),
@@ -320,6 +337,7 @@ class CalibrationData(object):
             self.prob_bin_edges = data["prob_bins"]
             self.acc_per_bin = data["acc_bins"]
             self.mean_ece_per_class = data["mean_ece_per_class"]
+            self.probs_per_bin = data["probs_per_bin"]
         except (IOError, KeyError) as e:
             print("ERROR - can't load numpy archive {}".format(file_name))
             print(e)

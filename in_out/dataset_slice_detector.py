@@ -70,7 +70,14 @@ class SliceDetectorDataSet(object):
 
 
 def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_threshold=0.001, num_of_input_chnls=3,
-                   degenerate_type="mean", pos_label=1, acdc_dataset=None, logger=None, verbose=False):
+                   degenerate_type="mean", pos_label=1, acdc_dataset=None, logger=None, verbose=False,
+                   overwrite_quick_run=False):
+    # only works for fold0 (testing purposes, small dataset), we can overwrite the quick_run argument
+    # means we're loading a very small dataset (probably 2-3 images)
+    if exper_hdl.exper.run_args.fold_id == 0 and overwrite_quick_run:
+        quick_run = True
+    else:
+        quick_run = exper_hdl.exper.run_args.quick_run
     # if acdc_dataset is None:
     fold_id = exper_hdl.exper.run_args.fold_id
     if acdc_dataset is None:
@@ -78,7 +85,7 @@ def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_thre
         acdc_dataset = ACDC2017DataSet(seg_exper_hdl.exper.config,
                                        search_mask=seg_exper_hdl.exper.config.dflt_image_name + ".mhd",
                                        fold_ids=[fold_id], preprocess=False,
-                                       debug=exper_hdl.exper.run_args.quick_run, do_augment=False,
+                                       debug=quick_run, do_augment=False,
                                        incomplete_only=False)
 
     exper_ensemble.load_dice_without_referral(type_of_map=type_of_map, referral_threshold=0.001)

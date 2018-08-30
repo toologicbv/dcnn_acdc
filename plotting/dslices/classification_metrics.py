@@ -24,7 +24,7 @@ def average_auc(expers, fig_name=None, height=8, width=6, save=False, show=True)
     ax1.set_ylim([0, 1.])
     p_title = "Average AUC-ROC/PR"
     ax1.set_title(p_title, **config.title_font_small)
-    ax2.set_ylabel("Rec/Prec")
+    ax2.set_ylabel("f1")
     ax2.set_xlabel("Iterations")
     ax2.set_ylim([0, 1.])
     p_title = "Average F1-score"
@@ -43,7 +43,7 @@ def average_auc(expers, fig_name=None, height=8, width=6, save=False, show=True)
         # precision/recall
         y_f1 = e.val_stats["f1"]
         # y_precision = e.val_stats["prec"]
-        ax2.plot(x_values, y_f1, 'r', label="recall-{}".format(type_of_map), linestyle=model_linestyles[idx],
+        ax2.plot(x_values, y_f1, 'r', label="f1-{}".format(type_of_map), linestyle=model_linestyles[idx],
                  c=color_code[idx], alpha=0.35, marker=model_markers[idx])
         # ax2.plot(x_values, y_precision, 'g', label="prec-{}".format(type_of_map), linestyle=model_linestyles[idx],
         #         alpha=0.35)

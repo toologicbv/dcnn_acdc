@@ -100,7 +100,8 @@ class DegenerateSliceDetector(nn.Module):
 
         features = self.base_model.features(x_in)
         if keep_features:
-            self.features = features
+            # keep features but convert to numpy array and fetch from GPU
+            self.features = features.data.cpu().numpy()
         y = self.base_model.classifier(features)
         # we return softmax probs and log-softmax. The last for computation of NLLLoss
         out = {"softmax": self.softmax_layer(y),
@@ -134,8 +135,8 @@ class DegenerateSliceDetector(nn.Module):
             b_loss = torch.mean(b_loss, dim=0)
         return b_loss
 
-    def do_forward_pass(self, x_input, y_labels):
-        out = self(x_input)
+    def do_forward_pass(self, x_input, y_labels, keep_features=False):
+        out = self(x_input, keep_features=keep_features)
         loss = self.get_loss(out, y_labels, average=False)
 
         return loss, out["softmax"]

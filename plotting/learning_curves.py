@@ -6,7 +6,7 @@ import numpy as np
 import os
 
 
-def loss_plot(exper, fig_name=None, height=8, width=6, save=False, show=True, validation=False,
+def loss_plot(exper_hdl, fig_name=None, height=8, width=6, save=False, show=True, validation=False,
               log_scale=False, epoch_range=None, do_average=False, window_size=10):
 
     """
@@ -25,7 +25,8 @@ def loss_plot(exper, fig_name=None, height=8, width=6, save=False, show=True, va
     Examples:
         loss_plot(exper, width=18, validation=True, save=False, do_average=True, epoch_range=[40001, 50000])
     """
-
+    exper = exper_hdl.exper
+    model_name = exper_hdl.model_name
     ax = plt.figure(figsize=(width, height)).gca()
 
     train_loss = exper.get_loss()
@@ -76,7 +77,7 @@ def loss_plot(exper, fig_name=None, height=8, width=6, save=False, show=True, va
             plt.plot(epochs.astype(int), validation_loss[array_idx], 'b', label="validation")
 
     plt.legend(loc="best")
-    p_title = "Learning curve "
+    p_title = "Learning curve ({})".format(model_name)
 
     plt.title(p_title, **config.title_font_small)
 
