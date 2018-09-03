@@ -59,7 +59,7 @@ class BatchHandler(object):
         else:
             return True
 
-    def __call__(self, batch_size=None, backward_freq=None, patient_id=None, do_balance=True):
+    def __call__(self, batch_size=None, backward_freq=None, patient_id=None, do_balance=True, do_permute=True):
         """
         Construct a batch of shape [batch_size, 3channels, w, h]
                                    3channels: (1) input image
@@ -86,7 +86,8 @@ class BatchHandler(object):
         # REMEMBER. the dataset contains input tensors of shape [3channels, w, h, #slices]
         #           WHEREAS the label object of dataset has shape [#slices] (binary encoding)
         img_slices, label_slices, additional_labels, batch_size = self.determine_slices(patient_id,
-                                                                                        do_balance, batch_size)
+                                                                                        do_balance, batch_size,
+                                                                                        do_permute=do_permute)
         # concatenate along dim0 = batch dimension
         # x_batch = np.concatenate((es_img_slices, ed_img_slices), axis=0)
         x_batch = torch.FloatTensor(torch.from_numpy(img_slices).float())

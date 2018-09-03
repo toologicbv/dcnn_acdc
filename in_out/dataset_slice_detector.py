@@ -74,6 +74,7 @@ def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_thre
                    overwrite_quick_run=False):
     # only works for fold0 (testing purposes, small dataset), we can overwrite the quick_run argument
     # means we're loading a very small dataset (probably 2-3 images)
+    random_map = exper_hdl.exper.run_args.use_random_map
     if exper_hdl.exper.run_args.fold_id == 0 and overwrite_quick_run:
         quick_run = True
     else:
@@ -87,7 +88,6 @@ def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_thre
                                        fold_ids=[fold_id], preprocess=False,
                                        debug=quick_run, do_augment=False,
                                        incomplete_only=False)
-
     exper_ensemble.load_dice_without_referral(type_of_map=type_of_map, referral_threshold=0.001)
     exper_handlers = exper_ensemble.seg_exper_handlers
     # instead of using class labels 0, 1, 2, 3 for the seg-masks we will use values between [0, 1]
@@ -136,16 +136,18 @@ def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_thre
         # please NOTE that pred_labels has shape [8, w, h, #slices]
         pred_labels = exper_handlers[pfold_id].pred_labels[patient_id]
         # get Bayesian uncertainty map or entropy map, shape [2, w, h, #slices]
-        if type_of_map == "u_map" and num_of_input_chnls == 3:
+        if type_of_map == "u_map" and num_of_input_chnls == 3 and not random_map:
             exper_handlers[pfold_id].get_referral_maps(u_threshold=referral_threshold, per_class=False,
                                                        patient_id=patient_id,
                                                        aggregate_func="max", use_raw_maps=True,
                                                        load_ref_map_blobs=False)
             u_maps = exper_handlers[pfold_id].referral_umaps[patient_id]
-        elif type_of_map == "e_map" and num_of_input_chnls == 3:
+        elif type_of_map == "e_map" and num_of_input_chnls == 3 and not random_map:
             # get entropy maps
             exper_handlers[pfold_id].get_entropy_maps(patient_id=patient_id)
             u_maps = exper_handlers[pfold_id].entropy_maps[patient_id]
+        elif random_map:
+            u_maps = np.random.normal(loc=0.1, scale=1., size=image.shape)
         else:
             # We don't use any uncertainty map. So dimension 1 is equal to 2 instead of 2
             type_of_map = None
@@ -156,7 +158,7 @@ def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_thre
             
         """
         # merge the first dimension ES/ED [2, w, h, #slices] to [w, h, 2*#slices]
-        if type_of_map is not None:
+        if type_of_map is not None and not random_map:
             u_maps = np.concatenate((u_maps[0], u_maps[1]), axis=2)
         img_dice_scores = exper_ensemble.dice_score_slices[patient_id]
         # also merge first dimension of ES/ED img_dice_scores obj

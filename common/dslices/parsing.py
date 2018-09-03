@@ -27,6 +27,7 @@ def do_parse_args():
     parser.add_argument('--type_of_map', choices=['u_map', 'e_map', "None"], default="u_map",
                         help="Type of uncertainty map to use as input: u_map versus e_map")
     parser.add_argument('--use_no_map', action='store_true', help="whether or not to use the map for prediction")
+    parser.add_argument('--use_random_map', action='store_true', help="whether or not to use a random map")
 
     # in case we retrain a previous model/checkpoint this parameter specifies the experiment directory
     # relative path (w.r.t. logs/ directory e.g. "20180330_09_56_01_dcnn_mcv1_150000E_lr2e02"
@@ -70,3 +71,58 @@ def do_parse_args():
         args.exper_dict = config.exper_dict_centropy
 
     return args
+
+
+run_dict = {'type_of_map': 'e_map',
+            'model': "sdvgg11_bn",
+            'exper_dict': config.exper_dict_brier,
+            'version': "v1",
+            'root_dir': config.root_dir,
+            'fold_id': 0,
+            'log_dir': None,
+            'use_cuda': False,
+            'cuda': False,
+            'epochs': 10,
+            'print_freq': 25,
+            'batch_size': 8,
+            'lr': 1e-4,
+            'quick_run': False,
+            'val_freq': 100,
+            'retrain_chkpnt': False,
+            'retrain_exper': None,
+            'chkpnt_freq': 10,
+            'chkpnt': False,
+            'use_no_map': False,
+            'use_random_map': False,
+            'num_input_chnls': 3
+}
+
+
+def create_def_argparser(**kwargs):
+
+    args = argparse.Namespace()
+    args.type_of_map = kwargs['type_of_map']
+    args.model = kwargs['model']
+    args.fold_id = kwargs['fold_id']
+    args.exper_dict = kwargs['exper_dict']
+    args.version = kwargs['version']
+    args.root_dir = kwargs['root_dir']
+    args.log_dir = kwargs['log_dir']
+    args.use_cuda = kwargs['use_cuda']
+    args.cuda = kwargs['cuda']
+    args.epochs = kwargs['epochs']
+    args.print_freq = kwargs['print_freq']
+    args.batch_size = kwargs['batch_size']
+    args.lr = kwargs['lr']
+    args.quick_run = kwargs['quick_run']
+    args.val_freq = kwargs['val_freq']
+    args.retrain_chkpnt = kwargs['retrain_chkpnt']
+    args.retrain_exper = kwargs['retrain_exper']
+    args.chkpnt_freq = kwargs['chkpnt_freq']
+    args.chkpnt = kwargs['chkpnt']
+    args.use_no_map = kwargs['use_no_map']
+    args.use_random_map = kwargs['use_random_map']
+    args.num_input_chnls = kwargs['num_input_chnls']
+
+    return args
+
