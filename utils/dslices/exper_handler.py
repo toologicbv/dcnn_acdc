@@ -339,8 +339,8 @@ class ExperimentHandler(object):
     def check_compatibility(exper):
         arg_dict = vars(exper.run_args)
         # add use_reg_loss argument to run arguments, because we added this arg later
-        if "use_reg_loss" not in arg_dict.keys():
-            arg_dict["use_reg_loss"] = False
+        if "use_random_map" not in arg_dict.keys():
+            arg_dict["use_random_map"] = False
 
         return exper
 
@@ -369,7 +369,7 @@ class ExperimentHandler(object):
             print "Unexpected error:", sys.exc_info()[0]
             raise
 
-        # self.exper = ExperimentHandler.check_compatibility(experiment)
+        self.exper = ExperimentHandler.check_compatibility(experiment)
         self.exper = experiment
         type_of_map = "no-" + self.exper.run_args.type_of_map if self.exper.run_args.use_no_map else \
             self.exper.run_args.type_of_map
@@ -481,18 +481,21 @@ def get_experiment_handlers(root_dir, load_fold_id, seg_exper_ensemble=None):
                     exp_path = os.path.join(log_dir, exper_id)
                     exper_hdl = ExperimentHandler()
                     exper_hdl.set_seg_ensemble(seg_exper_ensemble)
-                    exper_hdl.load_experiment(exp_path, use_logfile=False, verbose=False)
-                    exper_hdl.set_root_dir(root_dir)
-                    print("Model name: {} / config_key {}".format(exper_hdl.model_name, config_key))
-                    if exper_hdl.exper.run_args.type_of_map == "u_map":
-                        if exper_hdl.exper.run_args.use_no_map:
-                            exp_hdl_no_umap[config_key] = exper_hdl
+                    try:
+                        exper_hdl.load_experiment(exp_path, use_logfile=False, verbose=False)
+                        exper_hdl.set_root_dir(root_dir)
+                        print("Model name: {} / config_key {}".format(exper_hdl.model_name, config_key))
+                        if exper_hdl.exper.run_args.type_of_map == "u_map":
+                            if exper_hdl.exper.run_args.use_no_map:
+                                exp_hdl_no_umap[config_key] = exper_hdl
+                            else:
+                                exp_hdl_umap[config_key] = exper_hdl
                         else:
-                            exp_hdl_umap[config_key] = exper_hdl
-                    else:
-                        if exper_hdl.exper.run_args.use_no_map:
-                            exp_hdl_no_emap[config_key] = exper_hdl
-                        else:
-                            exp_hdl_emap[config_key] = exper_hdl
+                            if exper_hdl.exper.run_args.use_no_map:
+                                exp_hdl_no_emap[config_key] = exper_hdl
+                            else:
+                                exp_hdl_emap[config_key] = exper_hdl
+                    except IOError:
+                        print("=============>>> Can't open experiment {}".format(exper_id))
 
     return exp_hdl_emap, exp_hdl_no_emap, exp_hdl_umap, exp_hdl_no_umap

@@ -136,20 +136,25 @@ def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_thre
         # please NOTE that pred_labels has shape [8, w, h, #slices]
         pred_labels = exper_handlers[pfold_id].pred_labels[patient_id]
         # get Bayesian uncertainty map or entropy map, shape [2, w, h, #slices]
-        if type_of_map == "u_map" and num_of_input_chnls == 3 and not random_map:
+        if type_of_map == "u_map" and num_of_input_chnls == 3 and is_train or \
+                (not is_train and not random_map):
             exper_handlers[pfold_id].get_referral_maps(u_threshold=referral_threshold, per_class=False,
                                                        patient_id=patient_id,
                                                        aggregate_func="max", use_raw_maps=True,
                                                        load_ref_map_blobs=False)
             u_maps = exper_handlers[pfold_id].referral_umaps[patient_id]
-        elif type_of_map == "e_map" and num_of_input_chnls == 3 and not random_map:
+        elif type_of_map == "e_map" and num_of_input_chnls == 3 and is_train or \
+                (not is_train and not random_map):
             # get entropy maps
             exper_handlers[pfold_id].get_entropy_maps(patient_id=patient_id)
             u_maps = exper_handlers[pfold_id].entropy_maps[patient_id]
-        elif random_map:
+        elif random_map and not is_train:
             u_maps = np.random.normal(loc=0.1, scale=1., size=image.shape)
         else:
-            # We don't use any uncertainty map. So dimension 1 is equal to 2 instead of 2
+            # we should only end-up here if we have 2 input channels
+            if num_of_input_chnls == 3:
+                raise ValueError("ERROR - Something went wrong, you shouldn't end up here.")
+            # We don't use any uncertainty map. So dimension 1 is equal to 2 instead of 3
             type_of_map = None
         """
             We construct a numpy array as input to our model with the following shape:
@@ -158,7 +163,8 @@ def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_thre
             
         """
         # merge the first dimension ES/ED [2, w, h, #slices] to [w, h, 2*#slices]
-        if type_of_map is not None and not random_map:
+        if type_of_map is not None and is_train or \
+                (not is_train  and not random_map):
             u_maps = np.concatenate((u_maps[0], u_maps[1]), axis=2)
         img_dice_scores = exper_ensemble.dice_score_slices[patient_id]
         # also merge first dimension of ES/ED img_dice_scores obj
@@ -256,6 +262,8 @@ def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_thre
     total_perc_deg = np.sum(t_num_deg) / float(np.sum(t_num_slices))
     total_perc_deg_non = np.sum(t_num_deg_non) / float(np.sum(t_num_slices))
 
+    if random_map:
+        msg0 = "WARNING - Using RANDOM uncertainty maps!"
     msg1 = "INFO - Total degenerate over ES/ED and train/test set {:.2f}% / {:.2f}%".format(total_perc_deg * 100,
                                                                                            total_perc_deg_non * 100)
 
@@ -298,9 +306,13 @@ def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_thre
 
     del acdc_dataset
     if logger is not None:
+        if random_map:
+            logger.info(msg0)
         logger.info(msg6)
         logger.info(msg7)
     else:
+        if random_map:
+            print(msg0)
         print(msg6)
         print(msg7)
     return dataset
