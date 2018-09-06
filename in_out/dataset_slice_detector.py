@@ -104,6 +104,7 @@ def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_thre
     for patient_id in tqdm(acdc_dataset.trans_dict.keys()):
         # found a degenerate slice
         pat_with_deg = False
+        stripped_patient_id = int(patient_id.replace("patient", ""))
         # IMPORTANT: val_image_names only contains the patient_ids of the test/val set
         #            whereas acdc.dataset.image_names contains all names (confusing I know)
         # HENCE, we check whether the patient ID is in the first list, if not it's a training image
@@ -149,7 +150,12 @@ def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_thre
             exper_handlers[pfold_id].get_entropy_maps(patient_id=patient_id)
             u_maps = exper_handlers[pfold_id].entropy_maps[patient_id]
         elif random_map and not is_train:
-            u_maps = np.random.normal(loc=0.1, scale=1., size=image.shape)
+            # original: u_maps = np.random.normal(loc=0.1, scale=1., size=image.shape)
+            # temporary
+            exper_handlers[pfold_id].get_entropy_maps(patient_id=patient_id)
+            u_maps = exper_handlers[pfold_id].entropy_maps[patient_id]
+            u_maps = np.concatenate((u_maps[0], u_maps[1]), axis=2)
+            image = np.random.normal(loc=0.1, scale=1., size=image.shape)
         else:
             # we should only end-up here if we have 2 input channels
             if num_of_input_chnls == 3:
@@ -180,9 +186,11 @@ def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_thre
             img_3dim_deg = np.zeros((deg_num_slices, num_of_input_chnls, width, height))
             # do the same for the labels, but we only need one position per slice
             label_slices = np.zeros(non_deg_num_slices)
-            extra_label_slices = np.zeros((non_deg_num_slices, 3))  # (1) phase (2) original sliceID (3) mean-dice
+            # (1) phase (2) original sliceID (3) mean-dice (4) patient_id (5) apex/base indication
+            # (6) continuous slice_id between [0, 1] for t-SNE visualization of apex/base continuum using colors
+            extra_label_slices = np.zeros((non_deg_num_slices, 6))
             label_slices_deg = np.zeros(deg_num_slices)
-            extra_label_slices_deg = np.zeros((deg_num_slices, 3))  # (1) phase (2) original sliceID (3) mean-dice
+            extra_label_slices_deg = np.zeros((deg_num_slices, 6))
             s_counter = 0
             s_counter_deg = 0
             # loop over slices
@@ -197,7 +205,7 @@ def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_thre
                     phase = 0
                     cls_offset = 0
                     phase_slice_counter = s
-                # merge 4 class labels into one dimesion: use labels 0, 1, 2, 3
+                # merge 4 class labels into one dimension: use labels 0, 1, 2, 3
                 # please NOTE that pred_labels has shape [8, w, h, #slices]
                 p_lbl = np.zeros((pred_labels.shape[1], pred_labels.shape[2]))
                 # loop over LV, MY and RV class (omit BG)
@@ -221,20 +229,37 @@ def create_dataset(exper_hdl, exper_ensemble, type_of_map="u_map", referral_thre
                 if is_degenerate:
                     pat_with_deg = True
                     t_num_deg[phase, stats_idx] += 1
-                    if s != 0 and phase_slice_counter != half_slices - 1:
+                    if phase_slice_counter != 0 and phase_slice_counter != half_slices - 1:
                         t_num_deg_non[phase, stats_idx] += 1
+                        apex_base = 0
+                        cont_slice_id = float(phase_slice_counter) / float(half_slices)
+                    else:
+                        apex_base = 1
+                        cont_slice_id = 0 if phase_slice_counter == 0 else 1
                     img_3dim_deg[s_counter_deg, :, :, :] = x
                     label_slices_deg[s_counter_deg] = pos_label
-                    extra_label_slices_deg[s_counter_deg, 0] = phase
-                    extra_label_slices_deg[s_counter_deg, 1] = phase_slice_counter
-                    extra_label_slices_deg[s_counter_deg, 2] = slice_dice
+                    extra_label_slices_deg[s_counter_deg, 0] = stripped_patient_id
+                    extra_label_slices_deg[s_counter_deg, 1] = phase
+                    extra_label_slices_deg[s_counter_deg, 2] = phase_slice_counter
+                    extra_label_slices_deg[s_counter_deg, 3] = slice_dice
+                    extra_label_slices_deg[s_counter_deg, 4] = apex_base
+                    extra_label_slices_deg[s_counter_deg, 5] = cont_slice_id
                     s_counter_deg += 1
                 else:
+                    if phase_slice_counter != 0 and phase_slice_counter != half_slices - 1:
+                        apex_base = 0
+                        cont_slice_id = float(phase_slice_counter) / float(half_slices)
+                    else:
+                        apex_base = 1
+                        cont_slice_id = 0 if phase_slice_counter == 0 else 1
                     img_3dim[s_counter, :, :, :] = x
                     label_slices[s_counter] = neg_label
-                    extra_label_slices[s_counter, 0] = phase
-                    extra_label_slices[s_counter, 1] = phase_slice_counter
-                    extra_label_slices[s_counter, 2] = slice_dice
+                    extra_label_slices[s_counter, 0] = stripped_patient_id
+                    extra_label_slices[s_counter, 1] = phase
+                    extra_label_slices[s_counter, 2] = phase_slice_counter
+                    extra_label_slices[s_counter, 3] = slice_dice
+                    extra_label_slices[s_counter, 4] = apex_base
+                    extra_label_slices[s_counter, 5] = cont_slice_id
                     s_counter += 1
 
             if is_train:

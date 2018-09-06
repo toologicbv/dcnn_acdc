@@ -29,7 +29,7 @@ class DegenerateSliceDetector(nn.Module):
         # spp_pyramid is assumed to be an array e.g. [4, 2, 1] which results in a pyramid of
         # {4x4, 2x2, 1x1} which is equal to 16+4+1 = 21 bins
         # see SPP paper for details: https://arxiv.org/abs/1406.4729
-        fc_no_params = self.channels_last_layer * np.sum(np.array(self.spp_pyramid)**2)
+        self.fc_no_params = self.channels_last_layer * np.sum(np.array(self.spp_pyramid)**2)
         model_name = getattr(torchvision.models, architecture["base_model"])
         self.base_model = model_name(pretrained=False)
         if self.num_of_input_chnls != 3:
@@ -52,7 +52,7 @@ class DegenerateSliceDetector(nn.Module):
         # End exchange last MaxPool2d layer
         # Create classifier sequential module
         self.base_model.classifier = nn.Sequential(
-            nn.Linear(fc_no_params, 4096),
+            nn.Linear(self.fc_no_params, 4096),
             nn.ReLU(True),
             nn.Dropout(p=self.drop_perc),
             nn.Linear(4096, 4096),

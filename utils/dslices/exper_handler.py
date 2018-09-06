@@ -100,10 +100,15 @@ class ExperimentHandler(object):
         std_auc_roc = np.std(self.aucs_roc)
         self.stats_auc_roc = tuple((mean_auc_roc, std_auc_roc))
 
-    def run_eval(self, data_set, model, do_balance=False, keep_features=False, verbose=False):
+    def run_eval(self, data_set, model, do_balance=False, keep_features=False, verbose=False,
+                 do_permute=True):
         self.reset_eval_metrics()
         eval_set_size = len(data_set.get_patient_ids(is_train=False))
         eval_batch = BatchHandlerSD(data_set=data_set, is_train=False, cuda=self.exper.run_args.cuda)
+        if keep_features:
+            spp_features = np.empty((0, model.fc_no_params))
+            np_labels = np.empty(0)
+            np_extra_lbls = np.empty(0)
         model.eval()
         for _ in np.arange(eval_set_size):
             # New in pytorch 0.4.0, use local context manager to turn off history tracking
@@ -111,8 +116,14 @@ class ExperimentHandler(object):
                 # batch_size=None and do_balance=True => number of degenerate slices/per patient determines
                 #                                        the batch_size.
                 # batch_size=None and do_balance=False => classify all slices for a particular patient
-                x_input, y_labels, _ = eval_batch(batch_size=None, backward_freq=1, do_balance=do_balance)
+                x_input, y_labels, extra_lbls = eval_batch(batch_size=None, backward_freq=1, do_balance=do_balance,
+                                                           do_permute=do_permute)
                 eval_loss, pred_probs = model.do_forward_pass(x_input, y_labels, keep_features=keep_features)
+                if keep_features:
+                    spp_features = np.vstack([spp_features, model.features]) if spp_features.size else model.features
+                    np_labels = np.concatenate((np_labels, y_labels.data.cpu().numpy()))
+                    # concatenating extra label information: patient_id, phase, slice_id
+                    np_extra_lbls = np.vstack([np_extra_lbls, extra_lbls]) if np_extra_lbls.size else extra_lbls
             pred_labels = np.argmax(pred_probs.data.cpu().numpy(), axis=1)
             np_pred_probs = pred_probs.data.cpu().numpy()
             f1, roc_auc, pr_auc, prec, rec, fpr, tpr, precision, recall = \
@@ -152,7 +163,18 @@ class ExperimentHandler(object):
         self.arr_eval_metrics = np.mean(self.arr_eval_metrics, axis=0)
         self.compute_mean_aucs()
         del eval_batch
+        if keep_features:
+            self._save_eval_features(spp_features, np_labels, np_extra_lbls)
         model.train()
+
+    def _save_eval_features(self, features, labels, np_extra_lbls):
+        out_filename = os.path.join(self.exper.config.root_dir, self.exper.stats_path)
+        out_filename = os.path.join(out_filename, "eval_feature_arrays")
+        try:
+            np.savez(out_filename, features=features, labels=labels, extra_labels=np_extra_lbls)
+            self.info("INFO - Saved features+labels of eval run to {}".format(out_filename))
+        except IOError:
+            print("ERROR - Can't save features+labels to {}".format(out_filename))
 
     def eval(self, data_set, model, do_balance=False, verbose=False):
         start_time = time.time()
@@ -176,7 +198,7 @@ class ExperimentHandler(object):
         # self.logger.info("\t Check: roc_auc={:.3f} - pr_auc={:.3f}".format(arr_val_eval[1], arr_val_eval[2]))
         self.reset_eval_metrics()
 
-    def test(self, data_set=None, model=None, test_id=None, keep_features=False, verbose=False):
+    def test(self, data_set=None, model=None, test_id=None, do_permute=False, keep_features=False, verbose=False):
         if model is None:
             # get model. 1st arg=experiment label "20180824_13_06_44_sdvgg11_bn_f1p01_brier_umap_6KE_lr1e05"
             #            2nd arg=last epoch id aka checkpoint
@@ -188,7 +210,8 @@ class ExperimentHandler(object):
         start_time = time.time()
         self.info("INFO - Begin test run {}".format(test_id))
         test_stats = {}
-        self.run_eval(data_set=data_set, model=model, do_balance=False, keep_features=keep_features, verbose=verbose)
+        self.run_eval(data_set=data_set, model=model, do_balance=False, keep_features=keep_features,
+                      do_permute=do_permute, verbose=verbose)
         test_stats["loss"] = self.eval_loss
         test_stats["f1"] = self.arr_eval_metrics[0]
         test_stats["roc_auc"] = self.arr_eval_metrics[1]
