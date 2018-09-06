@@ -15,6 +15,7 @@ def visualize_features(feature_projection, y_labels, extra_labels=None, exper_hd
     colors = ['b', 'g']
     mycmap = mpl.cm.get_cmap('Spectral')
     markers = ['x', 'D']
+    marker_size = [30, 80]
     legend_labels = ['normal', 'low-dice']
     plot_data = np.append(feature_projection, np.expand_dims(y_labels, axis=1), axis=1)
     data_points = np.empty((0, extra_labels.shape[1] + 1))
@@ -37,7 +38,7 @@ def visualize_features(feature_projection, y_labels, extra_labels=None, exper_hd
             colour = mycmap(extra_labels[i, 5])
 
         plt.scatter(x, y, c=colour, marker=markers[int(c)], label=legend_labels[int(c)],
-                    cmap=mycmap)
+                    cmap=mycmap, s=marker_size[int(c)])
         if extra_labels is not None:
             if y_labels[i] == 1 or y_labels[i] == 0:
                 dta_labels = np.zeros(extra_labels.shape[1] + 1).astype(np.int16)
