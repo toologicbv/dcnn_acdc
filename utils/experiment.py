@@ -14,7 +14,7 @@ import dill
 from common.parsing import create_def_argparser, run_dict
 
 from common.common import create_logger, create_exper_label, setSeed, load_pred_labels
-from config.config import config, DEFAULT_DCNN_MC_2D, DEFAULT_DCNN_2D
+from config.config import config, DEFAULT_DCNN_MC_2D
 from utils.batch_handlers import TwoDimBatchHandler, BatchStatistics
 from utils.generate_uncertainty_maps import InferenceGenerator, ImageUncertainties, OutOfDistributionSlices
 from utils.post_processing import filter_connected_components, detect_largest_umap_areas
@@ -24,6 +24,7 @@ from common.acquisition_functions import bald_function
 from plotting.uncertainty_plots import analyze_slices
 from plotting.main_seg_results import plot_seg_erros_uncertainties
 from in_out.load_data import ACDC2017DataSet
+from utils.hvsmr.batch_handler import HVSMRTwoDimBatchHandler
 from utils.test_handler import ACDC2017TestHandler
 from in_out.patient_classification import Patients
 
@@ -184,14 +185,19 @@ class ExperimentHandler(object):
         else:
             num_of_chunks = val_set_size // self.exper.config.val_batch_size
             val_batch_size = self.exper.config.val_batch_size
-
+        if dataset.name == "ACDC":
+            val_batch = TwoDimBatchHandler(self.exper, batch_size=val_batch_size)
+            arr_val_acc = np.zeros(6)  # array of 6 values for accuracy of ES/ED RV/MYO/LV
+            arr_val_dice = np.zeros(2)  # array of 2 values, loss for ES and ED
+        elif dataset.name == "HVSMR":
+            val_batch = HVSMRTwoDimBatchHandler(self.exper, batch_size=val_batch_size)
+            arr_val_acc = np.zeros(2)  # array of 2 values for accuracy of MYO/LV
+            arr_val_dice = np.zeros(2)  # actually we don't use this, same as above
         arr_val_loss = np.zeros(num_of_chunks)
-        arr_val_acc = np.zeros(6)  # array of 6 values for accuracy of ES/ED RV/MYO/LV
-        arr_val_dice = np.zeros(2)  # array of 2 values, loss for ES and ED
+
         s_offset = 0
         for chunk in np.arange(num_of_chunks):
             slice_range = np.arange(s_offset, s_offset + val_batch_size)
-            val_batch = TwoDimBatchHandler(self.exper, batch_size=val_batch_size)
             val_batch.generate_batch_2d(dataset.images(train=False), dataset.labels(train=False),
                                         slice_range=slice_range)
             # New in pytorch 0.4.0, use local context manager to turn off history tracking
@@ -211,14 +217,22 @@ class ExperimentHandler(object):
         self.exper.val_stats["mean_loss"][self.num_val_runs - 1] = val_loss
         self.exper.val_stats["dice_coeff"][self.num_val_runs - 1] = arr_val_acc
         self.set_accuracy(arr_val_acc, val_run_id=self.num_val_runs)
-        self.set_dice_losses(arr_val_dice, val_run_id=self.num_val_runs)
+
         duration = time.time() - start_time
-        self.logger.info("---> VALIDATION epoch {} (#patches={}): current loss {:.3f}\t "
-                         "dice-coeff:: ES {:.3f}/{:.3f}/{:.3f} --- "
-                         "ED {:.3f}/{:.3f}/{:.3f}  (time={:.2f} sec)".format(self.exper.epoch_id, val_set_size, val_loss,
-                                                                             arr_val_acc[0], arr_val_acc[1],
-                                                                             arr_val_acc[2], arr_val_acc[3],
-                                                                             arr_val_acc[4], arr_val_acc[5], duration))
+        if dataset.name == "ACDC":
+            self.set_dice_losses(arr_val_dice, val_run_id=self.num_val_runs)
+            self.logger.info("---> VALIDATION epoch {} (#patches={}): current loss {:.3f}\t "
+                             "dice-coeff:: ES {:.3f}/{:.3f}/{:.3f} --- "
+                             "ED {:.3f}/{:.3f}/{:.3f}  (time={:.2f} sec)".format(self.exper.epoch_id,
+                                                                                 val_set_size, val_loss,
+                                                                                 arr_val_acc[0], arr_val_acc[1],
+                                                                                 arr_val_acc[2], arr_val_acc[3],
+                                                                                 arr_val_acc[4], arr_val_acc[5],
+                                                                                 duration))
+        elif dataset.name == "HVSMR":
+            self.logger.info("---> VALIDATION epoch {} (#patches={}): current loss {:.3f} (time={:.2f} sec)"
+                             " dice (Myo/LV): {:.3f}/{:.3f}".format(self.exper.epoch_id, val_set_size,
+                              val_loss, duration, arr_val_acc[0], arr_val_acc[1]))
         del val_batch
 
     def test(self, checkpoints, test_set, image_num=0, mc_samples=1, sample_weights=False, compute_hd=False,

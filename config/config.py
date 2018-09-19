@@ -94,10 +94,6 @@ class BaseConfig(object):
         self.class_lbl_myo = 2
         self.class_lbl_LV = 3
 
-        self.class_lbl_background = 0
-        self.class_lbl_myocardium = 1
-        self.class_lbl_bloodpool = 2
-
         # noise threshold
         self.noise_threshold = 0.01
 
@@ -184,64 +180,6 @@ class BaseConfig(object):
                                         kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"], 0.],
                             'loss_function': nn.NLLLoss2d,
                             'description': 'DCNN_2D_MC_DROPOUT_{}'.format(kwargs["drop_prob"])
-                            }
-        elif model == "dcnn_mc_bn789":
-            num_of_layers = 10
-            architecture = {'num_of_layers': num_of_layers,
-                            'input_channels': 2,
-                            'kernels': [3, 3, 3, 3, 3, 3, 3, 3, 1, 1],
-                            'channels': [32, 32, 32, 32, 32, 32, 64, 128, 128, 4],
-                            # NOTE: last channel is num_of_classes
-                            'dilation': [1, 1, 2, 4, 8, 16, 32, 1, 1, 1],
-                            'stride': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                            'batch_norm': [False, False, False, False, False, False, True, True, True, False],
-                            'non_linearity': [nn.ELU, nn.ELU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ELU,
-                                              nn.ELU, nn.Softmax],
-                            # 'dropout': [kwargs["drop_prob"]] * num_of_layers,
-                            'dropout': [kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"],
-                                        kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"],
-                                        kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"], 0.],
-                            'loss_function': nn.NLLLoss,
-                            'description': 'DCNN_2D_MC_DROPOUT_BN89{}'.format(kwargs["drop_prob"])
-                            }
-        elif model == "dcnn_mcm":
-            num_of_layers = 10
-            architecture = {'num_of_layers': num_of_layers,
-                            'input_channels': 2,
-                            'kernels': [3, 3, 3, 3, 3, 3, 3, 3, 1, 1],
-                            'channels': [32, 32, 32, 32, 32, 32, 64, 128, 128, 4],
-                            # NOTE: last channel is num_of_classes
-                            'dilation': [1, 1, 2, 4, 8, 16, 32, 1, 1, 1],
-                            'stride': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                            'batch_norm': [False, True, True, True, True, True, True, True, True, False],
-                            'non_linearity': [nn.ELU, nn.ELU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ReLU, nn.ELU,
-                                              nn.ELU, nn.Softmax],
-                            # 'dropout': [kwargs["drop_prob"]] * num_of_layers,
-                            'dropout': [0., 0., 0.,
-                                        kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"],
-                                        kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"], 0.],
-                            'loss_function': nn.NLLLoss,
-                            'description': 'DCNN_2D_MC_DROPOUT_MID_LAYERS_{}'.format(kwargs["drop_prob"])
-                            }
-        elif model == "dcnn_mc_crelu":
-            num_of_layers = 10
-            architecture = {'num_of_layers': num_of_layers,
-                            'input_channels': 2,
-                            'kernels': [3, 3, 3, 3, 3, 3, 3, 3, 1, 1],
-                            'channels': [16, 16, 32, 32, 32, 32, 64, 128, 128, 4],
-                            # NOTE: last channel is num_of_classes
-                            'dilation': [1, 1, 2, 4, 8, 16, 32, 1, 1, 1],
-                            'stride': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                            'batch_norm': [False, True, True, True, True, True, True, True, True, False],
-                            'non_linearity': [CReLU, CReLU, CReLU, CReLU, CReLU, CReLU, CReLU, nn.ELU,
-                                              nn.ELU,
-                                              nn.Softmax],
-                            # 'dropout': [kwargs["drop_prob"]] * num_of_layers,
-                            'dropout': [kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"],
-                                        kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"],
-                                        kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"], 0.],
-                            'loss_function': nn.NLLLoss,
-                            'description': 'DCNN_2D_MC_DROPOUT_CRELU_{}'.format(kwargs["drop_prob"])
                             }
 
         return architecture

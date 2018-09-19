@@ -1,11 +1,5 @@
-import torch.nn as nn
-import torch.nn.functional as F
 import torch
 import numpy as np
-from torch.autograd import Variable
-
-from sklearn.metrics import precision_recall_curve, f1_score
-from sklearn.metrics.classification import UndefinedMetricWarning
 
 
 # https://github.com/EKami/carvana-challenge/blob/master/src/nn/losses.py
@@ -25,6 +19,9 @@ def soft_dice_score(prob_c, true_label_c):
 
     """
     eps = 1.0e-6
+
+    if not isinstance(true_label_c, torch.FloatTensor) and not isinstance(true_label_c, torch.DoubleTensor):
+        true_label_c = true_label_c.float()
 
     nominator = torch.sum(true_label_c * prob_c)
     denominator = torch.sum(true_label_c) + torch.sum(prob_c) + eps

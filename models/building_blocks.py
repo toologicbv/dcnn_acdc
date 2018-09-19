@@ -206,3 +206,61 @@ class Basic2DCNNBlock(nn.Module):
             out = self.layer_drop(out)
 
         return out
+
+
+class ClassificationOutputLayer(nn.Module):
+    """
+        Last layer of the segmentation network if we only produce probability maps for one cardiac phase
+        e.g. for the HVSMR2016 dataset we output only 3 tissue class probabilities.
+
+    """
+
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=(1, 1),
+                 apply_batch_norm=False, apply_non_linearity=None, bias=True, axis=1, verbose=False):
+        super(ClassificationOutputLayer, self).__init__()
+
+        self.apply_batch_norm = apply_batch_norm
+        self.conv_layer = nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=padding,
+                                    dilation=dilation, bias=bias)
+        self.axis = axis
+        self.verbose = verbose
+        self.apply_non_linearity = apply_non_linearity
+
+        if self.verbose:
+            print("INFO - Adding {} layer".format(self.__class__.__name__))
+
+        if self.apply_non_linearity is not None:
+            if self.verbose:
+                print("INFO - apply {}".format(apply_non_linearity.__name__))
+            self.non_linearity = self.apply_non_linearity(dim=1)
+            self.log_softmax = nn.LogSoftmax(dim=1)
+
+        if self.apply_batch_norm:
+            if self.verbose:
+                print("INFO - apply batch-normalization")
+            self.bn = nn.BatchNorm2d(out_channels)
+
+    def cuda(self):
+        super(ClassificationOutputLayer, self).cuda()
+
+    def reset_weights(self):
+        init.xavier_normal(self.conv_layer.weight.data)
+        if self.conv_layer.bias is not None:
+            self.conv_layer.bias.data.fill_(0)
+
+    def forward(self, tensor_in):
+
+        out = self.conv_layer(tensor_in)
+        if self.apply_batch_norm:
+            out = self.bn1(out)
+
+        if self.apply_non_linearity is not None:
+            # The model uses the so called soft-Dice loss function. Calculation of the loss requires
+            # that we calculate probabilities for each pixel, and hence we use the Softmax for this, which should
+            # be specified as the non-linearity in the dictionary of the config object
+            out_log_softmax = self.log_softmax(out)
+            out = self.non_linearity(out)
+        else:
+            out_log_softmax = None
+
+        return out, out_log_softmax

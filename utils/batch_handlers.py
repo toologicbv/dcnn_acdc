@@ -171,7 +171,8 @@ class TwoDimBatchHandler(BatchHandler):
     def cuda(self):
         self.b_images = self.b_images.cuda()
         self.b_labels_per_class = self.b_labels_per_class.cuda()
-        self.b_num_labels_per_class = self.b_num_labels_per_class.cuda()
+        if self.b_num_labels_per_class is not None:
+            self.b_num_labels_per_class = self.b_num_labels_per_class.cuda()
         self.b_labels = self.b_labels.cuda()
 
     def set_pred_labels(self, pred_per_class):
@@ -340,10 +341,10 @@ class TwoDimBatchHandler(BatchHandler):
         print("Number of subplots {}".format(num_of_subplots))
         for idx in np.arange(num_of_images):
             img = self.b_images[idx].data.cpu().numpy()
-            img_ed = img[0]  # INDEX 0 = end-diastole image
-            img_es = img[1]  # INDEX 1 = end-systole image
+            img_ed = img[0]  # INDEX 0 = end-systole image
+            img_es = img[1]  # INDEX 1 = end-diastole image
             ax1 = plt.subplot(num_of_subplots, columns, counter)
-            ax1.set_title("End-diastole image and reference")
+            ax1.set_title("End-systole image and reference")
             offx = self.config.pad_size
             offy = self.config.pad_size
             if offy < 0:
@@ -365,7 +366,7 @@ class TwoDimBatchHandler(BatchHandler):
             cls1 += 1
             counter += columns
             ax2 = plt.subplot(num_of_subplots, columns, counter)
-            ax2.set_title("End-systole image and reference")
+            ax2.set_title("End-diastole image and reference")
             img_es = img_es[offx:offx + self.patch_size + 1, offy:offy + self.patch_size + 1]
             plt.imshow(img_es, cmap=cm.gray)
 

@@ -426,7 +426,7 @@ def create_logger(exper=None, file_handler=False, output_dir=None):
     if file_handler:
         if output_dir is None:
             output_dir = exper.output_dir
-        fh = logging.FileHandler(os.path.join(output_dir, config.logger_filename))
+        fh = logging.FileHandler(os.path.join(output_dir, exper.config.logger_filename))
         # fh.setLevel(logging.INFO)
         fh.setLevel(logging.DEBUG)
         formatter_fh = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -448,7 +448,7 @@ def create_logger(exper=None, file_handler=False, output_dir=None):
 def create_exper_label(exper):
 
     # exper_label = exper.run_args.model + exper.run_args.version + "_" + str(exper.run_args.epochs) + "E"
-    if exper.run_args.loss_function == "softdice":
+    if exper.run_args.loss_function == "soft-dice":
         loss_func_name = "sdice"
     elif exper.run_args.loss_function == "brier":
         loss_func_name = "brier"
@@ -462,7 +462,7 @@ def create_exper_label(exper):
         exper_label += "_" + loss_func_name
         exper_label += "_" + str(exper.run_args.epochs / 1000) + "KE"
 
-    elif exper.run_args.model[:7] == "dcnn_mc":
+    elif exper.run_args.model[:7] == "dcnn_mc" or exper.run_args.model[:13] == "dcnn_hvsmr_mc":
         prob = "p" + str(exper.run_args.drop_prob).replace(".", "")
         prob += "_" + loss_func_name
         exper_label = exper.run_args.model + "_f" + str(exper.run_args.fold_ids[0]) + \

@@ -179,6 +179,7 @@ def main():
     torch.cuda.manual_seed(SEED)
     if args.cuda:
         torch.backends.cudnn.enabled = True
+        torch.backends.cudnn.deterministic = True
 
     np.random.seed(SEED)
     exper_hdl = ExperimentHandler()

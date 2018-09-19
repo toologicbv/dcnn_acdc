@@ -108,11 +108,9 @@ class BaseImageDataSet(Dataset):
     def __init__(self):
 
         self.search_mask = None
-        self.images = None
-        self.images_raw = None
-        self.labels = None
         self.origins = None
         self.spacings = None
+        self.logger = None
 
     def __getitem__(self, index):
         assert index <= self.__len__()
@@ -123,6 +121,12 @@ class BaseImageDataSet(Dataset):
 
     def crawl_directory(self):
         pass
+
+    def info(self, message):
+        if self.logger is None:
+            print(message)
+        else:
+            self.logger.info(message)
 
     def save_to_numpy(self, file_prefix=None, abs_path=None):
         if file_prefix is None:
@@ -164,6 +168,7 @@ class ACDC2017DataSet(BaseImageDataSet):
     def __init__(self, exper_config, search_mask=None, nclass=4, load_func=load_mhd_to_numpy,
                  fold_ids=[0], preprocess=False, debug=False, do_augment=True, incomplete_only=False):
         super(BaseImageDataSet, self).__init__()
+        self.name = "ACDC"
         self.data_dir = os.path.join(exper_config.root_dir, exper_config.data_dir)
         self.rel_image_path = None
         self.rel_label_path = None

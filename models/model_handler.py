@@ -1,4 +1,5 @@
-from models.dilated_cnn import BaseDilated2DCNN
+import models.dilated_cnn
+import models.hvsmr.dilated_cnn
 from models.slice_detector import DegenerateSliceDetector
 import torch
 import shutil
@@ -37,24 +38,36 @@ def load_model(exper_hdl, verbose=False):
     model_architecture = exper_hdl.exper.config.get_architecture(model=exper_hdl.exper.run_args.model,
                                                                  drop_prob=exper_hdl.exper.run_args.drop_prob)
     if exper_hdl.exper.run_args.model[:4] == 'dcnn':
-        message = "Creating new model BaseDilated2DCNN: {} " \
-                  "with architecture {}".format(exper_hdl.exper.run_args.model,
-                   model_architecture["description"])
+
+        if "hvsmr" in exper_hdl.exper.run_args.model:
+            str_classname = "HVSMRDilated2DCNN"
+            model_class = getattr(models.hvsmr.dilated_cnn, str_classname)
+            # for ACDC dataset we use 2 times 4 classes, because we feed the network with 2 input channels
+            # for HVSMR dataset we only use 3 classes and 1 input channel, hence use_dua_head is off
+            use_dual_head = False
+        else:
+            str_classname = "BaseDilated2DCNN"
+            model_class = getattr(models.dilated_cnn, str_classname)
+            use_dual_head = True
+        model = model_class(architecture=model_architecture,
+                            optimizer=exper_hdl.exper.config.optimizer,
+                            lr=exper_hdl.exper.run_args.lr,
+                            weight_decay=exper_hdl.exper.run_args.weight_decay,
+                            use_cuda=exper_hdl.exper.run_args.cuda,
+                            cycle_length=exper_hdl.exper.run_args.cycle_length,
+                            loss_function=exper_hdl.exper.run_args.loss_function,
+                            verbose=verbose,
+                            use_reg_loss=exper_hdl.exper.run_args.use_reg_loss,
+                            use_dual_head=use_dual_head)
+
+        model.apply(weights_init)
+        message = "INFO - MODEL - Creating new model {}: {} " \
+                  "with architecture {}".format(str_classname, exper_hdl.exper.run_args.model,
+                                                model_architecture["description"])
         if use_logger:
             exper_hdl.logger.info(message)
         else:
             print(message)
-        model = BaseDilated2DCNN(architecture=model_architecture,
-                                 optimizer=exper_hdl.exper.config.optimizer,
-                                 lr=exper_hdl.exper.run_args.lr,
-                                 weight_decay=exper_hdl.exper.run_args.weight_decay,
-                                 use_cuda=exper_hdl.exper.run_args.cuda,
-                                 cycle_length=exper_hdl.exper.run_args.cycle_length,
-                                 loss_function=exper_hdl.exper.run_args.loss_function,
-                                 verbose=verbose,
-                                 use_reg_loss=exper_hdl.exper.run_args.use_reg_loss)
-
-        model.apply(weights_init)
     else:
         raise ValueError("{} name is unknown and hence cannot be created".format(exper_hdl.exper.run_args.model))
 

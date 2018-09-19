@@ -5,7 +5,7 @@ from config.config import config
 import numpy as np
 from config.config import OPTIMIZER_DICT
 from building_blocks import Basic2DCNNBlock
-from models.building_blocks import ConcatenateCNNBlock, ConcatenateCNNBlockWithRegression
+from models.building_blocks import ConcatenateCNNBlock, ConcatenateCNNBlockWithRegression, ClassificationOutputLayer
 from utils.dice_metric import soft_dice_score, dice_coefficient
 from models.lr_schedulers import CycleLR
 from utils.medpy_metrics import hd
@@ -16,9 +16,10 @@ class BaseDilated2DCNN(nn.Module):
 
     def __init__(self, architecture, optimizer=torch.optim.Adam, lr=1e-4, weight_decay=0.,
                  use_cuda=False, verbose=True, cycle_length=0, loss_function="soft-dice",
-                 use_reg_loss=False):
+                 use_reg_loss=False, use_dual_head=True):
         super(BaseDilated2DCNN, self).__init__()
         self.architecture = architecture
+        self.use_dual_head = use_dual_head
         self.use_cuda = use_cuda
         self.use_regression_loss = use_reg_loss
         self.num_conv_layers = self.architecture['num_of_layers']
@@ -54,9 +55,7 @@ class BaseDilated2DCNN(nn.Module):
                 # get previous output channel size
 
                 in_channels = self.architecture['channels'][l_id - 1]
-                # if self.architecture['non_linearity'][l_id - 1].__name__ == "CReLU":
-                #    print("INFO - double input channels")
-                #    in_channels = int(in_channels * 2)
+
             if self.verbose:
                 print("Constructing layer {}".format(l_id+1))
             if l_id < num_conv_layers - 1:
@@ -71,7 +70,7 @@ class BaseDilated2DCNN(nn.Module):
                 if self.use_cuda:
                     layer_list[-1].cuda()
             else:
-                if not self.use_regression_loss:
+                if not self.use_regression_loss and self.use_dual_head:
                     # for ACDC data the last layer is a concatenation of two 2D-CNN layers
                     layer_list.append(ConcatenateCNNBlock(in_channels, self.architecture['channels'][l_id],
                                                           self.architecture['kernels'][l_id],
@@ -80,7 +79,7 @@ class BaseDilated2DCNN(nn.Module):
                                                           apply_batch_norm=self.architecture['batch_norm'][l_id],
                                                           apply_non_linearity=self.architecture['non_linearity'][l_id],
                                                           axis=1, verbose=self.verbose))
-                else:
+                elif self.use_dual_head:
                     layer_list.append(ConcatenateCNNBlockWithRegression(
                         in_channels,
                         self.architecture['channels'][l_id],
@@ -90,7 +89,17 @@ class BaseDilated2DCNN(nn.Module):
                         apply_batch_norm=self.architecture['batch_norm'][l_id],
                         apply_non_linearity=self.architecture['non_linearity'][l_id],
                         axis=1, verbose=self.verbose))
-
+                else:
+                    # Simple segmentation classification network in which the last layer has single head
+                    layer_list.append(ClassificationOutputLayer(
+                        in_channels,
+                        self.architecture['channels'][l_id],
+                        self.architecture['kernels'][l_id],
+                        stride=self.architecture['stride'][l_id],
+                        dilation=self.architecture['dilation'][l_id],
+                        apply_batch_norm=self.architecture['batch_norm'][l_id],
+                        apply_non_linearity=self.architecture['non_linearity'][l_id],
+                        axis=1, verbose=self.verbose))
                 if self.use_cuda:
                     layer_list[-1].cuda()
 
