@@ -19,6 +19,7 @@ from utils.batch_handlers import TwoDimBatchHandler, BatchStatistics
 from utils.generate_uncertainty_maps import InferenceGenerator, ImageUncertainties, OutOfDistributionSlices
 from utils.post_processing import filter_connected_components, detect_largest_umap_areas
 import models.dilated_cnn
+import models.hvsmr.dilated_cnn
 from utils.test_results import TestResults
 from common.acquisition_functions import bald_function
 from plotting.uncertainty_plots import analyze_slices
@@ -128,10 +129,19 @@ class ExperimentHandler(object):
 
         if checkpoint is None:
             checkpoint = self.exper.epoch_id
+        if "hvsmr" in self.exper.run_args.model:
+            str_classname = "HVSMRDilated2DCNN"
+            model_class = getattr(models.hvsmr.dilated_cnn, str_classname)
+            # for ACDC dataset we use 2 times 4 classes, because we feed the network with 2 input channels
+            # for HVSMR dataset we only use 3 classes and 1 input channel, hence use_dua_head is off
+            use_dual_head = False
+        else:
+            str_classname = "BaseDilated2DCNN"
+            model_class = getattr(models.dilated_cnn, str_classname)
+            use_dual_head = True
 
-        str_classname = "BaseDilated2DCNN"
         checkpoint_file = str_classname + "checkpoint" + str(checkpoint).zfill(5) + ".pth.tar"
-        act_class = getattr(models.dilated_cnn, str_classname)
+
         if not hasattr(self.exper.run_args, "drop_prob"):
             print("WARNING - exper.run_args has not attribute drop_prob, using prob {:.2}".format(drop_prob))
             drop_prob = 0.1
@@ -143,13 +153,14 @@ class ExperimentHandler(object):
         else:
             architecture = DEFAULT_DCNN_MC_2D
 
-        model = act_class(architecture=architecture, optimizer=self.exper.config.optimizer,
-                          lr=self.exper.run_args.lr,
-                          weight_decay=self.exper.run_args.weight_decay,
-                          use_cuda=self.exper.run_args.cuda,
-                          cycle_length=self.exper.run_args.cycle_length,
-                          verbose=verbose, use_reg_loss=self.exper.run_args.use_reg_loss,
-                          loss_function=self.exper.run_args.loss_function)
+        model = model_class(architecture=architecture, optimizer=self.exper.config.optimizer,
+                            lr=self.exper.run_args.lr,
+                            weight_decay=self.exper.run_args.weight_decay,
+                            use_cuda=self.exper.run_args.cuda,
+                            cycle_length=self.exper.run_args.cycle_length,
+                            verbose=verbose, use_reg_loss=self.exper.run_args.use_reg_loss,
+                            loss_function=self.exper.run_args.loss_function,
+                            use_dual_head=use_dual_head)
         abs_checkpoint_dir = os.path.join(chkpnt_dir, checkpoint_file)
         if os.path.exists(abs_checkpoint_dir):
             model_state_dict = torch.load(abs_checkpoint_dir)
@@ -157,10 +168,10 @@ class ExperimentHandler(object):
             if self.exper.run_args.cuda:
                 model.cuda()
             if verbose and not retrain:
-                self.info("INFO - loaded existing model with checkpoint {} from dir {}".format(abs_checkpoint_dir,
-                                                                                               checkpoint))
+                self.info("INFO - loaded existing model with checkpoint {} from dir {}".format(checkpoint,
+                                                                                               abs_checkpoint_dir))
             else:
-                self.info("Loading existing model with checkpoint {} from dir {}".format(chkpnt_dir, checkpoint))
+                self.info("Loading existing model with checkpoint {} from dir {}".format(checkpoint, chkpnt_dir))
         else:
             raise IOError("Path to checkpoint not found {}".format(abs_checkpoint_dir))
 

@@ -63,7 +63,7 @@ def training(exper_hdl):
         for batch_id in range(exper_hdl.exper.batches_per_epoch):
             new_batch = HVSMRTwoDimBatchHandler(exper_hdl.exper)
             new_batch.generate_batch_2d(dataset.train_images, dataset.train_labels,
-                                        num_of_slices=dataset.num_images_train)
+                                        num_of_slices=dataset.train_num_slices)
 
             b_loss = dcnn_model.do_train(new_batch)
             exper_hdl.set_lr(dcnn_model.get_lr())
@@ -80,6 +80,7 @@ def training(exper_hdl):
             # validate model
             exper_hdl.eval(dataset, dcnn_model, val_set_size=exper_hdl.exper.config.val_set_size)
 
+        # print current loss and accuracy of the model
         if exper_hdl.exper.epoch_id % exper_hdl.exper.run_args.print_freq == 0:
             lr = dcnn_model.get_lr()
             exper_hdl.logger.info("End epoch {}: mean loss: {:.3f}, dice (Myo/LV): {:.3f}/{:.3f}"
@@ -87,13 +88,26 @@ def training(exper_hdl):
                                   "lr={:.5f}".format(exper_hdl.exper.epoch_id, exper_hdl.get_epoch_loss(),
                                                      accuracy[0], accuracy[1],
                                                      total_time, lr))
+        # Save checkpoint if necessary
+        if exper_hdl.exper.run_args.chkpnt and (exper_hdl.exper.epoch_id % exper_hdl.exper.run_args.chkpnt_freq == 0 or
+                                                exper_hdl.exper.epoch_id == exper_hdl.exper.run_args.epochs):
+            save_checkpoint(exper_hdl, {'epoch': exper_hdl.exper.epoch_id,
+                                        'state_dict': dcnn_model.state_dict(),
+                                        'best_prec1': 0.},
+                            False, dcnn_model.__class__.__name__)
+            if not exper_hdl.exper.epoch_id == exper_hdl.exper.run_args.epochs:
+                exper_hdl.save_experiment()
 
     exper_hdl.save_experiment(final_run=True)
 
-    
+
 def main():
     args = do_parse_args()
-    SEED = 4325
+    if args.retrain_exper is None:
+        SEED = 4325
+    else:
+        # different seed when we retrain
+        SEED = 2314
     torch.manual_seed(SEED)
     torch.cuda.manual_seed(SEED)
     if args.cuda:
@@ -112,7 +126,6 @@ if __name__ == '__main__':
     main()
 
 """
-python train_segmentation.py --lr=0.0002 --batch_size=4 --val_freq=10 --epochs=15 --use_cuda --fold_ids=0 
---print_freq=5 --weight_decay=0.0001 --model="dcnn_mc" --drop_prob=0.05 --cycle_length=10000 --loss_function=softdice 
---quick_run
+CUDA_VISIBLE_DEVICES=0 python train_hvsmr_segnet.py --use_cuda --model=dcnn_hvsmr_mc --fold_ids=0 --quick_run 
+--drop_prob=0.1 --epochs=100 --print_freq=10 --val_freq=20 --batch_size=64 --loss_function="brier"
 """

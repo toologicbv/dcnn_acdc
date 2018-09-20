@@ -13,6 +13,8 @@ class HVSMRDilated2DCNN(BaseDilated2DCNN):
     def __init__(self, architecture, optimizer=torch.optim.Adam, lr=1e-4, weight_decay=0.,
                  use_cuda=False, verbose=True, cycle_length=0, loss_function="soft-dice",
                  use_reg_loss=False, use_dual_head=True):
+        # for the later models we stored the weight_decay parameter in the architecture dictionary
+        weight_decay = architecture['weight_decay']
         super(HVSMRDilated2DCNN, self).__init__(architecture=architecture, optimizer=optimizer, lr=lr,
                                                 weight_decay=weight_decay, use_cuda=use_cuda,
                                                 verbose=verbose, cycle_length=cycle_length,

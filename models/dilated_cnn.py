@@ -112,7 +112,6 @@ class BaseDilated2DCNN(nn.Module):
         :return: (1) the raw output in order to compute loss with PyTorch cross-entropy (see comment below)
                  (2) the softmax output
         """
-
         out = self.model(input)
         # our last layer ConcatenateCNNBlock already contains the two Softmax layers
 

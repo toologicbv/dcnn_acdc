@@ -19,18 +19,18 @@ class BaseConfig(object):
         self.root_dir = self.get_rootpath()
         self.data_dir = os.path.join(self.root_dir, "data/HVSMR/Folds/")
         self.log_root_path = "logs/HVSMR"
-        self.figure_path = "figures/HVSMR"
-        self.stats_path = "stats/HVSMR"
-        self.u_map_dir = "u_maps/HVSMR"
-        self.pred_lbl_dir = "pred_lbls/HVSMR"
-        self.checkpoint_path = "checkpoints/HVSMR"
+        self.figure_path = "figures"
+        self.stats_path = "stats"
+        self.u_map_dir = "u_maps"
+        self.pred_lbl_dir = "pred_lbls"
+        self.checkpoint_path = "checkpoints"
         self.logger_filename = "run_out.log"
         # standard image name
         self.dflt_image_name = "*patient*"
         self.dflt_label_name = "*lbl*"
         # used as filename for the logger
         self.logger_filename = "dcnn_hvsmr_run.log"
-        self.model_path = "models/HVSMR"
+        self.model_path = "models"
         self.numpy_save_filename = None
         # HVSMR voxelspacing after resampling
         self.voxelspacing = tuple((0.65, 0.65))
@@ -94,7 +94,8 @@ class BaseConfig(object):
                                         kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"],
                                         kwargs["drop_prob"], kwargs["drop_prob"], kwargs["drop_prob"], 0.],
                             'loss_function': nn.NLLLoss2d,
-                            'description': 'DCNN_HVSMR_2D_MC{}'.format(kwargs["drop_prob"])
+                            'description': 'DCNN_HVSMR_2D_MC{}'.format(kwargs["drop_prob"]),
+                            'weight_decay': 0
                             }
 
         return architecture

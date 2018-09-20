@@ -168,7 +168,7 @@ class ACDC2017TestHandler(object):
         self.images = []
         self.images_flipped = []
         #
-        # filename of the figures printed during test evaluation e.g. patien007
+        # filename of the figures printed during test evaluation. Contains patient_ids
         self.img_file_names = []
         self.labels = []
         self.labels_flipped = []
@@ -389,7 +389,7 @@ class ACDC2017TestHandler(object):
 
         return labels_per_class, b_num_labels_per_class
 
-    def batch_generator(self, image_num=0, use_labels=True, use_volatile=True):
+    def batch_generator(self, image_num=0, use_labels=True):
         """
             Remember that self.image is a list, containing images with shape [2, height, width, depth]
             Object self.labels is also a list but with shape [8, height, width, depth]

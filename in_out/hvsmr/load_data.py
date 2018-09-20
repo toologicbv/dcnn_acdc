@@ -76,7 +76,7 @@ class HVSMR2016DataSet(BaseImageDataSet):
 
     def __init__(self, exper_config, search_mask=None, nclass=3, load_func=load_mhd_to_numpy,
                  fold_id=0, preprocess="normalize", debug=False, do_augment=True,
-                 load_type="nifty", logger=None):
+                 load_type="nifty", logger=None, val_set_only=False, verbose=True):
         """
         The images are already resampled to an isotropic 3D size of 0.65mm x 0.65 x 0.65
 
@@ -92,6 +92,8 @@ class HVSMR2016DataSet(BaseImageDataSet):
         """
         super(HVSMR2016DataSet, self).__init__()
         self.name = "HVSMR"
+        self.verbose = verbose
+        self.debug = debug
         self.logger = logger
         self.data_dir = os.path.join(exper_config.root_dir, exper_config.data_dir)
         self.fold_id = fold_id
@@ -105,23 +107,25 @@ class HVSMR2016DataSet(BaseImageDataSet):
         self.load_func = load_func
         self.load_type = load_type
         self.do_augment = do_augment
+        self.val_set_only = val_set_only
+        # in case we're only loading the validation set, we don't want any augmentation, because we use the
+        # validation set for testing on whole slices
+        if val_set_only:
+            self.do_augment = False
         self.num_of_augmentations = 3  # four rotations 90, 180, 270 degrees of rotations
         self.image_names = []
-        # Note, this list will contain len() image slices...2D!
-        # IMPORTANT: this is NOT the total number of slices in train_images or val_images, but in fact the number
-        # of patients or files loaded from disk (where ES/ED files (2) count as 1)!
-        self.num_of_images = 0
         self.train_images = []
         # the actual number of slices in train_images
         self.train_num_slices = 0
         self.train_labels = []
-        # dictionary with key is patientID and value is imageID that we assign when loading the stuff
+        # dictionary with key is patientID and value is imageID that we assign when loading the stuff.
+        # there's some more explanation below when we fill the dictionary
         self.trans_dict = OrderedDict()
         # we use the img-slice id, belonging to a training image-patch to track the statistics (how much to we train
         # on certain image/slices? We'll store tuples
         self.train_img_slice_ids = []
         # mean width, height, #slices per image
-        self.img_stats = np.zeros(3)
+        self.img_stats = np.zeros(3)  # Storing #slices, width, height to compute mean
         self.img_slice_stats = {}
         self.train_spacings = []
         self.val_images = []
@@ -132,7 +136,6 @@ class HVSMR2016DataSet(BaseImageDataSet):
         # the actual number of slices in val_images
         self.val_num_slices = 0
         self.val_spacings = []
-        self.debug = debug
         self.num_images_train = 0
         self.num_images_val = 0
         self.voxelspacing = tuple((HVSMR2016DataSet.new_voxel_spacing, HVSMR2016DataSet.new_voxel_spacing))
@@ -143,10 +146,9 @@ class HVSMR2016DataSet(BaseImageDataSet):
             # Important detail: we need to swap axis 0 and 2 of the HVSMR2016 files
             self.load_images_from_dir(swap_axis=True)
         elif self.load_type == "numpy":
-            self.load_numpy_arr_from_dir()
-            if len(self.images) == 0:
-                self.info("Info - cannot find any numpy npz files. Looking for raw files...")
-                self.load_images_from_dir(swap_axis=True)
+            # self.load_numpy_arr_from_dir()
+            # currently not supported
+            raise NotImplementedError()
         else:
             raise ValueError("Load mode {} is not supported".format(self.load_type))
 
@@ -166,17 +168,26 @@ class HVSMR2016DataSet(BaseImageDataSet):
 
     def load_images_from_dir(self, swap_axis=True):
         files_loaded = 0
-        self.info("INFO - Using folds {} - busy loading images/references...this may take a while!".format(self.fold_id))
+        if self.verbose:
+            self.info("INFO - Using folds {} - busy loading images/references..."
+                      "this may take a while!".format(self.fold_id))
         train_file_list, val_file_list = self._get_file_lists()
-        # load training set
-        files_loaded += self._load_file_list(train_file_list, is_train=True, swap_axis=swap_axis)
-        self.train_num_slices = len(self.train_images)
+        if not self.val_set_only:
+            # load training set
+            files_loaded += self._load_file_list(train_file_list, is_train=True, swap_axis=swap_axis)
+            self.train_num_slices = len(self.train_images)
         # load validation/test set
         files_loaded += self._load_file_list(val_file_list, is_train=False, swap_axis=swap_axis)
-        self.info("INFO - Using fold {} - loaded {} files: {} studies in train set, {} in validation set".format(
-            self.fold_id, files_loaded, self.num_images_train, self.num_images_val))
+        if self.verbose:
+            self.info("INFO - Using fold {} - loaded {} files: {} studies in train set, {} in validation set".format(
+                self.fold_id, files_loaded, self.num_images_train, self.num_images_val))
         self.train_num_slices = len(self.train_images)
         self.val_num_slices = len(self.val_images)
+        self.img_stats *= 1./float(self.num_images_train + self.num_images_val)
+        if self.verbose:
+            self.info("INFO - Mean #slices, width, height: {}, {}, {}".format(np.ceil(self.img_stats[0]),
+                                                                              np.ceil(self.img_stats[1]),
+                                                                              np.ceil(self.img_stats[2])))
 
     def _get_file_lists(self):
 
@@ -188,7 +199,8 @@ class HVSMR2016DataSet(BaseImageDataSet):
                                      os.path.join(HVSMR2016DataSet.val_path, self.rel_image_path))
 
         search_mask_img = os.path.join(self.train_path, self.search_mask)
-        self.info("INFO - Creating file list. Search for {} ".format(search_mask_img))
+        if self.verbose:
+            self.info("INFO - Creating file list. Search for {} ".format(search_mask_img))
         for train_file in glob.glob(search_mask_img):
             ref_file = train_file.replace(self.rel_image_path, self.rel_label_path)
             ref_file = ref_file.replace("_img", "_lbl")
@@ -208,41 +220,62 @@ class HVSMR2016DataSet(BaseImageDataSet):
         file_list.sort()
 
         # Note: file_list contains 200 entries if we load 100 images.
-        if self.norm_scale == "normalize":
-            self.info("INFO - Normalizing images intensity values (is_train={})".format(is_train))
-        elif self.norm_scale == "rescale":
-            self.info("INFO - Rescaling images intensity values (is_train={})".format(is_train))
-        else:
-            self.info("INFO - Images are NOT normalized/rescales!")
+        if self.verbose:
+            if self.norm_scale == "normalize":
+                self.info("INFO - Normalizing images intensity values (is_train={})".format(is_train))
+            elif self.norm_scale == "rescale":
+                self.info("INFO - Rescaling images intensity values (is_train={})".format(is_train))
+            else:
+                self.info("INFO - Images are NOT normalized/rescales!")
 
         for idx in tqdm(np.arange(0, len(file_list))):
             img_file, ref_file = file_list[idx]
-            if verbose:
+            if self.debug:
                 self.info("INFO - Loading image {}".format(img_file))
             mri_scan, origin, spacing = self.load_func(img_file, data_type=HVSMR2016DataSet.pixel_dta_type,
                                                        swap_axis=swap_axis)
+            # after we loaded the image/references from file and swapped axis they have shape [width, height, #slices]
             if self.norm_scale == "normalize":
                 mri_scan = normalize_image(mri_scan, axis=None)
             elif self.norm_scale == "rescale":
                 mri_scan = rescale_image(mri_scan, axis=None)
 
             # get rid off _iso_img and take only the patient name
-            patient_id = img_file[:img_file.find("_")]
+            stripped_file_name = os.path.splitext(os.path.basename(img_file))[0]
+            patient_id = stripped_file_name[:stripped_file_name.find("_")]
+            self.img_stats += mri_scan.shape
             if is_train:
                 self.image_names.append(patient_id)
+                # Confusing: because we use trans_dict for translating patient_id to array_index, we increase
+                # counter after storing the index (start at 0). The index is used e.g. to retrieve objects from the
+                # lists, which we filled sequentially during loading. Also note that train and validation patients
+                # go into one dictionary, hence, different patients can have the same index, but you need to know
+                # in which set (train/validation) they belong to retrieve the object.
+                self.trans_dict[patient_id] = self.num_images_train
                 self.num_images_train += 1
+                self.train_spacings.append(spacing)
                 count_idx = 0
             else:
                 self.val_image_names.append(patient_id)
+                self.trans_dict[patient_id] = self.num_images_val
                 self.num_images_val += 1
+                self.val_spacings.append(spacing)
                 count_idx = 1
-            self.trans_dict[patient_id] = self.num_of_images
-            if verbose:
+
+            if self.debug:
                 self.info("INFO - Loading reference {}".format(ref_file))
             reference, origin, spacing = self.load_func(ref_file, data_type=HVSMR2016DataSet.pixel_dta_type,
                                                         swap_axis=swap_axis)
-
-            self._augment_data(mri_scan, reference, pad_size=HVSMR2016DataSet.pad_size, is_train=is_train)
+            if self.do_augment:
+                self._augment_data(mri_scan, reference, pad_size=HVSMR2016DataSet.pad_size, is_train=is_train)
+            else:
+                if is_train:
+                    self.train_images.append(mri_scan)
+                    self.train_labels.append(reference)
+                else:
+                    # store the complete image for testing as well
+                    self.val_images.append(mri_scan)
+                    self.val_labels.append(reference)
 
             for class_label in range(self.num_of_classes):
                 self.class_count[count_idx, class_label] += np.sum(reference == class_label)
@@ -377,9 +410,9 @@ class HVSMR2016DataSet(BaseImageDataSet):
 
     def get_num_of_slices(self, train=True):
         if train:
-            return len(self.train_images)
+            return self.train_num_slices
         else:
-            return len(self.val_images)
+            return self.val_num_slices
 
     def labels(self, train=True):
         if train:
@@ -396,7 +429,7 @@ class HVSMR2016DataSet(BaseImageDataSet):
 if __name__ == '__main__':
     dataset = HVSMR2016DataSet(config_hvsmr, search_mask=config_hvsmr.dflt_image_name + ".nii",
                                fold_id=0, preprocess="rescale",
-                               debug=True)
+                               debug=False, val_set_only=True)
 
     del dataset
 

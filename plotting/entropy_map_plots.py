@@ -6,7 +6,8 @@ import os
 from matplotlib import cm
 
 
-def plot_entropy_map_for_patient(exper_handler, patient_id, do_show=True, do_save=False, threshold=None):
+def plot_entropy_map_for_patient(exper_handler, patient_id, do_show=True, do_save=False, threshold=None,
+                                 slice_range=None):
 
     def transparent_cmap(cmap, N=255):
         "Copy colormap and set alpha values"
@@ -24,13 +25,20 @@ def plot_entropy_map_for_patient(exper_handler, patient_id, do_show=True, do_sav
     if exper_handler.test_set is None:
         exper_handler.get_test_set()
     mri_image, labels = exper_handler.test_set.get_test_pair(patient_id)
-    mri_image = mri_image[:, config.pad_size:-config.pad_size, config.pad_size:-config.pad_size, :]
+    if exper_handler.test_set.__class__.__name__ != "HVSMRTesthandler":
+        num_of_phases = 2
+        phase_labels = ["ES", "ED"]
+        mri_image = mri_image[:, config.pad_size:-config.pad_size, config.pad_size:-config.pad_size, :]
+    else:
+        num_of_phases = 1
+        phase_labels = ["Entropy"]
     entropy_map = exper_handler.entropy_maps[patient_id]
-    num_of_slices = entropy_map.shape[3]
-    num_of_phases = 2
 
-    phase_labels = ["ES", "ED"]
-    slice_range = np.arange(num_of_slices)
+    if slice_range is None:
+        num_of_slices = entropy_map.shape[-1]
+        slice_range = np.arange(num_of_slices)
+    else:
+        num_of_slices = len(slice_range)
 
     rows = 2 * num_of_slices
     columns = 4
@@ -48,11 +56,17 @@ def plot_entropy_map_for_patient(exper_handler, patient_id, do_show=True, do_sav
     fig.suptitle(model_info + ": " + patient_id, **config.title_font_medium)
     for slice_id in slice_range:
         for phase in np.arange(num_of_phases):
-            entropy_slice_map = entropy_map[phase, :, :, slice_id]
+            if num_of_phases > 1:
+                entropy_slice_map = entropy_map[phase, :, :, slice_id]
+                img_slice = mri_image[phase, :, :, slice_id]
+            else:
+                entropy_slice_map = entropy_map[:, :, slice_id]
+                img_slice = mri_image[:, :, slice_id]
+                print(img_slice.shape, entropy_slice_map.shape)
             if threshold is not None:
                 # set everything below threshold to zero
                 entropy_slice_map[entropy_slice_map < threshold] = 0
-            img_slice = mri_image[phase, :, :, slice_id]
+
             # print("Min/max values {:.2f}/{:.2f}".format(np.min(entropy_slice_map),
             #                                            np.max(entropy_slice_map)))
             ax1 = plt.subplot2grid((rows, columns), (row, phase * 2), rowspan=2, colspan=2)

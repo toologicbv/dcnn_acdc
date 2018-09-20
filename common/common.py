@@ -470,6 +470,9 @@ def create_exper_label(exper):
     else:
         raise ValueError("ERROR - model name {} is not supported.".format(exper.run_args.model))
 
+    if exper.run_args.retrain_exper is not None:
+        exper_label += "_r"
+
     return exper_label
 
 
