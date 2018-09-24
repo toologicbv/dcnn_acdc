@@ -108,8 +108,6 @@ class HVSMRTesthandler(object):
         self.slice_counter = -1
         self.b_image = self.images[image_num]
         num_of_slices = self.b_image.shape[2]
-        img = self.images[image_num]
-        lbl = self.labels[image_num]
         # pad the original image to fit the dilated convolutions
         self.b_image = np.pad(self.b_image, ((HVSMRTesthandler.pad_size, HVSMRTesthandler.pad_size),
                                              (HVSMRTesthandler.pad_size, HVSMRTesthandler.pad_size), (0, 0)),

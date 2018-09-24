@@ -22,6 +22,7 @@ class BaseConfig(object):
         self.figure_path = "figures"
         self.stats_path = "stats"
         self.u_map_dir = "u_maps"
+        self.bayes_umap_suffix = "_umaps.npz"
         self.pred_lbl_dir = "pred_lbls"
         self.checkpoint_path = "checkpoints"
         self.logger_filename = "run_out.log"

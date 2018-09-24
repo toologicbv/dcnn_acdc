@@ -128,4 +128,9 @@ if __name__ == '__main__':
 """
 CUDA_VISIBLE_DEVICES=0 python train_hvsmr_segnet.py --use_cuda --model=dcnn_hvsmr_mc --fold_ids=0 --quick_run 
 --drop_prob=0.1 --epochs=100 --print_freq=10 --val_freq=20 --batch_size=64 --loss_function="brier"
+
+CUDA_VISIBLE_DEVICES=0 nohup python train_hvsmr_segnet.py --use_cuda --lr=0.0005 --print_freq=100 --val_freq=200 
+--fold_ids=0 --epochs=8000 --drop_prob=0.1 --loss_function="soft-dice" --batch_size=92 --chkpnt --chkpnt_freq=2000 
+--model=dcnn_hvsmr --retrain_exper=20180920_08_23_04_dcnn_hvsmr_mc_f0p01_sdice_10KE_lr1e03 
+--retrain_chkpnt=2000 > /home/jorg/logs/dcnn_hvsmr_sd_221_retrain.log 2>&1&
 """

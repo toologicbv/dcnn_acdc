@@ -3,6 +3,7 @@ from utils.experiment import ExperimentHandler
 from common.dslices.config import config
 
 
+
 def create_experiment(exper_id):
 
     log_dir = os.path.join(config.root_dir, "logs")
@@ -15,6 +16,4 @@ def create_experiment(exper_id):
                                                     exper_args.loss_function)
     print("INFO - Experimental details extracted:: " + info_str)
     return exper_handler
-
-
 
