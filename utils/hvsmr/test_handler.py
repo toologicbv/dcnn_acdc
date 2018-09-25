@@ -32,8 +32,14 @@ class HVSMRTesthandler(object):
         self.abs_path_fold = os.path.join(self.data_dir, "fold")
         self.images = self.dataset.val_images
         # contains patient_ids
+        self.trans_dict = self.dataset.trans_dict
         self.img_file_names = self.dataset.val_image_names
         self.labels = self.dataset.val_labels
+        self.labels_per_class = []
+        for idx, label in enumerate(self.labels):
+            labels_per_cls, _ = self._split_class_labels(label)
+            self.labels_per_class.append(labels_per_cls)
+
         self.num_labels_per_class = []
         self.voxel_spacing = self.dataset.val_spacings
         self.b_pred_labels = None
@@ -46,7 +52,6 @@ class HVSMRTesthandler(object):
         self.b_image_name = None  # store the filename from "above" used as identification during testing
         self.b_labels = None
         self.b_labels_multiclass = None
-        self.b_labels_per_class = None
         self.b_num_labels_per_class = None
         self.b_new_spacing = None
         self.b_orig_spacing = None
@@ -60,8 +65,6 @@ class HVSMRTesthandler(object):
         self.b_acc_slices = None
         self.b_ref_hd_slices = None
         self.b_ref_acc_slices = None
-        # dictionary with key is patientID and value is imageID that we assign when loading the stuff
-        self.trans_dict = OrderedDict()
         self.num_of_images = 0
 
         self.slice_counter = 0
@@ -76,6 +79,12 @@ class HVSMRTesthandler(object):
             print("Following keys exist:")
             print(self.trans_dict.keys())
         return self.images[image_num], self.labels[image_num]
+
+    def get_labels_per_class(self, image_num=None):
+        if image_num is None:
+            return self.labels_per_class
+        else:
+            return self.labels_per_class[image_num]
 
     def _split_class_labels(self, labels):
         """

@@ -228,6 +228,12 @@ class ACDC2017TestHandler(object):
             print(self.trans_dict.keys())
         return self.images[image_num], self.labels[image_num]
 
+    def get_labels_per_class(self, image_num=None):
+        if image_num is None:
+            return self.labels
+        else:
+            return self.labels[image_num]
+
     def _generate_flipped_test_set(self):
 
         for idx, image in enumerate(self.images):

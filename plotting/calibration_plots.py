@@ -324,10 +324,12 @@ class CalibrationData(object):
         # is actually equal to conf(B_m) metric from Guo & Pleiss paper, has shape [2, 4, #bins]
         self.probs_per_bin = None
 
-    def load(self):
+    def load(self, env_config=None):
+        if env_config is None:
+            env_config = config
         loss_function = self.loss_function.replace("-", "")
         file_name = CalibrationData.file_prefix + self.model_name + "_" + loss_function + ".npz"
-        file_name = os.path.join(config.data_dir, file_name)
+        file_name = os.path.join(env_config.data_dir, file_name)
         if len(glob.glob(file_name)) != 1:
             raise ValueError("ERROR - found {} files with name {}. Must be one".format(len(glob.glob(file_name)),
                                                                                        file_name))
@@ -342,14 +344,16 @@ class CalibrationData(object):
             print("ERROR - can't load numpy archive {}".format(file_name))
             print(e)
 
-    def save(self, prob_bins, acc_bins, mean_ece_per_class, fig_suffix=None):
+    def save(self, prob_bins, acc_bins, mean_ece_per_class, fig_suffix=None, env_config=None):
+        if env_config is None:
+            env_config = config
         if fig_suffix is None:
             fig_suffix = self.model_name + "_" + self.loss_function
         if self.with_bg:
             file_name = CalibrationData.file_prefix + fig_suffix + "_wbg.npz"
         else:
             file_name = CalibrationData.file_prefix + fig_suffix + ".npz"
-        file_name = os.path.join(config.data_dir, file_name)
+        file_name = os.path.join(env_config.data_dir, file_name)
 
         try:
             np.savez(file_name, prob_bins=prob_bins, acc_bins=acc_bins, mean_ece_per_class=mean_ece_per_class)

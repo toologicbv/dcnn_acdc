@@ -36,3 +36,35 @@ class ExperHandlerEnsemble(object):
     def __call__(self):
         for fold_id, exper_hdl in self.seg_exper_handlers.iteritems():
             yield fold_id, exper_hdl
+
+
+def get_experiment_handlers():
+    """
+    Get slice detection handlers (experiments) for evaluation purposes
+
+    :param root_dir:
+    :param load_fold_id:
+    :param seg_exper_ensemble
+    :return:
+    """
+
+    exp_mc_brier = {3: "",
+                      2: "",
+                      1: "",
+                      0: "20180919_23_03_53_dcnn_hvsmr_mc_f0p01_brier_10KE_lr1e03"}
+
+    exp_mc_entropy = {3: "",
+                      2: "",
+                      1: "",
+                      0: "20180920_17_04_37_dcnn_hvsmr_mc_f0p01_entrpy_10KE_lr5e04"}
+
+    exp_mc_softdice = {3: "",
+                        2: "",
+                        1: "",
+                        0: "20180921_08_52_02_dcnn_hvsmr_mc_f0p01_sdice_8KE_r_lr5e04"}
+
+    exper_ensemble_brier = ExperHandlerEnsemble(exp_mc_brier)
+    exper_ensemble_entropy = ExperHandlerEnsemble(exp_mc_entropy)
+    exper_ensemble_softdice = ExperHandlerEnsemble(exp_mc_softdice)
+
+    return exper_ensemble_brier, exper_ensemble_entropy, exper_ensemble_softdice

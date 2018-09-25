@@ -4,21 +4,6 @@ from common.hvsmr.config import config_hvsmr
 from utils.hvsmr.exper_handler import HVSMRExperimentHandler
 
 
-def create_experiment(exper_id, verbose=False):
-
-    log_dir = os.path.join(config_hvsmr.root_dir, config_hvsmr.log_root_path)
-    exp_model_path = os.path.join(log_dir, exper_id)
-    exper_handler = HVSMRExperimentHandler()
-    exper_handler.load_experiment(exp_model_path, use_logfile=False)
-    exper_handler.set_root_dir(config_hvsmr.root_dir)
-    exper_args = exper_handler.exper.run_args
-    info_str = "{} p={:.2f} fold={} loss={}".format(exper_args.model, exper_args.drop_prob, exper_args.fold_ids,
-                                                    exper_args.loss_function)
-    if verbose:
-        print("INFO - Experimental details extracted:: " + info_str)
-    return exper_handler
-
-
 def detect_seg_errors(labels, pred_labels, is_multi_class=False):
 
     """
@@ -42,3 +27,37 @@ def detect_seg_errors(labels, pred_labels, is_multi_class=False):
         errors[errors_cls] = cls
 
     return errors
+
+
+def create_experiment(exper_id, verbose=False):
+
+    log_dir = os.path.join(config_hvsmr.root_dir, config_hvsmr.log_root_path)
+    exp_model_path = os.path.join(log_dir, exper_id)
+    exper_handler = HVSMRExperimentHandler()
+    exper_handler.load_experiment(exp_model_path, use_logfile=False)
+    exper_handler.set_root_dir(config_hvsmr.root_dir)
+    exper_args = exper_handler.exper.run_args
+    info_str = "{} p={:.2f} fold={} loss={}".format(exper_args.model, exper_args.drop_prob, exper_args.fold_ids,
+                                                    exper_args.loss_function)
+    if verbose:
+        print("INFO - Experimental details extracted:: " + info_str)
+    return exper_handler
+
+
+def nan_helper(y):
+    """Helper to handle indices and logical indices of NaNs.
+
+    Input:
+        - y, 1d numpy array with possible NaNs
+    Output:
+        - nans, logical indices of NaNs
+        - index, a function, with signature indices= index(logical_indices),
+          to convert logical indices of NaNs to 'equivalent' indices
+    Example:
+        >>> # linear interpolation of NaNs
+        >>> nans, x= nan_helper(y)
+        >>> y[nans]= np.interp(x(nans), x(~nans), y[~nans])
+    """
+
+    return np.isnan(y), lambda z: z.nonzero()[0]
+

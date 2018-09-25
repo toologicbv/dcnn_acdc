@@ -15,18 +15,17 @@ class HVSMRExperimentHandler(ExperimentHandler):
 
     def __init__(self):
         super(HVSMRExperimentHandler, self).__init__()
-        self.umap_output_dir = None
         self.agg_umaps = None
         self._check_maps()
 
-    def test(self, checkpoints, image_num=0, mc_samples=1, sample_weights=False, compute_hd=False,
+    def test(self, checkpoints, patient_id, mc_samples=1, sample_weights=False, compute_hd=False,
              use_seed=False, verbose=False, store_details=False,
              do_filter=True, save_pred_labels=False,
              store_test_results=False, save_umaps=False):
         """
 
         :param model:
-        :param image_num:
+        :param patient_id:
         :param mc_samples:
         :param sample_weights:
         :param compute_hd:
@@ -50,6 +49,7 @@ class HVSMRExperimentHandler(ExperimentHandler):
             checkpoints = [checkpoints]
         if self.test_set is None:
             self.get_test_set(use_cuda=self.exper.run_args.cuda)
+        image_num = self.test_set.trans_dict[patient_id]
 
         # -------------------------------------- local procedures END -----------------------------------------
         if use_seed:
@@ -150,17 +150,19 @@ class HVSMRExperimentHandler(ExperimentHandler):
             #                               referral_accuracy=None, referral_hd=None,
             #                               referral_stats=test_set.referral_stats)
 
-    def create_entropy_maps(self, do_save=False):
+    def create_entropy_maps(self, patient_id=None, do_save=False):
         eps = 1e-7
-        input_dir = os.path.join(self.exper.config.root_dir,
-                                           os.path.join(self.exper.output_dir, config_hvsmr.pred_lbl_dir))
-
-        search_path = os.path.join(input_dir, "*" + "_pred_probs.npz")
+        self._check_dirs()
+        if patient_id is None:
+            search_path = os.path.join(self.pred_output_dir, "*" + "_pred_probs.npz")
+        else:
+            search_path = os.path.join(self.pred_output_dir, patient_id + "_pred_probs.npz")
         files = glob.glob(search_path)
         if len(files) == 0:
             raise ImportError("ERROR - no predicted probs found in {}".format(search_path))
         self.entropy_maps = OrderedDict()
         min_ent, max_ent = 0, 0
+
         for fname in glob.glob(search_path):
             try:
                 pred_data = np.load(fname)
@@ -185,21 +187,24 @@ class HVSMRExperimentHandler(ExperimentHandler):
             patient_id = file_basename[:file_basename.find("_")]
             self.entropy_maps[patient_id] = entropy
         # print("Final min/max values {:.2f}/{:.2f}".format(min_ent, max_ent))
-        for patient_id, entropy_map in self.entropy_maps.iteritems():
+        for p_id, entropy_map in self.entropy_maps.iteritems():
             # normalize to values between 0 and 0.5, same scale as stddev values
             # p_min, p_max = np.min(self.entropy_maps[patient_id]), np.max(self.entropy_maps[patient_id])
             # print("Before normalize {:.2f}/{:.2f}".format(p_min, p_max))
-            self.entropy_maps[patient_id] = ((entropy_map - min_ent) * 1./(max_ent - min_ent)) * 0.4
+            self.entropy_maps[p_id] = ((entropy_map - min_ent) * 1./(max_ent - min_ent)) * 0.4
             # p_min, p_max = np.min(self.entropy_maps[patient_id]), np.max(self.entropy_maps[patient_id])
             # print("After normalize {:.2f}/{:.2f}".format(p_min, p_max))
             if do_save:
-                out_fname = os.path.join(self.umap_output_dir, patient_id + "_entropy_map.npz")
+                out_fname = os.path.join(self.umap_output_dir, p_id + "_entropy_map.npz")
                 try:
-                    np.savez(out_fname, entropy_map=self.entropy_maps[patient_id])
+                    np.savez(out_fname, entropy_map=self.entropy_maps[p_id])
                 except IOError:
                     print("ERROR - Unable to save entropy maps to {}".format(out_fname))
         if do_save:
             print("INFO - Saved all entropy maps to {}".format(self.umap_output_dir))
+
+        if patient_id is not None:
+            return self.entropy_maps[patient_id]
 
     def get_entropy_maps(self, patient_id=None):
         if self.umap_output_dir is None:
@@ -311,6 +316,12 @@ class HVSMRExperimentHandler(ExperimentHandler):
         if not os.path.isdir(self.umap_output_dir):
             os.mkdir(self.umap_output_dir)
 
+        # predicted labels/masks
+        self.pred_output_dir = os.path.join(self.exper.config.root_dir, os.path.join(self.exper.output_dir,
+                                                                                     config_hvsmr.pred_lbl_dir))
+        if not os.path.isdir(self.pred_output_dir):
+            os.mkdir(self.pred_output_dir)
+
     def _check_maps(self):
         if self.u_maps is None:
             self.u_maps = OrderedDict()
@@ -318,6 +329,10 @@ class HVSMRExperimentHandler(ExperimentHandler):
             self.agg_umaps = OrderedDict()
         if self.entropy_maps is None:
             self.entropy_maps = OrderedDict()
+
+    def set_root_dir(self, root_dir):
+        self.exper.config.root_dir = root_dir
+        self.exper.config.data_dir = os.path.join(self.exper.config.root_dir, "data/HVSMR/Folds")
 
     def get_test_set(self, use_cuda=False):
         if self.test_set is None:
@@ -332,4 +347,6 @@ class HVSMRExperimentHandler(ExperimentHandler):
             file_name = os.path.splitext(os.path.basename(test_file))[0]
             patient_id = file_name[:file_name.find("_")]
             self.test_set_ids[patient_id] = int(patient_id.strip("patient"))
+
+
 

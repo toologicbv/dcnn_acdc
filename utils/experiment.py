@@ -53,6 +53,10 @@ class ExperimentHandler(object):
         self.test_set_ids = {}
         self.patients = None
         self.referred_slices = None
+        # for u-maps/e-maps
+        self.umap_output_dir = None
+        # dir for predicted probs and labels
+        self.pred_output_dir = None
 
     def set_exper(self, exper, use_logfile=False):
         self.exper = exper
