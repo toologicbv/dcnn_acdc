@@ -42,6 +42,8 @@ class ExperimentHandler(object):
         self.pred_labels = None
         self.referral_umaps = None
         self.entropy_maps = None
+        self.agg_umaps = None
+        self.dt_maps = None
         self.ref_map_blobs = None
         self.test_results = None
         self.test_set = None
@@ -55,8 +57,42 @@ class ExperimentHandler(object):
         self.referred_slices = None
         # for u-maps/e-maps
         self.umap_output_dir = None
+        # for Hausdorff distance maps
+        self.dt_map_dir = None
         # dir for predicted probs and labels
         self.pred_output_dir = None
+        self._check_maps()
+
+    def _check_maps(self):
+        if self.u_maps is None:
+            self.u_maps = OrderedDict()
+        if self.agg_umaps is None:
+            self.agg_umaps = OrderedDict()
+        if self.entropy_maps is None:
+            self.entropy_maps = OrderedDict()
+        if self.dt_maps is None:
+            self.dt_maps = OrderedDict()
+
+    def _check_dirs(self, config_env):
+        if self.umap_output_dir is None:
+            self.umap_output_dir = os.path.join(self.exper.config.root_dir,
+                                                os.path.join(self.exper.output_dir, config_env.u_map_dir))
+        if not os.path.isdir(self.umap_output_dir):
+            os.mkdir(self.umap_output_dir)
+
+        # predicted labels/masks
+        if self.pred_output_dir is None:
+            self.pred_output_dir = os.path.join(self.exper.config.root_dir, os.path.join(self.exper.output_dir,
+                                                                                         config_env.pred_lbl_dir))
+        if not os.path.isdir(self.pred_output_dir):
+            os.mkdir(self.pred_output_dir)
+
+        # Hausdorff Distance maps (used in detector application)
+        if self.dt_map_dir is None:
+            self.dt_map_dir = os.path.join(self.exper.config.root_dir, os.path.join(self.exper.output_dir,
+                                                                                     config_env.dt_map_dir))
+        if not os.path.isdir(self.dt_map_dir):
+            os.mkdir(self.dt_map_dir)
 
     def set_exper(self, exper, use_logfile=False):
         self.exper = exper
@@ -933,17 +969,20 @@ class ExperimentHandler(object):
         if do_save:
             print("INFO - Saved all entropy maps to {}".format(output_dir))
 
-    def get_entropy_maps(self, patient_id=None):
-        self.entropy_maps = OrderedDict()
-        input_dir = os.path.join(self.exper.config.root_dir,
-                                  os.path.join(self.exper.output_dir, config.u_map_dir))
+    def get_entropy_maps(self, patient_id=None, force_reload=False):
+        self._check_dirs(config_env=config)
+        self._check_maps()
+        if self.entropy_maps is not None and patient_id is not None and not force_reload:
+            if patient_id in self.entropy_maps.keys():
+                return self.entropy_maps[patient_id]
+
         search_suffix = "_entropy_map.npz"
         if patient_id is None:
             search_mask = "*" + search_suffix
         else:
             search_mask = patient_id + search_suffix
 
-        search_path = os.path.join(input_dir, search_mask)
+        search_path = os.path.join(self.umap_output_dir, search_mask)
         if len(glob.glob(search_path)) == 0:
             self.create_entropy_maps(do_save=True)
         for fname in glob.glob(search_path):
@@ -955,6 +994,36 @@ class ExperimentHandler(object):
             file_basename = os.path.splitext(os.path.basename(fname))[0]
             patient_id = file_basename[:file_basename.find("_")]
             self.entropy_maps[patient_id] = entropy_map
+        if patient_id is not None:
+            return self.entropy_maps[patient_id]
+
+    def get_dt_maps(self, patient_id=None, force_reload=False):
+        self._check_dirs(config_env=config)
+        self._check_maps()
+        if self.dt_maps is not None and patient_id is not None and not force_reload:
+            if patient_id in self.dt_maps.keys():
+                return self.dt_maps[patient_id]
+
+        if patient_id is None:
+            search_path = os.path.join(self.dt_map_dir, "*dt_map.npz")
+        else:
+            filename = patient_id + "_dt_map.npz"
+            search_path = os.path.join(self.dt_map_dir, filename)
+        if len(glob.glob(search_path)) == 0:
+            raise ValueError("ERROR - No search result for {}".format(search_path))
+        for fname in glob.glob(search_path):
+            # get base filename first and then extract patient/name/ID (filename is e.g. patient012_dt_map.npz)
+            file_basename = os.path.splitext(os.path.basename(fname))[0]
+            patient_id = file_basename[:file_basename.find("_")]
+            try:
+                data = np.load(fname)
+                self.dt_maps[patient_id] = data["dt_map"]
+                del data
+            except IOError:
+                self.info("ERROR - Unable to load uncertainty maps from {}".format(fname))
+                raise
+        if patient_id is not None:
+            return self.dt_maps[patient_id]
 
     def info(self, message):
         if self.logger is None:

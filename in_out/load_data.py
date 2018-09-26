@@ -516,7 +516,10 @@ class ACDC2017DataSet(BaseImageDataSet):
                                                self.incomplete_stats["ed_all"],
                                                self.incomplete_stats["ed_wo_all"]))
 
-
+    @staticmethod
+    def remove_padding(image):
+        return image[ACDC2017DataSet.pad_size:-ACDC2017DataSet.pad_size,
+               ACDC2017DataSet.pad_size:-ACDC2017DataSet.pad_size]
 # dataset = ACDC2017DataSet(exper_config=config, search_mask=config.dflt_image_name + ".mhd", fold_ids=[0],
 #                          preprocess=True, debug=False)
 

@@ -15,8 +15,6 @@ class HVSMRExperimentHandler(ExperimentHandler):
 
     def __init__(self):
         super(HVSMRExperimentHandler, self).__init__()
-        self.agg_umaps = None
-        self._check_maps()
 
     def test(self, checkpoints, patient_id, mc_samples=1, sample_weights=False, compute_hd=False,
              use_seed=False, verbose=False, store_details=False,
@@ -152,7 +150,7 @@ class HVSMRExperimentHandler(ExperimentHandler):
 
     def create_entropy_maps(self, patient_id=None, do_save=False):
         eps = 1e-7
-        self._check_dirs()
+        self._check_dirs(config_hvsmr)
         if patient_id is None:
             search_path = os.path.join(self.pred_output_dir, "*" + "_pred_probs.npz")
         else:
@@ -208,7 +206,7 @@ class HVSMRExperimentHandler(ExperimentHandler):
 
     def get_entropy_maps(self, patient_id=None):
         if self.umap_output_dir is None:
-            self._check_dirs()
+            self._check_dirs(config_hvsmr)
 
         if self.entropy_maps is not None and patient_id is not None:
             if patient_id in self.entropy_maps.keys():
@@ -236,7 +234,7 @@ class HVSMRExperimentHandler(ExperimentHandler):
 
     def save_bayes_umap(self, u_map, patient_id):
         if self.umap_output_dir is None:
-            self._check_dirs()
+            self._check_dirs(config_hvsmr)
         try:
             #
             filename = patient_id + "_raw" + config_hvsmr.bayes_umap_suffix
@@ -249,7 +247,7 @@ class HVSMRExperimentHandler(ExperimentHandler):
 
     def get_bayes_umaps(self, patient_id=None, aggregate_func=None, force_reload=False):
         if self.umap_output_dir is None:
-            self._check_dirs()
+            self._check_dirs(config_hvsmr)
 
         if aggregate_func is not None:
             u_maps = self.agg_umaps
@@ -290,7 +288,7 @@ class HVSMRExperimentHandler(ExperimentHandler):
 
     def create_agg_bayes_umap(self, patient_id=None, aggregate_func="max"):
         if self.umap_output_dir is None:
-            self._check_dirs()
+            self._check_dirs(config_hvsmr)
         if patient_id is not None:
             u_maps = {patient_id: self.get_bayes_umaps(patient_id=patient_id, aggregate_func=None, force_reload=True)}
         else:
@@ -308,27 +306,6 @@ class HVSMRExperimentHandler(ExperimentHandler):
                 np.savez(file_name, agg_umap=agg_umap)
             except IOError:
                 self.info("ERROR - Unable to save aggregated umap file {}".format(file_name))
-
-    def _check_dirs(self):
-        if self.umap_output_dir is None:
-            self.umap_output_dir = os.path.join(self.exper.config.root_dir,
-                                                os.path.join(self.exper.output_dir, config_hvsmr.u_map_dir))
-        if not os.path.isdir(self.umap_output_dir):
-            os.mkdir(self.umap_output_dir)
-
-        # predicted labels/masks
-        self.pred_output_dir = os.path.join(self.exper.config.root_dir, os.path.join(self.exper.output_dir,
-                                                                                     config_hvsmr.pred_lbl_dir))
-        if not os.path.isdir(self.pred_output_dir):
-            os.mkdir(self.pred_output_dir)
-
-    def _check_maps(self):
-        if self.u_maps is None:
-            self.u_maps = OrderedDict()
-        if self.agg_umaps is None:
-            self.agg_umaps = OrderedDict()
-        if self.entropy_maps is None:
-            self.entropy_maps = OrderedDict()
 
     def set_root_dir(self, root_dir):
         self.exper.config.root_dir = root_dir
