@@ -56,14 +56,18 @@ def generate_dt_maps(exper_handler, patient_id=None, voxelspacing=1.4, bg_classe
                     if 0 != np.count_nonzero(label_slice):
                         dt_slices[cls_idx, :, :, slice_id] = \
                             compute_slice_distance_transform_for_structure(label_slice, voxelspacing=voxelspacing)
+                        dt = dt_slices[cls_idx, :, :, slice_id]
                         # we use the "non_base_apex_slice" index to fetch the inter-observer margin from the config
                         # object. index=0: the margin we use for the apex/base slices, it's greater than for non-A/B
                         #         index=1: the margin we use for the non-apex/base slices, it's smaller than the first
+                        # we substract the margin from the distance-transform for all voxels. 
                         inter_observ_margin = config_detector.acdc_inter_observ_var[cls_idx][non_base_apex_slice]
-                        # dt_slices[cls_idx, :, :, slice_id] -= inter_observ_margin
+                        dt -= inter_observ_margin
+                        dt[dt < 0] = 0
+                        dt_slices[cls_idx, :, :, slice_id] = dt
                     else:
                         penalty = math.sqrt((h**2 + w**2)) * voxelspacing
-                        print("Penalty {:.2f}".format(penalty))
+                        # print("Penalty {:.2f}".format(penalty))
                         dt_slices[cls_idx, :, :, slice_id] = penalty
 
         file_name = os.path.join(dt_output_dir, p_id + "_dt_map.npz")
