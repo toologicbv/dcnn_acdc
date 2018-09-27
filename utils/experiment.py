@@ -1087,11 +1087,11 @@ class ExperimentHandler(object):
                                                                      load_train=load_train, load_val=load_val,
                                                                      batch_size=None, use_cuda=use_cuda)
 
-    def get_pred_labels(self, patient_id=None, mc_dropout=True):
+    def get_pred_labels(self, patient_id=None, mc_dropout=True, force_reload=False):
         if self.pred_labels is None:
             self.pred_labels = OrderedDict()
         if patient_id is not None:
-            if patient_id in self.pred_labels.keys():
+            if patient_id in self.pred_labels.keys() and not force_reload:
                 return
 
         pred_labels_input_dir = os.path.join(self.exper.config.root_dir,

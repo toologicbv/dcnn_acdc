@@ -1,23 +1,4 @@
-import sys
-import dill
-import os
-import time
-import shutil
-import torch
-from collections import OrderedDict
-import numpy as np
-from common.common import create_logger
-from sklearn.metrics import precision_recall_curve, roc_curve, auc
-
-from models.model_handler import load_slice_detector_model
-from common.dslices.config import config
-
-from utils.dslices.batch_handler import BatchHandler as BatchHandlerSD
-from utils.dslices.accuracies import compute_eval_metrics
-from in_out.dataset_slice_detector import create_dataset
-
-
-class ExperimentHandler(object):
+lass ExperimentHandler(object):
 
     exp_filename = "exper_stats"
 
@@ -325,10 +306,8 @@ class ExperimentHandler(object):
     def change_exper_dirs(self, new_dir, move_dir=False):
 
         """
-
         :param new_dir:
         usage: exper_hdl_base_brier.change_exper_dirs("20180628_13_53_01_dcnn_f1_brier_150KE_lr2e02")
-
         """
 
         print("Current directory names:")
@@ -402,80 +381,3 @@ class ExperimentHandler(object):
             self.logger = create_logger(self.exper, file_handler=use_logfile)
         else:
             self.logger = None
-
-
-def get_experiment_handlers(root_dir, load_fold_id, seg_exper_ensemble=None):
-    """
-    Get slice detection handlers (experiments) for evaluation purposes
-
-    :param root_dir:
-    :param load_fold_id:
-    :param seg_exper_ensemble
-    :return:
-    """
-    log_dir = os.path.join(root_dir, "logs")
-
-    # Level 2 exper dicts
-    emap_exp_f0, emap_exp_f1, emap_exp_f2, emap_exp_f3 = {}, {}, {}, {}
-    umap_exp_f0, umap_exp_f1, umap_exp_f2, umap_exp_f3 = {}, {}, {}, {}
-    no_emap_exp_f0, no_emap_exp_f1, no_emap_exp_f2, no_emap_exp_f3 = {}, {}, {}, {}
-    no_umap_exp_f0, no_umap_exp_f1, no_umap_exp_f2, no_umap_exp_f3 = {}, {}, {}, {}
-    # Level 1 exper dicts
-    exp_emaps = {0: emap_exp_f0, 1: emap_exp_f1, 2: emap_exp_f2, 3: emap_exp_f3}
-    exp_umaps = {0: umap_exp_f0, 1: umap_exp_f1, 2: umap_exp_f2, 3: umap_exp_f3}
-    exp_no_emaps = {0: no_emap_exp_f0, 1: no_emap_exp_f1, 2: no_emap_exp_f2, 3: no_emap_exp_f3}
-    exp_no_umaps = {0: no_umap_exp_f0, 1: no_umap_exp_f1, 2: no_umap_exp_f2, 3: no_umap_exp_f3}
-    # ------------------------  FOLD 0 ------------------------
-    # tuple key is: epochs, batch_size, backward_freq, weight_decay, lambda, lr
-    #           ------------------------  e-maps ------------------------
-    emap_exp_f0[tuple((3000, 8, 10, 5, 7, 0.0001))] = "20180829_17_45_49_sdvgg11_bn_f0p01_brier_emap_3KE_lr1e04"
-    no_emap_exp_f0[tuple((3000, 8, 10, 5, 7, 0.0001))] = "20180829_17_55_47_sdvgg11_bn_f0p01_brier_noemap_3KE_lr1e04"
-    #           ------------------------ u-maps ------------------------
-    umap_exp_f0[tuple((3000, 8, 10, 5, 7, 0.0001))] = "20180829_18_05_55_sdvgg11_bn_f0p01_brier_umap_3KE_lr1e04"
-    no_umap_exp_f0[tuple((3000, 8, 10, 5, 7, 0.0001))] = "20180830_08_00_25_sdvgg11_bn_f0p01_brier_noumap_3KE_lr1e04"
-    # ------------------------ FOLD 1 -----------------------
-    #           ------------------------  e-maps ------------------------
-    emap_exp_f1[tuple((3000, 8, 10, 5, 7, 0.0001))] = "20180830_09_50_57_sdvgg11_bn_f1p01_brier_emap_3KE_lr1e04"
-    no_emap_exp_f1[tuple((3000, 8, 10, 5, 7, 0.0001))] = "20180830_10_00_39_sdvgg11_bn_f1p01_brier_noemap_3KE_lr1e04"
-
-    # FOLD 2
-    #           ------------------------  e-maps ------------------------
-    emap_exp_f2[tuple((3000, 8, 10, 5, 7, 0.0001))] = "20180830_09_41_07_sdvgg11_bn_f2p01_brier_emap_3KE_lr1e04"
-    no_emap_exp_f2[tuple((3000, 8, 10, 5, 7, 0.0001))] = "20180830_10_10_17_sdvgg11_bn_f2p01_brier_noemap_3KE_lr1e04"
-
-    # ------------------------ FOLD 3 ------------------------
-    #           ------------------------  e-maps ------------------------
-    emap_exp_f3[tuple((3000, 8, 10, 5, 7, 0.0001))] = "20180830_09_22_24_sdvgg11_bn_f3p01_brier_emap_3KE_lr1e04"
-    no_emap_exp_f3[tuple((3000, 8, 10, 5, 7, 0.0001))] = "20180830_09_31_51_sdvgg11_bn_f3p01_brier_noemap_3KE_lr1e04"
-
-    expers = [exp_emaps, exp_no_emaps, exp_umaps, exp_no_umaps]
-    # We also need four handler dictionaries
-    exp_hdl_emap, exp_hdl_no_emap, exp_hdl_umap, exp_hdl_no_umap = {}, {}, {}, {}
-    print("IMPORTANT INFO - Config key consists of #epoch, batch_size, backward_freq, weight_decay, lambda, lr")
-    for exper_dict_l1 in expers:
-        for fold_id, exper_dict_l2 in exper_dict_l1.iteritems():
-            if fold_id == load_fold_id:
-                for config_key, exper_id in exper_dict_l2.iteritems():
-                    print("")
-                    print("----------- Load experiment {} ---------------".format(exper_id))
-                    exp_path = os.path.join(log_dir, exper_id)
-                    exper_hdl = ExperimentHandler()
-                    exper_hdl.set_seg_ensemble(seg_exper_ensemble)
-                    try:
-                        exper_hdl.load_experiment(exp_path, use_logfile=False, verbose=False)
-                        exper_hdl.set_root_dir(root_dir)
-                        print("Model name: {} / config_key {}".format(exper_hdl.model_name, config_key))
-                        if exper_hdl.exper.run_args.type_of_map == "u_map":
-                            if exper_hdl.exper.run_args.use_no_map:
-                                exp_hdl_no_umap[config_key] = exper_hdl
-                            else:
-                                exp_hdl_umap[config_key] = exper_hdl
-                        else:
-                            if exper_hdl.exper.run_args.use_no_map:
-                                exp_hdl_no_emap[config_key] = exper_hdl
-                            else:
-                                exp_hdl_emap[config_key] = exper_hdl
-                    except IOError:
-                        print("=============>>> Can't open experiment {}".format(exper_id))
-
-    return exp_hdl_emap, exp_hdl_no_emap, exp_hdl_umap, exp_hdl_no_umap

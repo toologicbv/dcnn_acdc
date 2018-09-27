@@ -61,8 +61,9 @@ def generate_dt_maps(exper_handler, patient_id=None, voxelspacing=1.4, bg_classe
                         # object. index=0: the margin we use for the apex/base slices, it's greater than for non-A/B
                         #         index=1: the margin we use for the non-apex/base slices, it's smaller than the first
                         # we substract the margin from the distance-transform for all voxels. 
-                        inter_observ_margin = config_detector.acdc_inter_observ_var[cls_idx][non_base_apex_slice]
-                        dt -= inter_observ_margin
+                        # inter_observ_margin = config_detector.acdc_inter_observ_var[cls_idx][non_base_apex_slice]
+                        # dt -= inter_observ_margin
+                        dt -= 5.  # 5 mm is what we accept
                         dt[dt < 0] = 0
                         dt_slices[cls_idx, :, :, slice_id] = dt
                     else:
