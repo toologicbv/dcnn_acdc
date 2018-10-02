@@ -28,6 +28,7 @@ from in_out.load_data import ACDC2017DataSet
 from utils.hvsmr.batch_handler import HVSMRTwoDimBatchHandler
 from utils.test_handler import ACDC2017TestHandler
 from in_out.patient_classification import Patients
+from utils.detector.generate_dt_maps import generate_dt_maps, determine_target_voxels
 
 
 class ExperimentHandler(object):
@@ -44,6 +45,8 @@ class ExperimentHandler(object):
         self.entropy_maps = None
         self.agg_umaps = None
         self.dt_maps = None
+        # for ROI learning of areas in automatic segmentations that we need to inspect after inference
+        self.target_roi_maps = None
         self.ref_map_blobs = None
         self.test_results = None
         self.test_set = None
@@ -61,6 +64,9 @@ class ExperimentHandler(object):
         self.dt_map_dir = None
         # dir for predicted probs and labels
         self.pred_output_dir = None
+        # ROI areas of the automatic references generated for the test set. We use this for ROI learning of areas
+        # to be inspected after segmentation
+        self.troi_map_dir = None
         self._check_maps()
 
     def _check_maps(self):
@@ -72,6 +78,8 @@ class ExperimentHandler(object):
             self.entropy_maps = OrderedDict()
         if self.dt_maps is None:
             self.dt_maps = OrderedDict()
+        if self.target_roi_maps is None:
+            self.target_roi_maps = OrderedDict()
 
     def _check_dirs(self, config_env):
         if self.umap_output_dir is None:
@@ -93,6 +101,12 @@ class ExperimentHandler(object):
                                                                                      config_env.dt_map_dir))
         if not os.path.isdir(self.dt_map_dir):
             os.mkdir(self.dt_map_dir)
+
+        if self.troi_map_dir is None:
+            self.troi_map_dir = os.path.join(self.exper.config.root_dir, os.path.join(self.exper.output_dir,
+                                                                                    config_env.troi_map_dir))
+        if not os.path.isdir(self.troi_map_dir):
+            os.mkdir(self.troi_map_dir)
 
     def set_exper(self, exper, use_logfile=False):
         self.exper = exper
@@ -997,6 +1011,38 @@ class ExperimentHandler(object):
         if patient_id is not None:
             return self.entropy_maps[patient_id]
 
+    def generate_dt_maps(self, patient_id=None, voxelspacing=ACDC2017DataSet.new_voxel_spacing):
+        """
+        Generating the distance transform maps for all tissue classes per slice.
+        dt_slices (the result) has shape [num_of_classes, w, h, #slices]
+        We need the inter-observer error-margins, and the gt references of the tissue labels.
+
+        :param patient_id:
+        :param voxelspacing:
+        :return:
+        """
+        self._check_dirs(config_env=config)
+        self._check_maps()
+        if self.test_set is None:
+            self.get_test_set()
+        if patient_id is None:
+            p_range = self.test_set.trans_dict.keys()
+        else:
+            p_range = [patient_id]
+        for p_id in p_range:
+            _, labels = self.test_set.get_test_pair(p_id)
+            dt_slices = generate_dt_maps(labels, voxelspacing=voxelspacing)
+            file_name = os.path.join(self.dt_map_dir, p_id + "_dt_map.npz")
+            try:
+                self.dt_maps[p_id] = dt_slices
+                np.savez(file_name, dt_map=dt_slices)
+            except IOError:
+                print("ERROR - cannot save hd map to {}".format(file_name))
+                raise
+
+        if patient_id is not None:
+            return dt_slices
+
     def get_dt_maps(self, patient_id=None, force_reload=False):
         self._check_dirs(config_env=config)
         self._check_maps()
@@ -1020,10 +1066,81 @@ class ExperimentHandler(object):
                 self.dt_maps[patient_id] = data["dt_map"]
                 del data
             except IOError:
-                self.info("ERROR - Unable to load uncertainty maps from {}".format(fname))
+                self.info("ERROR - Unable to load distance transform maps from {}".format(fname))
                 raise
         if patient_id is not None:
             return self.dt_maps[patient_id]
+
+    def generate_target_rois_for_learning(self, patient_id=None, mc_dropout=False):
+        """
+        Generation of target areas in automatic segmentations (test set) that we want to inspect after prediction.
+        These areas must be detected by our "detection model". So there're just for supervised learning
+        For each patient study we produce numpy array with shape [num_of_classes, w, h, #slices]
+
+        IMPORTANT: we have different rois for the automatic segmentations produced by single prediction (dropout=False)
+                   or by a Bayesian network using T (we used 10) samples. In the latter case mc_dropout=True.
+
+        :param patient_id:
+        :param mc_dropout:
+        :return:
+        """
+        self._check_dirs(config_env=config)
+        self._check_maps()
+        if self.test_set is None:
+            self.get_test_set()
+
+        if patient_id is None:
+            p_range = self.test_set.trans_dict.keys()
+        else:
+            p_range = [patient_id]
+        for p_id in p_range:
+            auto_pred = self.get_pred_labels(patient_id=p_id, mc_dropout=mc_dropout, force_reload=True)
+            _, labels = self.test_set.get_test_pair(p_id)
+            dt_slices = self.get_dt_maps(p_id)
+            self.target_roi_maps[p_id] = determine_target_voxels(auto_pred, labels, dt_slices)
+            if mc_dropout:
+                file_suffix = p_id + "_troi_map_mc.npz"
+            else:
+                file_suffix = p_id + "_troi_map.npz"
+            file_name = os.path.join(self.troi_map_dir, file_suffix)
+            try:
+                np.savez(file_name, target_roi=self.target_roi_maps[p_id])
+            except IOError:
+                print("ERROR - cannot save target-roi map to {}".format(file_name))
+                raise
+
+    def get_target_roi_maps(self, patient_id=None, mc_dropout=False, force_reload=False):
+        self._check_dirs(config_env=config)
+        self._check_maps()
+        if self.target_roi_maps is not None and patient_id is not None and not force_reload:
+            if patient_id in self.target_roi_maps.keys():
+                return self.target_roi_maps[patient_id]
+        # we didn't find target_roi_map in dictionary, or patient_id was empty, load from disk
+        if mc_dropout:
+            file_suffix = "_troi_map_mc.npz"
+        else:
+            file_suffix = "_troi_map.npz"
+        if patient_id is None:
+            search_path = os.path.join(self.troi_map_dir, "*" + file_suffix)
+        else:
+            filename = patient_id + file_suffix
+            search_path = os.path.join(self.troi_map_dir, filename)
+
+        if len(glob.glob(search_path)) == 0:
+            raise ValueError("ERROR - No search result for {}".format(search_path))
+        for fname in glob.glob(search_path):
+            # get base filename first and then extract patient/name/ID (filename is e.g. patient012_dt_map.npz)
+            file_basename = os.path.splitext(os.path.basename(fname))[0]
+            patient_id = file_basename[:file_basename.find("_")]
+            try:
+                data = np.load(fname)
+                self.target_roi_maps[patient_id] = data["target_roi"]
+                del data
+            except IOError:
+                self.info("ERROR - Unable to load target roi maps from {}".format(fname))
+                raise
+        if patient_id is not None:
+            return self.target_roi_maps[patient_id]
 
     def info(self, message):
         if self.logger is None:
@@ -1088,14 +1205,12 @@ class ExperimentHandler(object):
                                                                      batch_size=None, use_cuda=use_cuda)
 
     def get_pred_labels(self, patient_id=None, mc_dropout=True, force_reload=False):
+        self._check_dirs(config_env=config)
         if self.pred_labels is None:
             self.pred_labels = OrderedDict()
         if patient_id is not None:
             if patient_id in self.pred_labels.keys() and not force_reload:
-                return
-
-        pred_labels_input_dir = os.path.join(self.exper.config.root_dir,
-                                             os.path.join(self.exper.output_dir, config.pred_lbl_dir))
+                return self.pred_labels[patient_id]
 
         if mc_dropout:
             search_suffix = "_pred_labels_mc.npz"
@@ -1103,9 +1218,9 @@ class ExperimentHandler(object):
             search_suffix = "_pred_labels.npz"
 
         if patient_id is not None:
-            search_path = os.path.join(pred_labels_input_dir, patient_id + search_suffix)
+            search_path = os.path.join(self.pred_output_dir, patient_id + search_suffix)
         else:
-            search_path = os.path.join(pred_labels_input_dir, "*" + search_suffix)
+            search_path = os.path.join(self.pred_output_dir, "*" + search_suffix)
 
         if len(glob.glob(search_path)) == 0:
             raise ValueError("ERROR - no file found with search mask {}".format(search_path))
@@ -1114,6 +1229,9 @@ class ExperimentHandler(object):
             file_basename = os.path.splitext(os.path.basename(fname))[0]
             patient_id = file_basename[:file_basename.find("_")]
             self.pred_labels[patient_id] = pred_labels
+
+        if patient_id is not None:
+            return self.pred_labels[patient_id]
 
     def change_exper_dirs(self, new_dir, move_dir=False):
 

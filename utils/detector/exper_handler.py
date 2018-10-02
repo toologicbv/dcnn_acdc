@@ -1,4 +1,4 @@
-lass ExperimentHandler(object):
+class ExperimentHandler(object):
 
     exp_filename = "exper_stats"
 

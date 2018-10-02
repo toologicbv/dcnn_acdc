@@ -28,8 +28,13 @@ class ExperHandlerEnsemble(object):
     def get_patient_fold_id(self, patient_id):
         return self.patient_fold[patient_id]
 
-    def prepare_handlers(self, patient_ids=None, type_of_map="e_map", force_reload=False):
+    def prepare_handlers(self, fold_id=None, patient_ids=None, type_of_map="e_map", force_reload=False):
         """
+
+        :param fold_id: we use the fold_id to determine for which seg-handler we're loading all the necessary
+                        objects we need.
+
+                IMPORTANT: If fold_id is None, patient_ids is None, then we're loading All ACDC patients!!!!
 
         :param patient_ids: list of patient_ids which we want to use for our experiment. Can contain train and test
                             patient_ids from different fold ids. We use this only, when we want to limit our
@@ -40,29 +45,37 @@ class ExperHandlerEnsemble(object):
         :return:
         """
 
-        if patient_ids is None:
+        if fold_id is not None:
+            patient_ids = []
+            for p_id, f_id in self.patient_fold.iteritems():
+                if f_id == fold_id:
+                    patient_ids.append(p_id)
+        elif patient_ids is None:
+            # ALL patients from ALL FOLDS!!!
             # we DON't filter, just using ALL patient IDs
             patient_ids = self.patient_fold.keys()
         else:
             if not isinstance(patient_ids, list):
                 patient_ids = [patient_ids]
 
+        patient_ids.sort()
         for p_id in patient_ids:
             fold_id = self.patient_fold[p_id]
             exper_hdl = self.seg_exper_handlers[fold_id]
             if type_of_map == "e_map":
-                _ = exper_hdl.get_pred_prob_maps(patient_id=p_id, mc_dropout=False)
-                exper_hdl.get_pred_labels(patient_id=p_id, mc_dropout=False, force_reload=force_reload)
+                mc_dropout = False
                 exper_hdl.get_entropy_maps(patient_id=p_id, force_reload=force_reload)
             elif type_of_map == "u_map":
-                _ = exper_hdl.get_pred_prob_maps(patient_id=p_id, mc_dropout=True)
+                mc_dropout = True
                 exper_hdl.get_referral_maps(0.001, per_class=False, aggregate_func="max", use_raw_maps=True,
                                             patient_id=p_id, load_ref_map_blobs=False)
 
-                _ = exper_hdl.get_pred_labels(patient_id=p_id, mc_dropout=True, force_reload=force_reload)
             else:
                 raise ValueError("ERROR - type of map {} is not supported".format(type_of_map))
             exper_hdl.get_dt_maps(patient_id=p_id, force_reload=force_reload)
+            exper_hdl.get_target_roi_maps(patient_id=p_id, force_reload=force_reload, mc_dropout=mc_dropout)
+            exper_hdl.get_pred_labels(patient_id=p_id, mc_dropout=mc_dropout, force_reload=force_reload)
+            _ = exper_hdl.get_pred_prob_maps(patient_id=p_id, mc_dropout=mc_dropout)
 
     def load_dice_without_referral(self, type_of_map="u_map", referral_threshold=0.001):
         """
