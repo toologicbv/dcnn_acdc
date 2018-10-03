@@ -10,6 +10,8 @@ class BaseConfig(object):
         self.acdc_inter_observ_var = {1: [14.05, 9.05], 2: [7.8, 5.8], 3: [8.3, 5.65],  # ES
                                       5: [12.35, 8.15], 6: [6.95, 5.25], 7: [5.9, 4.65]}  # ED
         self.acdc_background_classes = [0, 4]
+        # TODO We don't know size of padding yet. Depends on model architecture!
+        self.acdc_pad_size = 20
 
 
 config_detector = BaseConfig()

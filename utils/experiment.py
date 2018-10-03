@@ -894,6 +894,12 @@ class ExperimentHandler(object):
             patient_id = file_name[:file_name.find("_")]
             self.test_set_ids[patient_id] = int(patient_id.strip("patient"))
 
+    def is_in_test_set(self, patient_id):
+        if patient_id in self.test_set_ids:
+            return True
+        else:
+            return False
+
     def generate_figures(self, test_set, image_range=None, referral_thresholds=[0.], patients=None,
                          slice_type_filter=None):
         if patients is not None:

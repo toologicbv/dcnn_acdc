@@ -56,7 +56,8 @@ def make_layers(cfg, batch_norm=False):
     """
     layers = []
     in_channels = cfg[0]
-    for v in cfg:
+    # 1st position specifies #input channels (to start with) hence we omit that index in the loop
+    for v in cfg[1:]:
         if v == 'M':
             layers += [nn.MaxPool2d(kernel_size=2, stride=2)]
         else:
@@ -70,10 +71,10 @@ def make_layers(cfg, batch_norm=False):
 
 
 cfg = {
-    'A': [3, 16, 'M', 32, 'M', 64, 64, 'M'],
-    'B': [3, 64, 64, 'M', 128, 128, 'M', 256, 256, 'M', 512, 512, 'M', 512, 512, 'M'],
-    'D': [3, 64, 64, 'M', 128, 128, 'M', 256, 256, 256, 'M', 512, 512, 512, 'M', 512, 512, 512, 'M'],
-    'E': [3, 64, 64, 'M', 128, 128, 'M', 256, 256, 256, 256, 'M', 512, 512, 512, 512, 'M', 512, 512, 512, 512, 'M'],
+    'A': [2, 16, 'M', 32, 'M', 64, 64, 'M'],
+    'B': [2, 64, 64, 'M', 128, 128, 'M', 256, 256, 'M', 512, 512, 'M', 512, 512, 'M'],
+    'D': [2, 64, 64, 'M', 128, 128, 'M', 256, 256, 256, 'M', 512, 512, 512, 'M', 512, 512, 512, 'M'],
+    'E': [2, 64, 64, 'M', 128, 128, 'M', 256, 256, 256, 256, 'M', 512, 512, 512, 512, 'M', 512, 512, 512, 512, 'M'],
 }
 
 

@@ -28,7 +28,8 @@ class ExperHandlerEnsemble(object):
     def get_patient_fold_id(self, patient_id):
         return self.patient_fold[patient_id]
 
-    def prepare_handlers(self, fold_id=None, patient_ids=None, type_of_map="e_map", force_reload=False):
+    def prepare_handlers(self, fold_id=None, patient_ids=None, type_of_map="e_map", force_reload=False,
+                         for_detector_dtaset=False):
         """
 
         :param fold_id: we use the fold_id to determine for which seg-handler we're loading all the necessary
@@ -42,6 +43,8 @@ class ExperHandlerEnsemble(object):
         :param type_of_map: e_map or u_map
         :param force_reload: if TRUE, we force a reload from disk although the objects has already been loaded
                              by the handlers.
+        :param for_detector_dtaset: boolean, limit the load process to uncertainty maps and predicted labels!
+        :param quick_run: boolean, reduce number of patients for debug purposes
         :return:
         """
 
@@ -72,10 +75,12 @@ class ExperHandlerEnsemble(object):
 
             else:
                 raise ValueError("ERROR - type of map {} is not supported".format(type_of_map))
-            exper_hdl.get_dt_maps(patient_id=p_id, force_reload=force_reload)
-            exper_hdl.get_target_roi_maps(patient_id=p_id, force_reload=force_reload, mc_dropout=mc_dropout)
+            # For the RegionDetector dataset, we only need the uncertainty maps and predicted labels
+            if not for_detector_dtaset:
+                exper_hdl.get_dt_maps(patient_id=p_id, force_reload=force_reload)
+                exper_hdl.get_target_roi_maps(patient_id=p_id, force_reload=force_reload, mc_dropout=mc_dropout)
+                _ = exper_hdl.get_pred_prob_maps(patient_id=p_id, mc_dropout=mc_dropout)
             exper_hdl.get_pred_labels(patient_id=p_id, mc_dropout=mc_dropout, force_reload=force_reload)
-            _ = exper_hdl.get_pred_prob_maps(patient_id=p_id, mc_dropout=mc_dropout)
 
     def load_dice_without_referral(self, type_of_map="u_map", referral_threshold=0.001):
         """
