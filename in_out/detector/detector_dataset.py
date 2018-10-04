@@ -4,6 +4,7 @@ from common.detector.config import config_detector
 from tqdm import tqdm
 from utils.exper_hdl_ensemble import ExperHandlerEnsemble
 from common.dslices.config import config
+from common.detector.helper import find_bbox_object
 
 
 class RegionDetectorDataSet(object):
@@ -17,11 +18,15 @@ class RegionDetectorDataSet(object):
         # The key of the dictionaries is patient_id.
         self.train_images = []
         self.train_labels = []
+        self.train_img_rois = []
+        self.train_lbl_rois = []
         self.train_extra_labels = []
         # contain numpy array with shape [#slices, 3, w, h]
         self.test_images = []
         # contain numpy array with shape [#slices]
         self.test_labels = []
+        self.test_img_rois = []
+        self.test_lbl_rois = []
         # contain numpy array with shape [#slices, 4] 1) phase 2) slice id 3) mean-dice/slice 4) patient id
         self.test_extra_labels = []
         # actually "size" here is relate to number of patients

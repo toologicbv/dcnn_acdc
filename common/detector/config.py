@@ -11,7 +11,14 @@ class BaseConfig(object):
                                       5: [12.35, 8.15], 6: [6.95, 5.25], 7: [5.9, 4.65]}  # ED
         self.acdc_background_classes = [0, 4]
         # TODO We don't know size of padding yet. Depends on model architecture!
-        self.acdc_pad_size = 20
+        self.acdc_pad_size = 1
+
+        self.detector_cfg = {
+            'base': [16, 'M', 32, 'M', 32, 'M', 64],
+            'num_of_input_channels': 2,
+            'num_of_classes': 2,
+            'use_batch_norm': True
+        }
 
 
 config_detector = BaseConfig()
