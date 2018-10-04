@@ -1,3 +1,15 @@
+import torch.nn as nn
+import torch
+
+OPTIMIZER_DICT = {'sgd': torch.optim.SGD,  # Gradient Descent
+                  'adadelta': torch.optim.Adadelta,  # Adadelta
+                  'adagrad': torch.optim.Adagrad,  # Adagrad
+                  'adam': torch.optim.Adam,  # Adam
+                  'sparse_adam': torch.optim.SparseAdam, # SparseAdam
+                  'rmsprop': torch.optim.RMSprop  # RMSprop
+                  }
+
+
 class BaseConfig(object):
 
     def __init__(self):
@@ -13,11 +25,14 @@ class BaseConfig(object):
         # TODO We don't know size of padding yet. Depends on model architecture!
         self.acdc_pad_size = 1
 
+        self.optimizer = "adam"
         self.detector_cfg = {
             'base': [16, 'M', 32, 'M', 32, 'M', 64],
             'num_of_input_channels': 2,
             'num_of_classes': 2,
-            'use_batch_norm': True
+            'use_batch_norm': True,
+            'classification_loss': nn.NLLLoss2d,
+            'optimizer': "adam"
         }
 
 

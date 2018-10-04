@@ -3,12 +3,16 @@ import math
 import torch
 from models.detector.vgg_style_model import make_layers
 from common.detector.config import config_detector
+from common.detector.config import OPTIMIZER_DICT
 
 
 class RegionDetector(nn.Module):
 
-    def __init__(self, model_cfg, init_weights=True):
+    def __init__(self, model_cfg, lr=0.001, init_weights=True):
         super(RegionDetector, self).__init__()
+        self.sgd_optimizer = model_cfg['optimizer']
+        self.lr = None
+        self.set_learning_rate(lr=lr)
         self.nclasses = model_cfg['num_of_classes']
         self.num_input_channels = model_cfg['num_of_input_channels']
         self.use_batch_norm = model_cfg['use_batch_norm']
@@ -54,6 +58,15 @@ class RegionDetector(nn.Module):
             elif isinstance(m, nn.Linear):
                 m.weight.data.normal_(0, 0.01)
                 m.bias.data.zero_()
+
+    def set_learning_rate(self, lr):
+        if self.sgd_optimizer == "sparse_adam":
+            self.sgd_optimizer = OPTIMIZER_DICT[self.sgd_optimizer](
+                self.parameters(), lr=lr)
+        else:
+            self.sgd_optimizer = OPTIMIZER_DICT[self.sgd_optimizer](
+                self.parameters(), lr=lr, weight_decay=self.weight_decay, betas=(0.9, 0.999))
+        self.lr = lr
 
 
 if __name__ == '__main__':
