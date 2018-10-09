@@ -32,7 +32,8 @@ class BaseConfig(object):
             'num_of_classes': 2,
             'use_batch_norm': True,
             'classification_loss': nn.NLLLoss2d,
-            'optimizer': "adam"
+            'optimizer': "adam",
+            'weight_decay': 0.001
         }
 
 

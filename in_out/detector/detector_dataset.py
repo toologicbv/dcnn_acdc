@@ -4,7 +4,8 @@ from common.detector.config import config_detector
 from tqdm import tqdm
 from utils.exper_hdl_ensemble import ExperHandlerEnsemble
 from common.dslices.config import config
-from common.detector.helper import find_bbox_object
+from common.detector.box_utils import find_multiple_connected_rois, BoundingBox, find_bbox_object
+from in_out.load_data import ACDC2017DataSet
 
 
 class RegionDetectorDataSet(object):
@@ -18,25 +19,31 @@ class RegionDetectorDataSet(object):
         # The key of the dictionaries is patient_id.
         self.train_images = []
         self.train_labels = []
-        self.train_img_rois = []
+        # list of numpy [N, 4] arrays that describe the target tissue area of the automatic predictions
+        # we use these to sample from when generating batches (in order to stay close to the target tissue area)
+        self.train_pred_lbl_rois = []
         self.train_lbl_rois = []
         self.train_extra_labels = []
         # contain numpy array with shape [#slices, 3, w, h]
         self.test_images = []
         # contain numpy array with shape [#slices]
         self.test_labels = []
-        self.test_img_rois = []
+        self.test_pred_lbl_rois = []
         self.test_lbl_rois = []
         # contain numpy array with shape [#slices, 4] 1) phase 2) slice id 3) mean-dice/slice 4) patient id
         self.test_extra_labels = []
         # actually "size" here is relate to number of patients
         self.size_train = 0
         self.size_test = 0
-        self.train_patient_ids = None
-        self.test_patient_ids = None
+        self.train_patient_ids = []
+        self.test_patient_ids = []
         # translation dictionary from patient id to list index numbers. Key=patient_id,
         # value=tuple(is_train, [<indices>])
         self.trans_dict = OrderedDict()
+        # ROI statistics, indices meaning: 0=total ROIs, 1=ROIS in base/apex slices, 2=ROIS in other slices
+        self.roi_stats = np.zeros(3)
+        # store ROI areas sizes. index: 0=apex/base, 1=other slices
+        self.roi_areas = [[], []]
 
     def get_patient_ids(self, is_train=True):
         if is_train:
@@ -53,7 +60,27 @@ class RegionDetectorDataSet(object):
     def load_from_file(self):
         raise NotImplementedError()
 
-    def augment_data(self, input_chnl1, input_chnl2, label_slices, is_train=False):
+    def collect_roi_data(self):
+        roi_areas = []
+        roi_aspect_ratio = []
+
+        def loop_over_rois(roi_area_list):
+            for b in np.arange(0, len(roi_area_list), 4):
+                roi_array = roi_area_list[b]
+                # roi_array is Nx4 np array
+                for i in np.arange(roi_array.shape[0]):
+                    bbox = BoundingBox.create(roi_array[i])
+                    roi_areas.append(bbox.area)
+                    roi_aspect_ratio.append(bbox.width / float(bbox.height))
+
+        loop_over_rois(self.train_lbl_rois)
+        loop_over_rois(self.test_lbl_rois)
+        roi_areas = np.array(roi_areas)
+        roi_aspect_ratio = np.array(roi_aspect_ratio)
+        return roi_areas, roi_aspect_ratio
+
+    def augment_data(self, input_chnl1, input_chnl2, input_chnl3, label_slices, is_train=False,
+                     do_rotate=False):
         """
         Augments image slices by rotating z-axis slices for 90, 180 and 270 degrees
 
@@ -65,34 +92,28 @@ class RegionDetectorDataSet(object):
 
         """
 
-        def rotate_slice(input_chnl1, input_chnl2, label_slice, is_train=False):
+        def rotate_slice(mri_img_slice, uncertainty_slice, pred_lbl_slice, label_slice, label_bbox,
+                         is_train=False):
             """
 
-            :param input_chnl1: [w, h]
-            :param input_chnl2  [w, h]
+            :param mri_img_slice: [w, h] original mri image
+            :param uncertainty_slice  [w, h] uncertainty map
+            :param pred_lbl_slice: [w, h] predicted seg mask
             :param label_slice: [w, h]
+            :param label_bbox: [N, 4] contains coordinates of ROI box around the target area [x.start, y.start,
+                                        x.stop, y.stop]
             :param is_train: boolean
             :return: None
             """
-            for rots in range(RegionDetectorDataSet.num_of_augs):
-                p_slice1 = np.pad(input_chnl1, RegionDetectorDataSet.pad_size, 'constant',
-                                  constant_values=(0,)).astype(RegionDetectorDataSet.pixel_dta_type)
-                p_slice2 = np.pad(input_chnl2, RegionDetectorDataSet.pad_size, 'constant',
-                                  constant_values=(0,)).astype(RegionDetectorDataSet.pixel_dta_type)
-                padded_input_slices = np.concatenate((p_slice1[np.newaxis], p_slice2[np.newaxis]))
-                # should result again in [2, w+pad_size, h+pad_size]
 
-                if is_train:
-                    self.train_images.append(padded_input_slices)
-                    self.train_labels.append(label_slice)
-                    list_array_indices.append(len(self.train_images) - 1)
-                else:
-                    self.test_images.append(padded_input_slices)
-                    self.test_labels.append(label_slice)
-                    list_array_indices.append(len(self.test_images) - 1)
+            for rots in range(RegionDetectorDataSet.num_of_augs):
+
+                self.add_image_to_set(is_train, mri_img_slice, uncertainty_slice, pred_lbl_slice, label_slice,
+                                      label_bbox, list_array_indices)
                 # rotate for next iteration
-                input_chnl1 = np.rot90(input_chnl1)
-                input_chnl2 = np.rot90(input_chnl2)
+                mri_img_slice = np.rot90(mri_img_slice)
+                uncertainty_slice = np.rot90(uncertainty_slice)
+                pred_lbl_slice = np.rot90(pred_lbl_slice)
                 label_slice = np.rot90(label_slice)
 
         num_of_slices = input_chnl1.shape[2]
@@ -101,9 +122,59 @@ class RegionDetectorDataSet(object):
         for z in range(num_of_slices):
             input_chnl1_slice = input_chnl1[:, :, z]
             input_chnl2_slice = input_chnl2[:, :, z]
+            input_chnl3_slice = input_chnl3[:, :, z]
             label_slice = label_slices[:, :, z]
-            rotate_slice(input_chnl1_slice, input_chnl2_slice, label_slice, is_train)
+            if 0 != np.count_nonzero(label_slice):
+                # label_bbox contains np array [N, 4], coordinates of ROI area around target
+                label_bbox, label_slice_extended, bbox_areas = find_multiple_connected_rois(label_slice, padding=1)
+                # increase total #ROIS
+                num_of_rois = label_bbox.shape[0]
+                self.roi_stats[0] += num_of_rois
+                if z == 0 or z == (num_of_slices - 1):
+                    self.roi_stats[1] += num_of_rois
+                    self.roi_areas[0].extend(bbox_areas)
+                else:
+                    self.roi_stats[2] += num_of_rois
+                    self.roi_areas[1].extend(bbox_areas)
+            else:
+                label_bbox = np.empty((0, 4))
+                label_slice_extended = label_slice
+            if do_rotate:
+                rotate_slice(input_chnl1_slice, input_chnl2_slice, input_chnl3_slice, label_slice_extended, label_bbox,
+                             is_train)
+            else:
+                self.add_image_to_set(is_train, input_chnl1_slice, input_chnl2_slice, input_chnl3_slice, label_slice,
+                                      label_bbox, list_array_indices)
 
+        return list_array_indices
+
+    def add_image_to_set(self, is_train, input_chnl1_slice, input_chnl2_slice, input_chnl3_slice, label_slice,
+                         label_bbox, list_array_indices):
+        p_slice1 = np.pad(input_chnl1_slice, RegionDetectorDataSet.pad_size, 'constant',
+                          constant_values=(0,)).astype(RegionDetectorDataSet.pixel_dta_type)
+        p_slice2 = np.pad(input_chnl2_slice, RegionDetectorDataSet.pad_size, 'constant',
+                          constant_values=(0,)).astype(RegionDetectorDataSet.pixel_dta_type)
+        p_slice3 = np.pad(input_chnl3_slice, RegionDetectorDataSet.pad_size, 'constant',
+                          constant_values=(0,)).astype(RegionDetectorDataSet.pixel_dta_type)
+        padded_input_slices = np.concatenate((p_slice1[np.newaxis], p_slice2[np.newaxis], p_slice3[np.newaxis]))
+        # should result again in [3, w+pad_size, h+pad_size]
+        # we get the bounding box for the predicted aka automatic segmentation mask. we use this for batch generation
+        pred_lbl_roi = find_bbox_object(p_slice3)
+
+        if is_train:
+            self.train_images.append(padded_input_slices)
+            self.train_labels.append(label_slice)
+            # IMPORTANT: the bbox is not rotated!
+            self.train_lbl_rois.append(label_bbox)
+            list_array_indices.append(len(self.train_images) - 1)
+            self.train_pred_lbl_rois.append(pred_lbl_roi.box_four)
+        else:
+            self.test_images.append(padded_input_slices)
+            self.test_labels.append(label_slice)
+            # IMPORTANT: the bbox is not rotated!
+            self.test_lbl_rois.append(label_bbox)
+            list_array_indices.append(len(self.test_images) - 1)
+            self.test_pred_lbl_rois.append(pred_lbl_roi.box_four)
         return list_array_indices
 
     @staticmethod
@@ -118,7 +189,7 @@ class RegionDetectorDataSet(object):
         target_roi_maps = np.sum(target_roi_maps, axis=0)
         # kind of logical_or over all classes. if one voxels equal to 1 or more, than set voxel to 1 which means
         # we need to correct/inspect that voxel
-        target_roi_maps[target_roi_maps > 1] = 1
+        target_roi_maps[target_roi_maps >= 1] = 1
         return target_roi_maps.astype(np.int)
 
     @staticmethod
@@ -161,8 +232,7 @@ class RegionDetectorDataSet(object):
                          RegionDetectorDataSet.pad_size:-RegionDetectorDataSet.pad_size, :]
 
 
-def create_dataset(exper_ensemble, train_fold_id, type_of_map="e_map", num_of_input_chnls=2,
-                   logger=None, verbose=False, quick_run=False):
+def create_dataset(exper_ensemble, train_fold_id, type_of_map="e_map", num_of_input_chnls=2, quick_run=False):
     """
 
     :param fold_id: This is the fold_id we use for the experiment handler
@@ -203,24 +273,29 @@ def create_dataset(exper_ensemble, train_fold_id, type_of_map="e_map", num_of_in
         # we store the list indices for this patient in RegionDetector.train_images or test_images
         # this can help us for plotting the dataset or batches (debugging)
         list_data_indices = []
-        stripped_patient_id = int(patient_id.replace("patient", ""))
         patient_fold_id = exper_ensemble.patient_fold[patient_id]
         #
         if not exper_hdl.is_in_test_set(patient_id):
             # training set
             is_train = True
+            dataset.train_patient_ids.append(patient_id)
             # print("Train --- patient id/image_num {}".format(patient_id))
         else:
             is_train = False
+            dataset.test_patient_ids.append(patient_id)
             # print("Test --- patient id/image_num {}".format(patient_id))
         # automatic reference: [#classes, w, h, #slices] - 0:4=ES and 4:8=ED
         pred_labels = exper_handlers[patient_fold_id].pred_labels[patient_id]
         # target_rois (our binary voxel labels)
         target_rois = exper_handlers[patient_fold_id].get_target_roi_maps(patient_id)
         nclasses, w, h, num_of_slices = pred_labels.shape
+        # get the original images, from test set. Return [2, w, h, #slices]
+        mri_image = exper_handlers[patient_fold_id].test_images[patient_id]
+        # remove padding
+        mri_image = ACDC2017DataSet.remove_padding(mri_image)
         pred_labels_multi = np.zeros((2, w, h, num_of_slices))
-        pred_labels_multi[0] = RegionDetectorDataSet.convert_to_multilabel(pred_labels[0:4], labels_float)
-        pred_labels_multi[1] = RegionDetectorDataSet.convert_to_multilabel(pred_labels[4:], labels_float)
+        pred_labels_multi[0] = RegionDetectorDataSet.convert_to_multilabel(pred_labels[0:(nclasses / 2)], labels_float)
+        pred_labels_multi[1] = RegionDetectorDataSet.convert_to_multilabel(pred_labels[(nclasses / 2):], labels_float)
         # uncertainty maps: [2, w, h, #slices] - 0=ES and 1=ED
         if type_of_map == "u_map":
             u_maps = exper_handlers[patient_fold_id].referral_umaps[patient_id]
@@ -231,15 +306,22 @@ def create_dataset(exper_ensemble, train_fold_id, type_of_map="e_map", num_of_in
         for phase in np.arange(num_of_phases):
             phase_offset = phase * (nclasses / 2)
             roi_slice = slice(phase_offset, phase_offset + (nclasses / 2))
+            # the target rois distinguish between the different tissue classes. We don't need this, we're only
+            # interested in the ROIs in general, hence, we convert the ROI to a binary mask
             label_slices = RegionDetectorDataSet.collapse_roi_maps(target_rois[roi_slice])
             # print(input_slices.shape, target_rois.shape, label_slices.shape)
             # returns list of indices
-            list_data_indices.extend(dataset.augment_data(u_maps[phase], pred_labels_multi[phase], label_slices,
-                                                          is_train=is_train))
+            list_data_indices.extend(dataset.augment_data(mri_image[phase], u_maps[phase], pred_labels_multi[phase],
+                                                          label_slices, do_rotate=True, is_train=is_train))
         dataset.trans_dict[patient_id] = tuple((is_train, list_data_indices))
 
     dataset.size_train = len(dataset.train_images)
     dataset.size_test = len(dataset.test_images)
+
+    # clean up all exper handlers that don't belong to training fold
+    for f_id in exper_ensemble.exper_dict.keys():
+        del exper_ensemble.seg_exper_handlers[f_id].test_images
+        del exper_ensemble.seg_exper_handlers[f_id]
 
     return dataset
 

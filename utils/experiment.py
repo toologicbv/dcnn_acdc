@@ -50,6 +50,7 @@ class ExperimentHandler(object):
         self.ref_map_blobs = None
         self.test_results = None
         self.test_set = None
+        self.test_images = None
         self.logger = None
         self.model_name = None
         self.num_val_runs = 0

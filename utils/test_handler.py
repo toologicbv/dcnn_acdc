@@ -146,10 +146,11 @@ class ACDC2017TestHandler(object):
 
     def __init__(self, exper_config, search_mask=None, nclass=4, load_func=load_mhd_to_numpy,
                  fold_ids=[1], debug=False, use_cuda=True, batch_size=None, load_train=False,
-                 load_val=True, use_iso_path=False, generate_flipped_images=False):
+                 load_val=True, use_iso_path=False, generate_flipped_images=False, verbose=False):
 
         # IMPORTANT: boolean flag indicating whether to load images from image_iso/reference_iso path or
         # from original directory (not resized). If True we don't resize the image during loading
+        self.verbose = verbose
         self.use_iso_path = use_iso_path
         # IMPORTANT flag indicating whether we're loading only the validation set from the specified fold(s)
         self.load_train = load_train
@@ -278,7 +279,7 @@ class ACDC2017TestHandler(object):
             if self.load_train:
                 # we're NOT only loading validation images
                 search_mask_img = os.path.join(self.train_path, self.search_mask)
-                print("INFO - Testhandler - >>> Search in train-dir for {} <<<".format(search_mask_img))
+                # print("INFO - Testhandler - >>> Search in train-dir for {} <<<".format(search_mask_img))
                 for train_file in glob.glob(search_mask_img):
                     ref_file = train_file.replace(ACDC2017TestHandler.image_path, ACDC2017TestHandler.label_path)
                     file_list.append(tuple((train_file, ref_file)))
@@ -286,12 +287,13 @@ class ACDC2017TestHandler(object):
             # get validation images and labels
             search_mask_img = os.path.join(self.val_path, self.search_mask)
             if self.load_val:
-                print("INFO - Testhandler - >>> Search in val-dir for {} <<<".format(search_mask_img))
+                # print("INFO - Testhandler - >>> Search in val-dir for {} <<<".format(search_mask_img))
                 for val_file in glob.glob(search_mask_img):
                     ref_file = val_file.replace(ACDC2017TestHandler.image_path, ACDC2017TestHandler.label_path)
                     file_list.append(tuple((val_file, ref_file)))
         num_of_files = len(file_list)
-        print("INFO - File list contains {} files, hence {} patients".format(num_of_files, num_of_files / 2))
+        if self.verbose:
+            print("INFO - File list contains {} files, hence {} patients".format(num_of_files, num_of_files / 2))
 
         return file_list
 
@@ -353,8 +355,8 @@ class ACDC2017TestHandler(object):
             self.labels.append(labels)
             self.num_labels_per_class.append(num_labels_per_class)
             self.num_of_images += 1
-
-        print("INFO - Successfully loaded {} ED/ES patient pairs".format(len(self.images)))
+        if self.verbose:
+            print("INFO - Successfully loaded {} ED/ES patient pairs".format(len(self.images)))
 
     def _preprocess(self, image, spacing, poly_order=3, do_zoom=True, do_pad=True):
 

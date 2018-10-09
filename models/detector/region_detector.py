@@ -8,14 +8,16 @@ from common.detector.config import OPTIMIZER_DICT
 
 class RegionDetector(nn.Module):
 
-    def __init__(self, model_cfg, lr=0.001, init_weights=True):
+    def __init__(self, model_cfg, lr=0.001, init_weights=True, device=None):
         super(RegionDetector, self).__init__()
+        # get model architecture parameters
         self.sgd_optimizer = model_cfg['optimizer']
         self.lr = None
-        self.set_learning_rate(lr=lr)
         self.nclasses = model_cfg['num_of_classes']
         self.num_input_channels = model_cfg['num_of_input_channels']
         self.use_batch_norm = model_cfg['use_batch_norm']
+        self.weight_decay = model_cfg['weight_decay']
+
         # The base VGG net. 3 convolutional layers (F=3x3; p=1) with BatchNorm + ReLU + MaxPooling (2x2).
         # So we have an output_stride (compression) factor of 8. e.g. 80x80 patch size results in 10x10 activation map
         self.base_model = make_layers(num_of_input_channels=self.num_input_channels, cfg=model_cfg['base'],
@@ -39,6 +41,9 @@ class RegionDetector(nn.Module):
         )
         if init_weights:
             self._initialize_weights()
+
+        # finally prepare optimizer
+        self.set_learning_rate(lr=lr)
 
     def forward(self, x):
         x = self.base_model(x)

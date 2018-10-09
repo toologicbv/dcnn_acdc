@@ -1,3 +1,5 @@
+from collections import OrderedDict
+
 from common.dslices.helper import create_experiment
 from utils.referral_results import ReferralResults
 
@@ -11,6 +13,9 @@ class ExperHandlerEnsemble(object):
     def __init__(self, exper_dict):
         self.seg_exper_handlers = {}
         self.exper_dict = exper_dict
+        # IMPORTANT: key=patient_id. Value fold_id refers to the TEST-fold_id the patient belongs to.
+        # This is confusing, because for training, the patient belongs to a different fold-id. But because we're
+        # loading the results of the segmentation task, we need to know, to which test-set the patient belongs
         self.patient_fold = {}
         # we will load the corresponding object from the ReferralResults because they also contain the
         # non-referral dice scores per slice per patient. We use a "dummy" referral_threshold of 0.001
@@ -27,6 +32,16 @@ class ExperHandlerEnsemble(object):
 
     def get_patient_fold_id(self, patient_id):
         return self.patient_fold[patient_id]
+
+    def get_images(self, fold_id):
+        self.seg_exper_handlers[fold_id].get_test_set()
+        self.seg_exper_handlers[fold_id].test_images = OrderedDict()
+        for p_id, img_index in self.seg_exper_handlers[fold_id].test_set.trans_dict.iteritems():
+            self.seg_exper_handlers[fold_id].test_images[p_id] = \
+                self.seg_exper_handlers[fold_id].test_set.images[img_index]
+
+        # clean up
+        del self.seg_exper_handlers[fold_id].test_set
 
     def prepare_handlers(self, fold_id=None, patient_ids=None, type_of_map="e_map", force_reload=False,
                          for_detector_dtaset=False):
@@ -62,8 +77,11 @@ class ExperHandlerEnsemble(object):
                 patient_ids = [patient_ids]
 
         patient_ids.sort()
+        test_set_fold_ids = []
         for p_id in patient_ids:
             fold_id = self.patient_fold[p_id]
+            if fold_id not in test_set_fold_ids:
+                test_set_fold_ids.append(fold_id)
             exper_hdl = self.seg_exper_handlers[fold_id]
             if type_of_map == "e_map":
                 mc_dropout = False
@@ -81,6 +99,11 @@ class ExperHandlerEnsemble(object):
                 exper_hdl.get_target_roi_maps(patient_id=p_id, force_reload=force_reload, mc_dropout=mc_dropout)
                 _ = exper_hdl.get_pred_prob_maps(patient_id=p_id, mc_dropout=mc_dropout)
             exper_hdl.get_pred_labels(patient_id=p_id, mc_dropout=mc_dropout, force_reload=force_reload)
+
+        # get images
+        if for_detector_dtaset:
+            for f_id in test_set_fold_ids:
+                self.get_images(f_id)
 
     def load_dice_without_referral(self, type_of_map="u_map", referral_threshold=0.001):
         """
