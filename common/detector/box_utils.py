@@ -2,6 +2,7 @@ from scipy import ndimage
 from scipy.ndimage.measurements import label
 import numpy as np
 import matplotlib.patches as patches
+from common.detector.config import config_detector
 
 
 # def check_box_overlap(box1, box2):
@@ -18,13 +19,14 @@ import matplotlib.patches as patches
 #         return False
 
 
-def find_multiple_connected_rois(label_slice, padding=1, min_size=2):
+def find_multiple_connected_rois(label_slice, padding=1, min_size=config_detector.min_roi_area):
     """
 
     :param label_slice: has shape [w, h] and label values are binary (i.e. no distinction between tissue classes)
 
     :param padding: in fact extending the roi area that we detected. Because the target structure is of connectivity
                     six (3x3), we at least extend by 1 pixel to both sides
+    :param min_size: the minimum area size of the 2D 4-connected component
     :return:
     """
     structure = [[0, 1, 0],
@@ -45,7 +47,7 @@ def find_multiple_connected_rois(label_slice, padding=1, min_size=2):
             roi_box_areas.append(roi_box.area)
             roi_boxes = np.concatenate((roi_boxes, roi_box.box_four[np.newaxis])) if roi_boxes.size else \
                 roi_box.box_four[np.newaxis]
-            if comp_mask_size <= 10:
+            if comp_mask_size <= config_detector.max_roi_area_for_fill:
                 roi_binary_mask[roi_box.slice_x, roi_box.slice_y] = 1
             else:
                 roi_binary_mask[cc_labels == i_comp] = 1
@@ -107,6 +109,17 @@ class BoundingBox(object):
         :param padding:
         :return: BoundingBox object
         """
-        slice_x = slice(box_four[0], box_four[2], None)
+        slice_x, slice_y = BoundingBox.convert_to_slices(box_four)
         slice_y = slice(box_four[1], box_four[3], None)
         return BoundingBox(slice_x, slice_y, padding=padding)
+
+    @staticmethod
+    def convert_to_slices(box_four):
+        slice_x = slice(box_four[0], box_four[2], None)
+        slice_y = slice(box_four[1], box_four[3], None)
+        return slice_x, slice_y
+
+    @staticmethod
+    def convert_slices_to_box_four(slice_x, slice_y):
+        return np.array([slice_x.start, slice_y.start, slice_x.stop, slice_y.stop])
+

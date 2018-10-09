@@ -218,18 +218,21 @@ class RegionDetectorDataSet(object):
         :param image:
         :return:
         """
-        if image.ndim == 2:
-            # assuming [w, h]
-            return image[RegionDetectorDataSet.pad_size:-RegionDetectorDataSet.pad_size,
-                         RegionDetectorDataSet.pad_size:-RegionDetectorDataSet.pad_size]
-        elif image.ndim == 3:
-            # assuming [#channels, w, h]
-            return image[:, RegionDetectorDataSet.pad_size:-RegionDetectorDataSet.pad_size,
-                         RegionDetectorDataSet.pad_size:-RegionDetectorDataSet.pad_size]
-        elif image.ndim == 4:
-            # assuming [#channels, w, h, #slices]
-            return image[:, RegionDetectorDataSet.pad_size:-RegionDetectorDataSet.pad_size,
-                         RegionDetectorDataSet.pad_size:-RegionDetectorDataSet.pad_size, :]
+        if RegionDetectorDataSet.pad_size > 0:
+            if image.ndim == 2:
+                # assuming [w, h]
+                return image[RegionDetectorDataSet.pad_size:-RegionDetectorDataSet.pad_size,
+                             RegionDetectorDataSet.pad_size:-RegionDetectorDataSet.pad_size]
+            elif image.ndim == 3:
+                # assuming [#channels, w, h]
+                return image[:, RegionDetectorDataSet.pad_size:-RegionDetectorDataSet.pad_size,
+                             RegionDetectorDataSet.pad_size:-RegionDetectorDataSet.pad_size]
+            elif image.ndim == 4:
+                # assuming [#channels, w, h, #slices]
+                return image[:, RegionDetectorDataSet.pad_size:-RegionDetectorDataSet.pad_size,
+                             RegionDetectorDataSet.pad_size:-RegionDetectorDataSet.pad_size, :]
+        else:
+            return image
 
 
 def create_dataset(exper_ensemble, train_fold_id, type_of_map="e_map", num_of_input_chnls=2, quick_run=False):
@@ -257,7 +260,7 @@ def create_dataset(exper_ensemble, train_fold_id, type_of_map="e_map", num_of_in
     # reduce training set in case we are debugging the model
     ensemble_patients = None
     if quick_run:
-        patient_ids = patient_ids[:4]
+        patient_ids = patient_ids[:config_detector.quick_run_size]
         ensemble_patients = patient_ids
     print("INFO - Preparing experimental handlers. This may take a while. Be patient...")
     print("INFO - Ready. Loop through patient ids.")

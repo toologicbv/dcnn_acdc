@@ -1,5 +1,6 @@
 import torch.nn as nn
 import torch
+import numpy as np
 
 OPTIMIZER_DICT = {'sgd': torch.optim.SGD,  # Gradient Descent
                   'adadelta': torch.optim.Adadelta,  # Adadelta
@@ -23,7 +24,18 @@ class BaseConfig(object):
                                       5: [12.35, 8.15], 6: [6.95, 5.25], 7: [5.9, 4.65]}  # ED
         self.acdc_background_classes = [0, 4]
         # TODO We don't know size of padding yet. Depends on model architecture!
-        self.acdc_pad_size = 1
+        self.acdc_pad_size = 0
+        self.quick_run_size = 10
+
+        # Settings for determining the target areas/pixels to be inspected. used in procedure
+        # find_multiple_connected_rois (file box_utils.py)
+        self.min_roi_area = 2  # minimum number of 2D 4-connected component. Otherwise target pixels are discarded
+        # if the number of 2D 4-connected components in a structure is smaller than this amount than we fill the
+        # total ROI area (make it rectangular). We do this in order to prevent target structures to be too small
+        self.max_roi_area_for_fill = 10
+
+        # patch size during training
+        self.patch_size = np.array([72, 72])
 
         self.optimizer = "adam"
         self.detector_cfg = {
