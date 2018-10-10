@@ -78,6 +78,6 @@ if __name__ == '__main__':
     detector_model = RegionDetector(config_detector.detector_cfg, init_weights=True)
     device = torch.device("cuda")
     detector_model = detector_model.to(device)
-    dummy_x = (torch.randn(1, 2, 80, 80)).cuda()
+    dummy_x = (torch.randn(1, 2, 72, 72)).cuda()
     out = detector_model(dummy_x)
     print("Output has shape ", out.shape)

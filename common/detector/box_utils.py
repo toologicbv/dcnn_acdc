@@ -123,3 +123,26 @@ class BoundingBox(object):
     def convert_slices_to_box_four(slice_x, slice_y):
         return np.array([slice_x.start, slice_y.start, slice_x.stop, slice_y.stop])
 
+
+def find_box_four_rois(label_slice):
+    """
+
+    :param label_slice: has shape [w, h] and label values are binary (i.e. no distinction between tissue classes)
+
+
+    :return:
+    """
+    structure = [[0, 1, 0],
+                     [1, 1, 1],
+                     [0, 1, 0]]
+    cc_labels, n_comps = label(label_slice, structure=structure)
+    roi_boxes = np.empty((0, 4))
+
+    for i_comp in np.arange(1, n_comps + 1):
+        comp_mask = cc_labels == i_comp
+        roi_slice_x, roi_slice_y = ndimage.find_objects(comp_mask)[0]
+        roi_box = BoundingBox(roi_slice_x, roi_slice_y, padding=0)
+        roi_boxes = np.concatenate((roi_boxes, roi_box.box_four[np.newaxis])) if roi_boxes.size else \
+            roi_box.box_four[np.newaxis]
+
+    return roi_boxes

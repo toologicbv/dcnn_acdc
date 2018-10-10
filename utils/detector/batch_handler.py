@@ -71,10 +71,12 @@ class BatchHandler(object):
         :return: input batch and corresponding references
         """
         self.backward_freq = backward_freq
-        self.batch_bounding_boxes = None
+        self.batch_bounding_boxes = np.zeros((batch_size, 4))
         self.batch_label_slices = []
         self.batch_size = batch_size
         if self.is_train:
+            # (1) batch_images will have the shape [#batches, num_of_input_chnls, w, h]
+            # (2) batch_labels will have shape
             # during training we sample slices to extract our patches of size config_detector.patch_size
             self.batch_images, self.batch_labels = self._generate_train_batch(batch_size, do_balance=do_balance)
         else:
@@ -96,6 +98,7 @@ class BatchHandler(object):
         # start with collecting image slice indices
         while do_continue:
             slice_num = np.random.randint(0, self.sample_range, size=1, dtype=np.int)[0]
+            # train_lbl_rois has shape [N,4] and contains box_four notation for target areas
             num_of_target_rois = self.data_set.train_lbl_rois[slice_num].shape[0]
             pred_lbls_exist = (np.sum(self.data_set.train_pred_lbl_rois[slice_num]) != 0).astype(np.bool)
             i += 1
@@ -133,23 +136,27 @@ class BatchHandler(object):
                 roi_idx = np.random.randint(0, num_of_target_rois, size=1, dtype=np.int)[0]
                 # make a tuple with (1) slice-number (2) slice-coordinates describing roi area (4 numbers)
                 positive_idx.append(tuple((slice_num, self.data_set.train_lbl_rois[slice_num][roi_idx])))
-            self.current_slice_ids.append(slice_num)
+
             if len(positive_idx) + len(negative_idx) == batch_size:
                 do_continue = False
 
         b = 0
         for slice_area_spec in positive_idx:
             # print("INFO - Positives slice num {}".format(slice_area_spec))
-            np_batch_imgs[b], np_batch_lbls[b] = self._create_train_batch_item(slice_area_spec)
+            np_batch_imgs[b], np_batch_lbls[b] = self._create_train_batch_item(slice_area_spec, is_positive=True,
+                                                                               batch_item_nr=b)
             b += 1
+            self.current_slice_ids.append(slice_area_spec[0])
         for slice_area_spec in negative_idx:
             # print("INFO - Negatives slice num {}".format(slice_area_spec))
-            np_batch_imgs[b], np_batch_lbls[b] = self._create_train_batch_item(slice_area_spec)
+            np_batch_imgs[b], np_batch_lbls[b] = self._create_train_batch_item(slice_area_spec, is_positive=False,
+                                                                               batch_item_nr=b)
             b += 1
+            self.current_slice_ids.append(slice_area_spec[0])
 
         return np_batch_imgs, np_batch_lbls
 
-    def _create_train_batch_item(self, slice_area_spec):
+    def _create_train_batch_item(self, slice_area_spec, is_positive, batch_item_nr):
         # slice_area_spec is a tuple (1) slice number (2) target area described by box-four specification
         # i.e. [x.start, y.start, x.stop, y.stop]
         # first we sample a pixel from the area of interest
@@ -173,15 +180,21 @@ class BatchHandler(object):
                (y + half_height <= h and y - half_height >= 0):
                 slice_x = slice(x - half_width, x + half_width, None)
                 slice_y = slice(y - half_height, y + half_height, None)
+                if is_positive and self.verbose:
+                    print("Slice {} (w/h {}/{}), x,y ({}, {})".format(slice_num, w, h, x, y))
+                    print("area_spec ", area_spec)
+                    print("slice_x ", slice_x)
+                    print("slice_y ", slice_y)
                 # input_channels has size [num_channels, w, h]
                 input_channels_patch = input_channels[:, slice_x, slice_y]
                 lbl_slice = label[slice_x, slice_y]
                 target_label = 1 if np.count_nonzero(lbl_slice) != 0 else 0
+                if is_positive and target_label == 0 and self.verbose:
+                    print("WARNING - No labels slice {}".format(slice_num))
                 do_continue = False
             else:
                 if max_iters > 50:
-                    print("WARNING - Problem need to break out of loop in "
-                                  "BatchHandler._create_train_batch_item")
+                    print("WARNING - Problem need to break out of loop in BatchHandler._create_train_batch_item")
                     half_width = w / 2
                     half_height = h / 2
                     slice_x = slice(half_width - config_detector.patch_size[0],
@@ -198,10 +211,27 @@ class BatchHandler(object):
                 roi_box_of_four = BoundingBox.convert_slices_to_box_four(slice_x, slice_y)
 
         if self.keep_bounding_boxes:
-            self.batch_bounding_boxes = roi_box_of_four
+            self.batch_bounding_boxes[batch_item_nr] = roi_box_of_four
             self.batch_label_slices.append(lbl_slice)
 
         return input_channels_patch, target_label
+
+    @staticmethod
+    def _generate_train_labels(lbl_slice, is_positive, output_stride=config_detector.output_stride):
+        # we already calculated the label for the entire patch (assumed to be square).
+        # Here, we compute the labels for the grid that is produced after maxPool 2.
+        # E.g.: patch_size 72x72, has a grids of 2x2 (after maxPool 1) and 4x4 after maxPool 2
+        w, h = lbl_slice.shape
+        all_labels = {}
+        for i in np.arange(2, config_detector.num_of_max_pool):
+            grid_size = int(2**i)
+            grid_spacing = np.arange(0, w, grid_size)[1:]
+            v_blocks = np.vsplit(lbl_slice, grid_spacing)
+            all_labels[grid_size] = []
+            for block in v_blocks:
+                h_blocks = np.hsplit(block, grid_spacing)
+                all_labels[grid_size].extend(h_blocks)
+        return all_labels[grid_size]
 
     def visualize_batch(self):
         mycmap = transparent_cmap(plt.get_cmap('jet'))

@@ -36,7 +36,6 @@ class BaseConfig(object):
 
         # patch size during training
         self.patch_size = np.array([72, 72])
-
         self.optimizer = "adam"
         self.detector_cfg = {
             'base': [16, 'M', 32, 'M', 32, 'M', 64],
@@ -47,6 +46,9 @@ class BaseConfig(object):
             'optimizer': "adam",
             'weight_decay': 0.001
         }
+        self.num_of_max_pool = len([i for i, s in enumerate(self.detector_cfg["base"]) if s == 'M'])
+        # assuming patch size is quadratic
+        self.output_stride = int(self.patch_size[0] / 2**self.num_of_max_pool)
 
 
 config_detector = BaseConfig()

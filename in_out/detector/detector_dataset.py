@@ -4,7 +4,7 @@ from common.detector.config import config_detector
 from tqdm import tqdm
 from utils.exper_hdl_ensemble import ExperHandlerEnsemble
 from common.dslices.config import config
-from common.detector.box_utils import find_multiple_connected_rois, BoundingBox, find_bbox_object
+from common.detector.box_utils import find_multiple_connected_rois, BoundingBox, find_bbox_object, find_box_four_rois
 from in_out.load_data import ACDC2017DataSet
 
 
@@ -92,7 +92,7 @@ class RegionDetectorDataSet(object):
 
         """
 
-        def rotate_slice(mri_img_slice, uncertainty_slice, pred_lbl_slice, label_slice, label_bbox,
+        def rotate_slice(mri_img_slice, uncertainty_slice, pred_lbl_slice, label_slice,
                          is_train=False):
             """
 
@@ -100,8 +100,7 @@ class RegionDetectorDataSet(object):
             :param uncertainty_slice  [w, h] uncertainty map
             :param pred_lbl_slice: [w, h] predicted seg mask
             :param label_slice: [w, h]
-            :param label_bbox: [N, 4] contains coordinates of ROI box around the target area [x.start, y.start,
-                                        x.stop, y.stop]
+
             :param is_train: boolean
             :return: None
             """
@@ -109,7 +108,7 @@ class RegionDetectorDataSet(object):
             for rots in range(RegionDetectorDataSet.num_of_augs):
 
                 self.add_image_to_set(is_train, mri_img_slice, uncertainty_slice, pred_lbl_slice, label_slice,
-                                      label_bbox, list_array_indices)
+                                      list_array_indices)
                 # rotate for next iteration
                 mri_img_slice = np.rot90(mri_img_slice)
                 uncertainty_slice = np.rot90(uncertainty_slice)
@@ -137,19 +136,18 @@ class RegionDetectorDataSet(object):
                     self.roi_stats[2] += num_of_rois
                     self.roi_areas[1].extend(bbox_areas)
             else:
-                label_bbox = np.empty((0, 4))
                 label_slice_extended = label_slice
             if do_rotate:
-                rotate_slice(input_chnl1_slice, input_chnl2_slice, input_chnl3_slice, label_slice_extended, label_bbox,
+                rotate_slice(input_chnl1_slice, input_chnl2_slice, input_chnl3_slice, label_slice_extended,
                              is_train)
             else:
                 self.add_image_to_set(is_train, input_chnl1_slice, input_chnl2_slice, input_chnl3_slice, label_slice,
-                                      label_bbox, list_array_indices)
+                                      list_array_indices)
 
         return list_array_indices
 
     def add_image_to_set(self, is_train, input_chnl1_slice, input_chnl2_slice, input_chnl3_slice, label_slice,
-                         label_bbox, list_array_indices):
+                         list_array_indices):
         p_slice1 = np.pad(input_chnl1_slice, RegionDetectorDataSet.pad_size, 'constant',
                           constant_values=(0,)).astype(RegionDetectorDataSet.pixel_dta_type)
         p_slice2 = np.pad(input_chnl2_slice, RegionDetectorDataSet.pad_size, 'constant',
@@ -160,19 +158,22 @@ class RegionDetectorDataSet(object):
         # should result again in [3, w+pad_size, h+pad_size]
         # we get the bounding box for the predicted aka automatic segmentation mask. we use this for batch generation
         pred_lbl_roi = find_bbox_object(p_slice3)
-
+        # we get the bounding boxes for the different target rois in box_four format (x.start, y.start, ...)
+        # we use these when generating the batches, because we want to make sure that for the positive batch items
+        # at least ONE target rois is in the FOV i.e. included in the patch that we sample from a slice
+        bbox_for_rois = find_box_four_rois(label_slice)
         if is_train:
             self.train_images.append(padded_input_slices)
             self.train_labels.append(label_slice)
             # IMPORTANT: the bbox is not rotated!
-            self.train_lbl_rois.append(label_bbox)
+            self.train_lbl_rois.append(bbox_for_rois)
             list_array_indices.append(len(self.train_images) - 1)
             self.train_pred_lbl_rois.append(pred_lbl_roi.box_four)
         else:
             self.test_images.append(padded_input_slices)
             self.test_labels.append(label_slice)
             # IMPORTANT: the bbox is not rotated!
-            self.test_lbl_rois.append(label_bbox)
+            self.test_lbl_rois.append(bbox_for_rois)
             list_array_indices.append(len(self.test_images) - 1)
             self.test_pred_lbl_rois.append(pred_lbl_roi.box_four)
         return list_array_indices
