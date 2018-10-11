@@ -47,10 +47,10 @@ def find_multiple_connected_rois(label_slice, padding=1, min_size=config_detecto
             roi_box_areas.append(roi_box.area)
             roi_boxes = np.concatenate((roi_boxes, roi_box.box_four[np.newaxis])) if roi_boxes.size else \
                 roi_box.box_four[np.newaxis]
-            if comp_mask_size <= config_detector.max_roi_area_for_fill:
-                roi_binary_mask[roi_box.slice_x, roi_box.slice_y] = 1
-            else:
-                roi_binary_mask[cc_labels == i_comp] = 1
+            # if comp_mask_size <= config_detector.max_roi_area_for_fill:
+            #    roi_binary_mask[roi_box.slice_x, roi_box.slice_y] = 1
+            # else:
+            roi_binary_mask[cc_labels == i_comp] = 1
     del cc_labels
     del comp_mask
 

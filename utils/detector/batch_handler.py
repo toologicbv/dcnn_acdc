@@ -31,6 +31,7 @@ class BatchHandler(object):
         self.batch_size = 0
         self.batch_images = None
         self.batch_labels = None
+        self.target_labels = {}
 
         if self.cuda:
             self.loss = self.loss.cuda()
@@ -73,6 +74,7 @@ class BatchHandler(object):
         self.backward_freq = backward_freq
         self.batch_bounding_boxes = np.zeros((batch_size, 4))
         self.batch_label_slices = []
+        self.target_labels = {}
         self.batch_size = batch_size
         if self.is_train:
             # (1) batch_images will have the shape [#batches, num_of_input_chnls, w, h]
@@ -91,7 +93,11 @@ class BatchHandler(object):
         positive_idx = []
         np_batch_imgs = np.zeros((batch_size, self.num_of_channels, config_detector.patch_size[0],
                                   config_detector.patch_size[1]))
-        np_batch_lbls = np.zeros(batch_size)
+        # this array only contains the binary indications for each batch item (does contain voxels or not)
+        np_batch_grid_lbls = {}
+        # this array holds the patch for each label_slice (binary)
+        np_batch_lbls = np.zeros((batch_size, config_detector.patch_size[0],
+                                       config_detector.patch_size[1]))
         max_search_iters = 125
         do_continue = True
         i = 0
@@ -143,14 +149,20 @@ class BatchHandler(object):
         b = 0
         for slice_area_spec in positive_idx:
             # print("INFO - Positives slice num {}".format(slice_area_spec))
-            np_batch_imgs[b], np_batch_lbls[b] = self._create_train_batch_item(slice_area_spec, is_positive=True,
+            np_batch_imgs[b], np_batch_lbls[b], overall_lbls = self._create_train_batch_item(slice_area_spec, is_positive=True,
                                                                                batch_item_nr=b)
+            grid_target_labels = self._generate_train_labels(np_batch_lbls[b], is_positive=True)
+            grid_target_labels[1] = overall_lbls
+            self.target_labels[b] = grid_target_labels
             b += 1
             self.current_slice_ids.append(slice_area_spec[0])
         for slice_area_spec in negative_idx:
             # print("INFO - Negatives slice num {}".format(slice_area_spec))
-            np_batch_imgs[b], np_batch_lbls[b] = self._create_train_batch_item(slice_area_spec, is_positive=False,
+            np_batch_imgs[b], np_batch_lbls[b], overall_lbls = self._create_train_batch_item(slice_area_spec, is_positive=False,
                                                                                batch_item_nr=b)
+            grid_target_labels = self._generate_train_labels(np_batch_lbls[b], is_positive=False)
+            grid_target_labels[1] = overall_lbls
+            self.target_labels[b] = grid_target_labels
             b += 1
             self.current_slice_ids.append(slice_area_spec[0])
 
@@ -204,7 +216,7 @@ class BatchHandler(object):
                     input_channels_patch = input_channels[:, slice_x, slice_y]
                     target_label = 1 if np.count_nonzero(lbl_slice) != 0 else 0
                     do_continue = False
-                    lbl_slice = None
+                    lbl_slice = label[slice_x, slice_y]
                 else:
                     continue
             if self.keep_bounding_boxes:
@@ -214,26 +226,42 @@ class BatchHandler(object):
             self.batch_bounding_boxes[batch_item_nr] = roi_box_of_four
             self.batch_label_slices.append(lbl_slice)
 
-        return input_channels_patch, target_label
+        return input_channels_patch, lbl_slice, target_label
 
     @staticmethod
-    def _generate_train_labels(lbl_slice, is_positive, output_stride=config_detector.output_stride):
+    def _generate_train_labels(lbl_slice, is_positive):
         # we already calculated the label for the entire patch (assumed to be square).
         # Here, we compute the labels for the grid that is produced after maxPool 2.
         # E.g.: patch_size 72x72, has a grids of 2x2 (after maxPool 1) and 4x4 after maxPool 2
+        all_target_labels = {}
         w, h = lbl_slice.shape
-        all_labels = {}
-        for i in np.arange(2, config_detector.num_of_max_pool):
-            grid_size = int(2**i)
-            grid_spacing = np.arange(0, w, grid_size)[1:]
-            v_blocks = np.vsplit(lbl_slice, grid_spacing)
-            all_labels[grid_size] = []
-            for block in v_blocks:
-                h_blocks = np.hsplit(block, grid_spacing)
-                all_labels[grid_size].extend(h_blocks)
-        return all_labels[grid_size]
+        if is_positive:
+            all_labels = {}
+            for i in np.arange(2, config_detector.num_of_max_pool + 1):
+                grid_size = int(2**i)
+                # omit the [0, ...] at the front of the array, we don't want to split there
+                grid_spacing = np.arange(0, w, grid_size)[1:]
+                v_blocks = np.vsplit(lbl_slice, grid_spacing)
+                all_labels[grid_size] = []
+                for block in v_blocks:
+                    h_blocks = np.hsplit(block, grid_spacing)
+                    all_labels[grid_size].extend(h_blocks)
 
-    def visualize_batch(self):
+            for grid_size, label_patches in all_labels.iteritems():
+                grid_target_labels = np.zeros(len(label_patches))
+                for i, label_patch in enumerate(label_patches):
+                    label_patch = np.array(label_patch)
+                    grid_target_labels[i] = 1 if 0 != np.count_nonzero(label_patch) else 0
+                all_target_labels[grid_size] = grid_target_labels
+        else:
+            for i in np.arange(2, config_detector.num_of_max_pool + 1):
+                grid_size = int(2 ** i)
+                g = int(w / grid_size)
+                all_target_labels[grid_size] = np.zeros((g, g))
+
+        return all_target_labels
+
+    def visualize_batch(self, grid_spacing=8):
         mycmap = transparent_cmap(plt.get_cmap('jet'))
 
         width = 16
@@ -246,9 +274,10 @@ class BatchHandler(object):
         for idx in np.arange(self.batch_size):
             slice_num = self.current_slice_ids[idx]
             image_slice = self.batch_images[idx][0]
+            w, h = image_slice.shape
             uncertainty_slice = self.batch_images[idx][1]
             # pred_labels_slice = self.batch_images[idx][2]
-            target_lbl_binary = self.batch_labels[idx]
+            target_lbl_binary = self.target_labels[idx][1]
             target_slice = self.batch_label_slices[idx]
             ax1 = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
             ax1.set_title("Slice {} ({})".format(slice_num, idx + 1))
@@ -260,7 +289,15 @@ class BatchHandler(object):
             ax2.imshow(image_slice, cmap=cm.gray)
             ax2.set_title("Target label {}".format(int(target_lbl_binary)))
             ax2.imshow(target_slice, cmap=mycmap)
-            plt.axis("off")
+
+            ax2.set_xticks(np.arange(-.5, h, grid_spacing))
+            ax2.set_yticks(np.arange(-.5, w, grid_spacing))
+            # ax2.set_xticklabels(np.arange(1, h + 1, grid_spacing))
+            ax2.set_xticklabels([])
+            # ax2.set_yticklabels(np.arange(1, w + 1, grid_spacing))
+            ax2.set_yticklabels([])
+            plt.grid(True)
+            # plt.axis("off")
             row += 2
         plt.show()
 
