@@ -5,6 +5,7 @@ from tqdm import tqdm
 from utils.exper_hdl_ensemble import ExperHandlerEnsemble
 from common.dslices.config import config
 from common.detector.box_utils import find_multiple_connected_rois, BoundingBox, find_bbox_object, find_box_four_rois
+from common.detector.box_utils import adjust_roi_bounding_box
 from in_out.load_data import ACDC2017DataSet
 
 
@@ -30,6 +31,8 @@ class RegionDetectorDataSet(object):
         self.test_labels = []
         self.test_pred_lbl_rois = []
         self.test_lbl_rois = []
+        # stores the padding we applied to the test images. tuple of tuples e.g. ((2, 1), (5, 3))
+        self.test_paddings = []
         # contain numpy array with shape [#slices, 4] 1) phase 2) slice id 3) mean-dice/slice 4) patient id
         self.test_extra_labels = []
         # actually "size" here is relate to number of patients
@@ -84,10 +87,13 @@ class RegionDetectorDataSet(object):
         """
         Augments image slices by rotating z-axis slices for 90, 180 and 270 degrees
 
-        :param input_chnl1: [w, h, #slices] uncertainty maps
+        :param input_chnl1: [w, h, #slices] original mri
         :param input_chnl2: [w, h, #slices] automatic reference
+        :param input_chnl3: [w, h, #slices] uncertainty maps
         :param label_slices: [w, h, #slices] binary values indicating whether voxel should be corrected
         :param is_train: boolean
+        :param do_rotate: boolean, if True (currently only for training images) then each slice is rotated
+                          three times (90, ..., 270)
         :return None (fills train/test arrays of object)
 
         """
@@ -148,16 +154,33 @@ class RegionDetectorDataSet(object):
 
     def add_image_to_set(self, is_train, input_chnl1_slice, input_chnl2_slice, input_chnl3_slice, label_slice,
                          list_array_indices):
-        p_slice1 = np.pad(input_chnl1_slice, RegionDetectorDataSet.pad_size, 'constant',
-                          constant_values=(0,)).astype(RegionDetectorDataSet.pixel_dta_type)
-        p_slice2 = np.pad(input_chnl2_slice, RegionDetectorDataSet.pad_size, 'constant',
-                          constant_values=(0,)).astype(RegionDetectorDataSet.pixel_dta_type)
-        p_slice3 = np.pad(input_chnl3_slice, RegionDetectorDataSet.pad_size, 'constant',
-                          constant_values=(0,)).astype(RegionDetectorDataSet.pixel_dta_type)
-        padded_input_slices = np.concatenate((p_slice1[np.newaxis], p_slice2[np.newaxis], p_slice3[np.newaxis]))
-        # should result again in [3, w+pad_size, h+pad_size]
-        # we get the bounding box for the predicted aka automatic segmentation mask. we use this for batch generation
-        pred_lbl_roi = find_bbox_object(p_slice3)
+        if is_train:
+            p_slice1 = np.pad(input_chnl1_slice, RegionDetectorDataSet.pad_size, 'constant',
+                              constant_values=(0,)).astype(RegionDetectorDataSet.pixel_dta_type)
+            p_slice2 = np.pad(input_chnl2_slice, RegionDetectorDataSet.pad_size, 'constant',
+                              constant_values=(0,)).astype(RegionDetectorDataSet.pixel_dta_type)
+            p_slice3 = np.pad(input_chnl3_slice, RegionDetectorDataSet.pad_size, 'constant',
+                              constant_values=(0,)).astype(RegionDetectorDataSet.pixel_dta_type)
+            # we get the bounding box for the predicted aka automatic segmentation mask. we use this for batch
+            # generation
+            pred_lbl_roi = find_bbox_object(p_slice3, padding=0)
+            # should result again in [3, w+pad_size, h+pad_size]
+            padded_input_slices = np.concatenate((p_slice1[np.newaxis], p_slice2[np.newaxis], p_slice3[np.newaxis]))
+        else:
+            # find_bbox_object returns BoundingBox object. We're looking for bounding boxes of the automatic
+            # segmentation mask. If not None (automatic seg mask) then check the size of the bbox. During
+            # validation & testing we're only processing mri slices with an automatic segmentation mask.
+            # Because we've prior knowlegde about the dataset, we know that the mask will be always smaller than
+            # the original image, hence, we NEVER have to pad the image in order to make sure that the size (w, h)
+            # is dividable by max_grid_spacing (currently 8).
+            pred_lbl_roi = find_bbox_object(input_chnl3_slice, padding=0)
+            pred_lbl_roi_old = find_bbox_object(input_chnl3_slice, padding=0)
+            if not pred_lbl_roi.empty:
+                pred_lbl_roi = adjust_roi_bounding_box(pred_lbl_roi, slice_idx=len(self.test_images))
+
+            padded_input_slices = np.concatenate((input_chnl1_slice[np.newaxis], input_chnl2_slice[np.newaxis],
+                                                  input_chnl3_slice[np.newaxis]))
+
         # we get the bounding boxes for the different target rois in box_four format (x.start, y.start, ...)
         # we use these when generating the batches, because we want to make sure that for the positive batch items
         # at least ONE target rois is in the FOV i.e. included in the patch that we sample from a slice
@@ -314,9 +337,10 @@ def create_dataset(exper_ensemble, train_fold_id, type_of_map="e_map", num_of_in
             # interested in the ROIs in general, hence, we convert the ROI to a binary mask
             label_slices = RegionDetectorDataSet.collapse_roi_maps(target_rois[roi_slice])
             # print(input_slices.shape, target_rois.shape, label_slices.shape)
-            # returns list of indices
+            # returns list of indices.
+            # NOTE: we're currently NOT rotating the TEST images
             list_data_indices.extend(dataset.augment_data(mri_image[phase], u_maps[phase], pred_labels_multi[phase],
-                                                          label_slices, do_rotate=True, is_train=is_train))
+                                                          label_slices, do_rotate=is_train, is_train=is_train))
         dataset.trans_dict[patient_id] = tuple((is_train, list_data_indices))
 
     dataset.size_train = len(dataset.train_images)

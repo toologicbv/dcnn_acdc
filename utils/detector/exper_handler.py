@@ -1,3 +1,21 @@
+import sys
+import dill
+import os
+import time
+import shutil
+import torch
+from collections import OrderedDict
+import numpy as np
+from common.common import create_logger
+from sklearn.metrics import precision_recall_curve, roc_curve, auc
+
+from models.model_handler import load_region_detector_model
+from common.detector.config import config_detector
+
+from utils.detector.batch_handler import BatchHandler
+from utils.dslices.accuracies import compute_eval_metrics
+
+
 class ExperimentHandler(object):
 
     exp_filename = "exper_stats"
@@ -84,7 +102,7 @@ class ExperimentHandler(object):
                  do_permute=True):
         self.reset_eval_metrics()
         eval_set_size = len(data_set.get_patient_ids(is_train=False))
-        eval_batch = BatchHandlerSD(data_set=data_set, is_train=False, cuda=self.exper.run_args.cuda)
+        eval_batch = BatchHandler(data_set=data_set, is_train=False, cuda=self.exper.run_args.cuda)
         if keep_features:
             spp_features = np.empty((0, model.fc_no_params))
             np_labels = np.empty(0)
@@ -225,15 +243,6 @@ class ExperimentHandler(object):
         self.arr_eval_metrics = []  # store f1, roc_auc, pr_auc, precision, recall scores
         self.num_of_eval_slices = 0
 
-    def load_dataset(self):
-        if self.seg_exper_ensemble is None:
-            raise ValueError("ERROR - parameter data_set is None and I don't have a reference to the"
-                             " segmentation handler ensemble. Hence, can't load the dataset.")
-        data_set = create_dataset(self.exper.run_args.fold_id, self.seg_exper_ensemble,
-                                  type_of_map=self.exper.run_args.type_of_map,
-                                  degenerate_type="mean", pos_label=1, logger=self.logger)
-        return data_set
-
     def save_experiment(self, file_name=None, final_run=False):
 
         if file_name is None:
@@ -263,7 +272,7 @@ class ExperimentHandler(object):
         if self.exper.run_args.cuda:
             self.logger.info(" *** RUNNING ON GPU *** ")
 
-    def load_checkpoint(self, exper_dir=None, checkpoint=None, verbose=False, drop_prob=0., retrain=False):
+    def load_checkpoint(self, exper_dir=None, checkpoint=None, verbose=False, retrain=False):
 
         if exper_dir is None:
             # chkpnt_dir should be /home/jorg/repository/dcnn_acdc/logs/<experiment dir>/checkpoints/
@@ -275,9 +284,9 @@ class ExperimentHandler(object):
         if checkpoint is None:
             checkpoint = self.exper.epoch_id
 
-        str_classname = config.base_class
+        str_classname = config_detector.base_class
         checkpoint_file = str_classname + "checkpoint" + str(checkpoint).zfill(5) + ".pth.tar"
-        model = load_slice_detector_model(self)
+        model = load_region_detector_model(self, verbose=verbose)
         abs_checkpoint_dir = os.path.join(chkpnt_dir, checkpoint_file)
         if os.path.exists(abs_checkpoint_dir):
             model_state_dict = torch.load(abs_checkpoint_dir)
@@ -287,10 +296,8 @@ class ExperimentHandler(object):
             if verbose and not retrain:
                 self.info("INFO - loaded existing model with checkpoint {} from dir {}".format(checkpoint,
                                                                                                abs_checkpoint_dir ))
-            else:
-                self.info("Loading existing model with checkpoint {} from dir {}".format(checkpoint, chkpnt_dir))
         else:
-            raise IOError("Path to checkpoint not found {}".format(abs_checkpoint_dir))
+            raise IOError("ERROR - Path to checkpoint not found {}".format(abs_checkpoint_dir))
 
         return model
 
@@ -317,9 +324,9 @@ class ExperimentHandler(object):
         print("stats_path = {}".format(self.exper.stats_path))
         print("chkpnt_dir = {}".format(self.exper.chkpnt_dir))
         self.exper.run_args.log_dir = new_dir
-        self.exper.output_dir = os.path.join(config.log_root_path, new_dir)
-        self.exper.stats_path = os.path.join(self.exper.output_dir, config.stats_path)
-        self.exper.chkpnt_dir = os.path.join(self.exper.output_dir, config.checkpoint_path)
+        self.exper.output_dir = os.path.join(config_detector.log_root_path, new_dir)
+        self.exper.stats_path = os.path.join(self.exper.output_dir, config_detector.stats_path)
+        self.exper.chkpnt_dir = os.path.join(self.exper.output_dir, config_detector.checkpoint_path)
         # create new directories if they don't exist
         exper_new_out_dir = os.path.join(self.exper.config.root_dir, self.exper.output_dir)
         # create_dir_if_not_exist(os.path.join(self.exper.config.root_dir, self.exper.output_dir))
@@ -347,7 +354,7 @@ class ExperimentHandler(object):
 
     def load_experiment(self, path_to_exp, full_path=False, epoch=None, use_logfile=True, verbose=True):
 
-        path_to_exp = os.path.join(path_to_exp, config.stats_path)
+        path_to_exp = os.path.join(path_to_exp, config_detector.stats_path)
 
         if epoch is None:
             path_to_exp = os.path.join(path_to_exp, ExperimentHandler.exp_filename + ".dll")
@@ -355,7 +362,8 @@ class ExperimentHandler(object):
             exp_filename = ExperimentHandler.exp_filename + "@{}".format(epoch) + ".dll"
             path_to_exp = os.path.join(path_to_exp, exp_filename)
         if not full_path:
-            path_to_exp = os.path.join(config.root_dir, os.path.join(config.log_root_path, path_to_exp))
+            path_to_exp = os.path.join(config_detector.root_dir,
+                                       os.path.join(config_detector.log_root_path, path_to_exp))
         if verbose:
             print("Load experiment from {}".format(path_to_exp))
         try:

@@ -17,6 +17,13 @@ def compute_eval_metrics(gt_labels, pred_labels, probs_pos_cls=None):
     :return:
     """
 
+    if gt_labels.ndim > 1:
+        gt_labels = gt_labels.flatten()
+    if probs_pos_cls.ndim > 1:
+        probs_pos_cls = probs_pos_cls.flatten()
+    if pred_labels.ndim > 1:
+        pred_labels = pred_labels.flatten()
+
     # In case we have no TP (degenerate label=1) or no TN (degenerate label 0) we can't compute AUC measure
     if np.sum(gt_labels) != 0 or np.sum(gt_labels) == gt_labels.shape[0]:
         if probs_pos_cls is not None:

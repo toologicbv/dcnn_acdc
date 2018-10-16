@@ -88,8 +88,8 @@ class BoundingBox(object):
         self.padding = padding
         self.xy_left = tuple((slice_y.start, slice_x.start))
         # actually we switched height and width because we're
-        self.height = slice_x.stop - slice_x.start
-        self.width = slice_y.stop - slice_y.start
+        self.width = slice_x.stop - slice_x.start
+        self.height = slice_y.stop - slice_y.start
         self.area = self.height * self.width
         self.box_four = np.array([slice_x.start, slice_y.start,
                                   slice_x.stop, slice_y.stop])
@@ -97,7 +97,7 @@ class BoundingBox(object):
         self.rectangular_patch = self.get_matplotlib_patch()
 
     def get_matplotlib_patch(self, color='r', linewidth=1):
-        rect = patches.Rectangle(self.xy_left, self.width, self.height, linewidth=linewidth, edgecolor=color,
+        rect = patches.Rectangle(self.xy_left, self.height, self.width, linewidth=linewidth, edgecolor=color,
                                  facecolor='none')
         return rect
 
@@ -146,3 +146,72 @@ def find_box_four_rois(label_slice):
             roi_box.box_four[np.newaxis]
 
     return roi_boxes
+
+
+def adjust_roi_bounding_box(roi_bbox, slice_idx=None):
+    """
+
+    :param roi_bbox: BoundingBox object
+    :param slice_idx: only for debugging purposes, so we can find back the slice we're processing
+    :return: new bounding box around e.g. automatic segmentation mask, that fits the grid spacing we defined
+             e.g. 8 voxels.
+    """
+    # patch_size that is used during training, currently 72x72.
+    half_width = config_detector.patch_size[0] / 2
+    w, h = roi_bbox.width, roi_bbox.height
+    tiny_w = False
+    tiny_h = False
+    if w < config_detector.patch_size[0]:
+        mid_point = (roi_bbox.slice_x.stop + roi_bbox.slice_x.start) / 2
+        roi_bbox.slice_x = slice(mid_point - half_width, mid_point + half_width, 0)
+        roi_bbox.width = roi_bbox.slice_x.stop - roi_bbox.slice_x.start
+        w = roi_bbox.width
+        tiny_w = True
+        # print("New slice_x ", pred_lbl_roi.slice_x, mid_point, pred_lbl_roi.width)
+    else:
+        if slice_idx is not None:
+            print("WARNING - width >= patch_size - slice {}".format(slice_idx))
+
+    if h < config_detector.patch_size[0]:
+        mid_point = (roi_bbox.slice_y.stop + roi_bbox.slice_y.start) / 2
+        roi_bbox.slice_y = slice(mid_point - half_width, mid_point + half_width, 0)
+        roi_bbox.height = roi_bbox.slice_y.stop - roi_bbox.slice_y.start
+        h = roi_bbox.height
+        tiny_h = True
+        # print("New slice_y ", pred_lbl_roi.slice_y, mid_point, pred_lbl_roi.height)
+    else:
+        if slice_idx is not None:
+            print("WARNING - height >= patch_size - slice {}".format(slice_idx))
+
+    if w % config_detector.max_grid_spacing != 0:
+        extend_w = config_detector.max_grid_spacing - (w % config_detector.max_grid_spacing)
+    else:
+        extend_w = 0
+    if h % config_detector.max_grid_spacing != 0:
+        extend_h = config_detector.max_grid_spacing - (h % config_detector.max_grid_spacing)
+    else:
+        extend_h = 0
+    # if our mask is greater than the training patch size (currently 72x72) then we make it even bigger
+    if not tiny_w:
+        extend_w += config_detector.max_grid_spacing
+    if not tiny_h:
+        extend_h += config_detector.max_grid_spacing
+
+    if extend_w % 2 != 0:
+        extend_w_x = extend_w / 2
+        extend_w_y = extend_w - extend_w_x
+    else:
+        extend_w_x = extend_w / 2
+        extend_w_y = extend_w_x
+    if extend_h % 2 != 0:
+        extend_h_x = extend_h / 2
+        extend_h_y = extend_h - extend_h_x
+    else:
+        extend_h_x = extend_h / 2
+        extend_h_y = extend_h_x
+    slice_x = slice(roi_bbox.slice_x.start - extend_w_x, roi_bbox.slice_x.stop + extend_w_y, 0)
+    slice_y = slice(roi_bbox.slice_y.start - extend_h_x, roi_bbox.slice_y.stop + extend_h_y, 0)
+    new_bouding_box = BoundingBox(slice_x, slice_y)
+    # print("Before ", pred_lbl_roi_old.width, pred_lbl_roi_old.height)
+    # print("After ", pred_lbl_roi.width, pred_lbl_roi.height, extend_w, extend_h)
+    return new_bouding_box

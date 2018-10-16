@@ -1,11 +1,11 @@
 import models.dilated_cnn
 import models.hvsmr.dilated_cnn
 from models.slice_detector import DegenerateSliceDetector
+from models.detector.region_detector import RegionDetector
 import torch
 import shutil
 import os
 import torch.nn as nn
-
 
 
 def weights_init(m):
@@ -95,6 +95,35 @@ def load_slice_detector_model(exper_hdl, verbose=False):
 
     else:
         raise ValueError("{} name is unknown and hence cannot be created".format(exper_hdl.exper.run_args.model))
+
+    exper_hdl.device = torch.device("cuda" if exper_hdl.exper.run_args.cuda else "cpu")
+    # assign model to CPU or GPU if available
+    model = model.to(exper_hdl.device)
+    return model
+
+
+def load_region_detector_model(exper_hdl, verbose=False):
+
+    if exper_hdl.logger is None:
+        use_logger = False
+    else:
+        use_logger = True
+
+    if exper_hdl.exper.run_args.model[:2] == 'rd':
+        exper_hdl.exper.config.get_architecture(model_name=exper_hdl.exper.run_args.model)
+        message = "Creating new model RegionDetector: {}".format(exper_hdl.exper.config.architecture["description"])
+        if use_logger:
+            exper_hdl.logger.info(message)
+        else:
+            print(message)
+        model = RegionDetector(exper_hdl.exper.config.architecture, lr=exper_hdl.exper.run_args.lr, init_weights=True)
+        # call static method when you want parameters to be printed
+        if verbose:
+            DegenerateSliceDetector.print_architecture_params(exper_hdl.exper.config.architecture,
+                                                              logger=exper_hdl.logger)
+
+    else:
+        raise ValueError("{} is an unknown model-name and hence cannot be created".format(exper_hdl.exper.run_args.model))
 
     exper_hdl.device = torch.device("cuda" if exper_hdl.exper.run_args.cuda else "cpu")
     # assign model to CPU or GPU if available
