@@ -57,6 +57,7 @@ class ExperimentHandler(object):
         # number of test/validation slices that contained at least one true positive in the GT labels. The
         # evaluation metrics (f1 auc_pr etc) are based on this number
         self.num_of_pos_eval_slices = 0
+        self.num_of_neg_eval_slices = 0
         # total number of test/validation slices that we processed
         self.num_of_eval_slices = 0
 
@@ -106,12 +107,12 @@ class ExperimentHandler(object):
         std_auc_roc = np.std(self.aucs_roc)
         self.stats_auc_roc = tuple((mean_auc_roc, std_auc_roc))
 
-    def run_eval(self, data_set, model, keep_features=False, verbose=False, eval_size=25, keep_batch=False):
+    def run_eval(self, data_set, model, keep_features=False, verbose=False, eval_size=None, keep_batch=False):
         self.reset_eval_metrics()
         not_one_tp = True
         eval_set_size = data_set.get_size(is_train=False)
         # Currently not using the complete test set
-        if eval_set_size > eval_size:
+        if eval_size is not None and eval_set_size > eval_size:
             eval_set_size = eval_size
 
         eval_batch = BatchHandler(data_set=data_set, is_train=False, cuda=self.exper.run_args.cuda, backward_freq=1)
@@ -119,9 +120,14 @@ class ExperimentHandler(object):
             # TODO: this is currently not working, the keep_features functionality. we should implement this
             # TODO in order to check whether there're clusters in the features of the last conv-layer
             spp_features = np.empty((0, model.fc_no_params))
-            np_labels = np.empty(0)
+
             np_extra_lbls = np.empty(0)
         model.eval()
+        # we use the following 3 arrays to collect the predicted (and gt) results in order to calculate the
+        # final performance measures (f1, roc_auc, pr_auc, rec, precision
+        np_gt_labels = np.empty(0)
+        np_pred_labels = np.empty(0)
+        np_pred_probs = np.empty(0)
         for x_input, y_labels_dict in eval_batch(batch_size=eval_set_size, keep_batch=keep_batch):
             # New in pytorch 0.4.0, use local context manager to turn off history tracking
             with torch.set_grad_enabled(False):
@@ -131,55 +137,50 @@ class ExperimentHandler(object):
                 y_lbl_grid8 = y_labels_dict[8]
                 y_lbl_grid4 = y_labels_dict[4]
                 eval_loss, pred_probs = model.do_forward_pass(x_input, y_lbl_grid8, y_labels_extra=y_lbl_grid4)
-
+                pred_labels = np.argmax(pred_probs.data.cpu().numpy(), axis=1)
                 if keep_features:
                     spp_features = np.vstack([spp_features, model.features]) if spp_features.size else model.features
                     np_labels = np.concatenate((np_labels, y_lbl_grid8.data.cpu().numpy()))
-
-            pred_labels = np.argmax(pred_probs.data.cpu().numpy(), axis=1)
-            np_pred_probs = pred_probs.data.cpu().numpy()
-            if keep_batch:
-                eval_batch.add_probs(np_pred_probs[:, 1])
-            f1, roc_auc, pr_auc, prec, rec, fpr, tpr, precision, recall = \
-                compute_eval_metrics(y_lbl_grid8.data.cpu().numpy(), pred_labels, np_pred_probs[:, 1])
-
+            # first convert to numpy
+            pred_probs = pred_probs.data.cpu().numpy()
+            np_gt_labels = np.concatenate((np_gt_labels, (y_lbl_grid8.data.cpu().numpy()).flatten()))
+            np_pred_labels = np.concatenate((np_pred_labels, pred_labels.flatten()))
+            # Remember, we're only interested in the softmax-probs for the positive class
+            np_pred_probs = np.concatenate((np_pred_probs, pred_probs[:, 1].flatten()))
             self.eval_loss.append([eval_loss.item()])
             self.num_of_eval_slices += 1
-            if f1 != -1:
-                not_one_tp = False
-                self.arr_eval_metrics.append([np.array([f1, roc_auc, pr_auc, prec, rec])])
-                self.num_of_pos_eval_slices += pred_labels.shape[0]
-                self.mean_tpos_rate.append(np.interp(self.mean_x_values, fpr, tpr))
-                self.mean_tpos_rate[-1][0] = 0.0
-                self.aucs_roc.append(roc_auc)
-                # same for precision-recall curve
-                self.mean_prec_rate.append(np.interp(self.mean_x_values, recall, precision))
-                self.mean_prec_rate[-1][0] = 0.0
-                self.aucs_pr.append(pr_auc)
-            else:
-                num_of_pos_grids = np.count_nonzero(y_lbl_grid8.data.cpu().numpy())
-                # self.info("***WARNING*** - OMITTING validation example due to no TP (={})".format(num_of_pos_grids))
 
-            if verbose:
-                self.info("Evaluation - #slices={} (positives={}) - f1={:.3f} - roc_auc={:.3f} "
-                          "- pr_auc={:.3f} - prec={:.3f} - rec={:.3f}".format(self.num_of_eval_slices,
-                                                                              self.num_of_pos_eval_slices,
-                                                                              f1, roc_auc, pr_auc, prec, rec))
-        self.eval_loss = np.concatenate(self.eval_loss)
+        num_of_pos_grids = np.count_nonzero(np_gt_labels)
+        self.num_of_pos_eval_slices += num_of_pos_grids
+        self.num_of_neg_eval_slices += np_gt_labels.shape[0] - num_of_pos_grids
+        f1, roc_auc, pr_auc, prec, rec, fpr, tpr, precision, recall = \
+            compute_eval_metrics(np_gt_labels, np_pred_labels, np_pred_probs)
+        # keep predicted probs & labels
+        if keep_batch:
+            eval_batch.add_probs(np_pred_probs)
+            eval_batch.add_pred_labels(np_pred_labels)
+            eval_batch.add_gt_labels(np_gt_labels)
+        if f1 != -1:
+            not_one_tp = False
+            self.arr_eval_metrics = np.array([f1, roc_auc, pr_auc, prec, rec])
+        self.eval_loss = np.array(self.eval_loss)
         if self.eval_loss.shape[0] > 1:
             self.eval_loss = np.mean(self.eval_loss)
         else:
             self.eval_loss = self.eval_loss[0]
-        if not not_one_tp:
-            self.arr_eval_metrics = np.concatenate(self.arr_eval_metrics)
-            self.arr_eval_metrics = np.mean(self.arr_eval_metrics, axis=0)
-            self.compute_mean_aucs()
-        else:
+        # if we have at least one TP, otherwise...
+        if not_one_tp:
             # we only had test slices that don't contain ANY positive voxels that needed to be detected. Hence, we
             # have no statistics
             self.stats_auc_roc = tuple((0, 0))
             self.arr_eval_metrics = np.array([0, 0, 0, 0, 0])
 
+        if verbose:
+            self.info("Evaluation - #slices={} (negatives/positives={}/{}) - f1={:.3f} - roc_auc={:.3f} "
+                      "- pr_auc={:.3f} - prec={:.3f} - rec={:.3f}".format(self.num_of_eval_slices,
+                                                                          self.num_of_neg_eval_slices,
+                                                                          self.num_of_pos_eval_slices,
+                                                                          f1, roc_auc, pr_auc, prec, rec))
         if keep_features:
             self._save_eval_features(spp_features, np_labels, np_extra_lbls)
         model.train()
@@ -211,13 +212,14 @@ class ExperimentHandler(object):
         self.exper.val_stats["rec"][self.num_val_runs - 1] = self.arr_eval_metrics[4]
         duration = time.time() - start_time
 
-        self.info("---> END VALIDATION epoch {} #slices={} (positives={}) loss {:.3f}: f1={:.3f} - roc_auc={:.3f} "
-                  "- pr_auc={:.3f} - prec={:.3f} - rec={:.3f} "
-                  "- {:.2f} seconds".format(self.exper.epoch_id, self.num_of_eval_slices, self.num_of_pos_eval_slices,
-                                            self.eval_loss, self.arr_eval_metrics[0],
-                                                   self.stats_auc_roc[0], self.arr_eval_metrics[2],
-                                                   self.arr_eval_metrics[3], self.arr_eval_metrics[4],
-                                                   duration))
+        self.info("---> END VALIDATION epoch {} #slices={}(skipped {}) (negatives/positives={}/{}) loss {:.3f}: "
+                  "f1={:.3f} - roc_auc={:.3f} - pr_auc={:.3f} - prec={:.3f} - rec={:.3f} "
+                  "- {:.2f} seconds".format(self.exper.epoch_id, self.num_of_eval_slices,
+                                            0 if not keep_batch else batch.num_of_skipped_slices,
+                                            self.num_of_neg_eval_slices,
+                                            self.num_of_pos_eval_slices, self.eval_loss, self.arr_eval_metrics[0],
+                                            self.arr_eval_metrics[1], self.arr_eval_metrics[2],
+                                            self.arr_eval_metrics[3], self.arr_eval_metrics[4], duration))
         # self.logger.info("\t Check: roc_auc={:.3f} - pr_auc={:.3f}".format(arr_val_eval[1], arr_val_eval[2]))
         self.reset_eval_metrics()
         if keep_batch:
@@ -270,6 +272,7 @@ class ExperimentHandler(object):
         self.arr_eval_metrics = []  # store f1, roc_auc, pr_auc, precision, recall scores
         self.num_of_eval_slices = 0
         self.num_of_pos_eval_slices = 0
+        self.num_of_neg_eval_slices = 0
 
     def save_experiment(self, file_name=None, final_run=False):
 

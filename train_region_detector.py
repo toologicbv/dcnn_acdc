@@ -97,8 +97,8 @@ def training(args):
         if exper_hdl.exper.run_args.val_freq != 0 and (exper_hdl.exper.epoch_id % exper_hdl.exper.run_args.val_freq == 0
                                                        or
                                                        exper_hdl.exper.epoch_id == exper_hdl.exper.run_args.epochs):
-            # validate model
-            exper_hdl.eval(dataset, rd_model, verbose=False)
+            # validate model, currently setting eval_size=None, which means we are testing the whole set
+            exper_hdl.eval(dataset, rd_model, verbose=False, eval_size=None)
 
     exper_hdl.save_experiment(final_run=True)
     del dataset

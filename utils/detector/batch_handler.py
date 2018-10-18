@@ -36,9 +36,14 @@ class BatchHandler(object):
         self.batch_images = None
         self.batch_labels_per_voxel = None
         self.target_labels_per_roi = None
+        self.target_labels_stats_per_roi = None
+        # during testing, we skip slices that do not contain any automatic segmentations
+        self.num_of_skipped_slices = 0
         # when calling with keep_batch=True, we also want to store the predicted probs during testing
         # only during eval time
         self.batch_pred_probs = None
+        self.batch_pred_labels = None
+        self.batch_gt_labels = None
         # we store the last slice_id we returned for the test batch, so we can chunk the complete test set if
         # necessary. Remember this is an index referring to the slices in list dataset.test_images
         self.last_test_list_idx = None
@@ -66,7 +71,13 @@ class BatchHandler(object):
             self.num_sub_batches = self.num_sub_batches.cuda()
 
     def add_probs(self, probs):
-        self.batch_pred_probs.append(probs)
+        self.batch_pred_probs.extend(probs)
+
+    def add_pred_labels(self, pred_labels):
+        self.batch_pred_labels.extend(pred_labels)
+
+    def add_gt_labels(self, gt_labels):
+        self.batch_gt_labels.extend(gt_labels)
 
     @property
     def do_backward(self):
@@ -136,10 +147,13 @@ class BatchHandler(object):
         #                       8 = after maxPool 3, 8x8 patches hence, grid spacing 8
         # Each dict entry contains torch.LongTensor array with binary indications
         target_labels = {1: np.zeros(batch_size)}
+        # store the number of positive gt labels per grid. we use this to analyze the errors the model makes
+        self.target_labels_stats_per_roi = {1: np.zeros(batch_size)}
         for i in np.arange(2, self.num_of_max_pool_layers + 1):
             grid_spacing = int(2 ** i)
             g = int(config_detector.patch_size[0] / grid_spacing)
             target_labels[grid_spacing] = torch.zeros((batch_size, g * g), dtype=torch.long)
+            self.target_labels_stats_per_roi[grid_spacing] = np.zeros((batch_size, g * g))
         # this array holds the patch for each label_slice (binary). Is a numpy array, we only need this object
         # to determine the final target labels per grid/roi
         np_batch_lbls = np.zeros((batch_size, config_detector.patch_size[0], config_detector.patch_size[1]))
@@ -200,7 +214,7 @@ class BatchHandler(object):
             batch_imgs[b], np_batch_lbls[b], overall_lbls = self._create_train_batch_item(slice_area_spec,
                                                                                              is_positive=True,
                                                                                              batch_item_nr=b)
-            target_labels = self._generate_train_labels(np_batch_lbls[b], target_labels, batch_item_nr=b,
+            target_labels = self._generate_batch_labels(np_batch_lbls[b], target_labels, batch_item_nr=b,
                                                         is_positive=overall_lbls)
             target_labels[1][b] = overall_lbls
             b += 1
@@ -286,20 +300,24 @@ class BatchHandler(object):
 
         return torch.FloatTensor(torch.from_numpy(input_channels_patch).float()), lbl_slice, target_label
 
-    def _generate_train_labels(self, lbl_slice, target_labels, batch_item_nr, is_positive):
+    def _generate_batch_labels(self, lbl_slice, target_labels, batch_item_nr, is_positive,
+                               target_labels_stats_per_roi=None):
         """
         we already calculated the label for the entire patch (assumed to be square).
         Here, we compute the labels for the grid that is produced after maxPool 2 and maxPool 3
         E.g.: patch_size 72x72, has a grids of 2x2 (after maxPool 1) and 4x4 after maxPool 2
 
         :param lbl_slice:
-        :param target_labels: dictionary with keys grid spacing. Currently 4 and 8
+        :param target_labels: dictionary with keys grid spacing. Currently 1, 4 and 8
         :param batch_item_nr: sequence number for batch item (ID)
         :param is_positive:
+        :param target_labels_stats_per_roi: dictionary with keys grid spacing. Values store num of positive voxels
+                                            per grid-block (used for evaluation purposes)
         :return: target_labels:
                  A dictionary of torch.LongTensors. Dict keys are grid spacings after maxPooling operations.
                  i.e.: 4 = grid spacing after maxPool 2, 8 = after maxPool 3
                  Each key contains torch tensor of shape [batch_size, grid_size, grid_size]
+                target_labels_stats_per_roi if not None
         """
 
         w, h = lbl_slice.shape
@@ -327,11 +345,18 @@ class BatchHandler(object):
                 # a final feature map size of 9x9.
                 for i, label_patch in enumerate(label_patches):
                     label_patch = np.array(label_patch)
-                    grid_target_labels[i] = 1 if 0 != np.count_nonzero(label_patch) else 0
+                    num_of_positives = np.count_nonzero(label_patch)
+                    if target_labels_stats_per_roi is not None:
+                        target_labels_stats_per_roi[grid_spacing][batch_item_nr][i] = num_of_positives
+                    grid_target_labels[i] = 1 if 0 != num_of_positives else 0
                 target_labels[grid_spacing][batch_item_nr] = \
                     torch.LongTensor(torch.from_numpy(grid_target_labels).long())
 
-        return target_labels
+        if target_labels_stats_per_roi is not None:
+            # Should be only necessary during Testing
+            return target_labels, target_labels_stats_per_roi
+        else:
+            return target_labels
 
     def _generate_test_batch(self, batch_size=8, keep_batch=False):
         if self.last_test_list_idx is None:
@@ -339,12 +364,21 @@ class BatchHandler(object):
         else:
             # we need to increase the index by one to start with the "next" slice from the test set
             self.last_test_list_idx += 1
+        self.num_of_skipped_slices = 0
         self.current_slice_ids = []
         self.batch_pred_probs = []
+        self.batch_pred_labels = []
+        self.batch_gt_labels = []
         self.batch_images, self.target_labels_per_roi = [], []
+        self.target_labels_stats_per_roi = {}
+        for i in np.arange(2, self.num_of_max_pool_layers + 1):
+            grid_spacing = int(2 ** i)
+            self.target_labels_stats_per_roi[grid_spacing] = []
+
         # we loop over the slices in the test set, starting
         for list_idx in np.arange(self.last_test_list_idx, self.last_test_list_idx + batch_size):
             target_labels = {}
+            target_labels_stats_per_roi = {}
             # get input images should have 3 channels [3, w, h] and corresponding binary image [w, h]
             input_channels = self.data_set.test_images[list_idx]
             label = self.data_set.test_labels[list_idx]
@@ -352,7 +386,9 @@ class BatchHandler(object):
             slice_x, slice_y = BoundingBox.convert_to_slices(roi_area_spec)
 
             if slice_x.start == 0 and slice_x.stop == 0:
+                # IMPORTANT: WE SKIP SLICES THAT DO NOT CONTAIN ANY AUTOMATIC SEGMENTATIONS!
                 # does not contain any automatic segmentation mask, continue
+                self.num_of_skipped_slices += 1
                 continue
 
             # now slice input and label according to roi specifications (automatic segmentation mask roi)
@@ -363,6 +399,7 @@ class BatchHandler(object):
             contains_pos_voxels = 1 if np.count_nonzero(lbl_slice) != 0 else 0
             # store the overall indication whether our slice contains any voxels to be inspected
             target_labels[1] = np.array([contains_pos_voxels])
+            target_labels_stats_per_roi[1] = np.array([contains_pos_voxels])
             # construct PyTorch tensor and add a dummy batch dimension in front
             input_channels_patch = torch.FloatTensor(torch.from_numpy(input_channels_patch[np.newaxis]).float())
             self.current_slice_ids.append(list_idx)
@@ -374,13 +411,17 @@ class BatchHandler(object):
                 # print("INFO - spacing {} - grid size {}x{}={}".format(grid_spacing, g_w, g_h, g_w * g_h))
                 # looks kind of awkward, but we always use a batch size of 1
                 target_labels[grid_spacing] = torch.zeros((1, g_w * g_h), dtype=torch.long)
+                # we need the dummy batch dimension (which is always 1) for the _generate_batch_labels method
+                target_labels_stats_per_roi[grid_spacing] = np.zeros((1, g_w * g_h))
             if contains_pos_voxels:
-                target_labels = self._generate_train_labels(lbl_slice, target_labels, batch_item_nr=0,
-                                                            is_positive=contains_pos_voxels)
+                target_labels, target_labels_stats_per_roi = self._generate_batch_labels(lbl_slice, target_labels,
+                                                                                         batch_item_nr=0,
+                                                                                         is_positive=contains_pos_voxels,
+                                                                                         target_labels_stats_per_roi=
+                                                                                         target_labels_stats_per_roi)
             else:
                 # no target voxels to inspect in ROI
                 pass
-                # print("WARNING - does not contain pos-voxels list_idx {}".format(list_idx))
             # if on GPU
             if self.cuda:
                 input_channels_patch = input_channels_patch.cuda()
@@ -395,6 +436,9 @@ class BatchHandler(object):
                 self.batch_images.append(input_channels_patch)
                 self.target_labels_per_roi.append(target_labels)
                 self.batch_label_slices.append(lbl_slice)
+                for grid_sp in target_labels_stats_per_roi.keys():
+                    if grid_sp != 1:
+                        self.target_labels_stats_per_roi[grid_sp].extend(target_labels_stats_per_roi[grid_sp].flatten())
             yield input_channels_patch, target_labels
             self.last_test_list_idx = list_idx
 
