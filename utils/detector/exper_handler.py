@@ -54,6 +54,10 @@ class ExperimentHandler(object):
         self.eval_loss = []
         self.arr_eval_metrics = []
         self.stats_auc_roc = None
+        # number of test/validation slices that contained at least one true positive in the GT labels. The
+        # evaluation metrics (f1 auc_pr etc) are based on this number
+        self.num_of_pos_eval_slices = 0
+        # total number of test/validation slices that we processed
         self.num_of_eval_slices = 0
 
     def set_seg_ensemble(self, seg_ensemble):
@@ -77,6 +81,10 @@ class ExperimentHandler(object):
         self.exper.config.root_dir = root_dir
         self.exper.config.data_dir = os.path.join(self.exper.config.root_dir, "data/Folds/")
 
+    def set_checkpoint_dir(self):
+        log_dir = os.path.join(config_detector.log_root_path, self.exper.run_args.log_dir)
+        self.exper.chkpnt_dir = os.path.join(log_dir, config_detector.checkpoint_path)
+
     def next_epoch(self):
         self.exper.epoch_id += 1
 
@@ -98,39 +106,49 @@ class ExperimentHandler(object):
         std_auc_roc = np.std(self.aucs_roc)
         self.stats_auc_roc = tuple((mean_auc_roc, std_auc_roc))
 
-    def run_eval(self, data_set, model, do_balance=False, keep_features=False, verbose=False,
-                 do_permute=True):
+    def run_eval(self, data_set, model, keep_features=False, verbose=False, eval_size=25, keep_batch=False):
         self.reset_eval_metrics()
-        eval_set_size = len(data_set.get_patient_ids(is_train=False))
-        eval_batch = BatchHandler(data_set=data_set, is_train=False, cuda=self.exper.run_args.cuda)
+        not_one_tp = True
+        eval_set_size = data_set.get_size(is_train=False)
+        # Currently not using the complete test set
+        if eval_set_size > eval_size:
+            eval_set_size = eval_size
+
+        eval_batch = BatchHandler(data_set=data_set, is_train=False, cuda=self.exper.run_args.cuda, backward_freq=1)
         if keep_features:
+            # TODO: this is currently not working, the keep_features functionality. we should implement this
+            # TODO in order to check whether there're clusters in the features of the last conv-layer
             spp_features = np.empty((0, model.fc_no_params))
             np_labels = np.empty(0)
             np_extra_lbls = np.empty(0)
         model.eval()
-        for _ in np.arange(eval_set_size):
+        for x_input, y_labels_dict in eval_batch(batch_size=eval_set_size, keep_batch=keep_batch):
             # New in pytorch 0.4.0, use local context manager to turn off history tracking
             with torch.set_grad_enabled(False):
                 # batch_size=None and do_balance=True => number of degenerate slices/per patient determines
                 #                                        the batch_size.
                 # batch_size=None and do_balance=False => classify all slices for a particular patient
-                x_input, y_labels, extra_lbls = eval_batch(batch_size=None, backward_freq=1, do_balance=do_balance,
-                                                           do_permute=do_permute)
-                eval_loss, pred_probs = model.do_forward_pass(x_input, y_labels, keep_features=keep_features)
+                y_lbl_grid8 = y_labels_dict[8]
+                y_lbl_grid4 = y_labels_dict[4]
+                eval_loss, pred_probs = model.do_forward_pass(x_input, y_lbl_grid8, y_labels_extra=y_lbl_grid4)
+
                 if keep_features:
                     spp_features = np.vstack([spp_features, model.features]) if spp_features.size else model.features
-                    np_labels = np.concatenate((np_labels, y_labels.data.cpu().numpy()))
-                    # concatenating extra label information: patient_id, phase, slice_id
-                    np_extra_lbls = np.vstack([np_extra_lbls, extra_lbls]) if np_extra_lbls.size else extra_lbls
+                    np_labels = np.concatenate((np_labels, y_lbl_grid8.data.cpu().numpy()))
+
             pred_labels = np.argmax(pred_probs.data.cpu().numpy(), axis=1)
             np_pred_probs = pred_probs.data.cpu().numpy()
+            if keep_batch:
+                eval_batch.add_probs(np_pred_probs[:, 1])
             f1, roc_auc, pr_auc, prec, rec, fpr, tpr, precision, recall = \
-                compute_eval_metrics(y_labels.data.cpu().numpy(), pred_labels, np_pred_probs[:, 1])
+                compute_eval_metrics(y_lbl_grid8.data.cpu().numpy(), pred_labels, np_pred_probs[:, 1])
 
+            self.eval_loss.append([eval_loss.item()])
+            self.num_of_eval_slices += 1
             if f1 != -1:
-                self.eval_loss.append([eval_loss.item()])
+                not_one_tp = False
                 self.arr_eval_metrics.append([np.array([f1, roc_auc, pr_auc, prec, rec])])
-                self.num_of_eval_slices += pred_labels.shape[0]
+                self.num_of_pos_eval_slices += pred_labels.shape[0]
                 self.mean_tpos_rate.append(np.interp(self.mean_x_values, fpr, tpr))
                 self.mean_tpos_rate[-1][0] = 0.0
                 self.aucs_roc.append(roc_auc)
@@ -139,31 +157,37 @@ class ExperimentHandler(object):
                 self.mean_prec_rate[-1][0] = 0.0
                 self.aucs_pr.append(pr_auc)
             else:
-                self.info("***WARNING*** - OMITTING validation example due to no TP")
+                num_of_pos_grids = np.count_nonzero(y_lbl_grid8.data.cpu().numpy())
+                # self.info("***WARNING*** - OMITTING validation example due to no TP (={})".format(num_of_pos_grids))
 
             if verbose:
-                self.info("*** patient {} GT labels".format(eval_batch.current_patient_id))
-                self.info(y_labels.data.cpu().numpy())
-                self.info("    patient {} Predicted labels".format(eval_batch.current_patient_id))
-                self.info(pred_labels)
-
-            if verbose:
-                self.info("Evaluation - patient {} (#slices={}) - f1={:.3f} - roc_auc={:.3f} "
-                          "- pr_auc={:.3f} - prec={:.3f} - rec={:.3f}".format(eval_batch.current_patient_id,
-                                                                                     pred_labels.shape[0],
-                                                                                     f1, roc_auc, pr_auc, prec, rec))
+                self.info("Evaluation - #slices={} (positives={}) - f1={:.3f} - roc_auc={:.3f} "
+                          "- pr_auc={:.3f} - prec={:.3f} - rec={:.3f}".format(self.num_of_eval_slices,
+                                                                              self.num_of_pos_eval_slices,
+                                                                              f1, roc_auc, pr_auc, prec, rec))
         self.eval_loss = np.concatenate(self.eval_loss)
-        self.arr_eval_metrics = np.concatenate(self.arr_eval_metrics)
         if self.eval_loss.shape[0] > 1:
             self.eval_loss = np.mean(self.eval_loss)
         else:
             self.eval_loss = self.eval_loss[0]
-        self.arr_eval_metrics = np.mean(self.arr_eval_metrics, axis=0)
-        self.compute_mean_aucs()
-        del eval_batch
+        if not not_one_tp:
+            self.arr_eval_metrics = np.concatenate(self.arr_eval_metrics)
+            self.arr_eval_metrics = np.mean(self.arr_eval_metrics, axis=0)
+            self.compute_mean_aucs()
+        else:
+            # we only had test slices that don't contain ANY positive voxels that needed to be detected. Hence, we
+            # have no statistics
+            self.stats_auc_roc = tuple((0, 0))
+            self.arr_eval_metrics = np.array([0, 0, 0, 0, 0])
+
         if keep_features:
             self._save_eval_features(spp_features, np_labels, np_extra_lbls)
         model.train()
+        if keep_batch:
+            return eval_batch
+        else:
+            del eval_batch
+            return None
 
     def _save_eval_features(self, features, labels, np_extra_lbls):
         out_filename = os.path.join(self.exper.config.root_dir, self.exper.stats_path)
@@ -174,10 +198,11 @@ class ExperimentHandler(object):
         except IOError:
             print("ERROR - Can't save features+labels to {}".format(out_filename))
 
-    def eval(self, data_set, model, do_balance=False, verbose=False):
+    def eval(self, data_set, model, eval_size=25, keep_batch=False, verbose=False):
         start_time = time.time()
         self.next_val_run()
-        self.run_eval(data_set=data_set, model=model, do_balance=do_balance, verbose=verbose)
+        batch = self.run_eval(data_set=data_set, model=model, eval_size=eval_size, keep_batch=keep_batch,
+                              verbose=verbose)
         self.exper.val_stats["loss"][self.num_val_runs - 1] = self.eval_loss
         self.exper.val_stats["f1"][self.num_val_runs - 1] = self.arr_eval_metrics[0]
         self.exper.val_stats["roc_auc"][self.num_val_runs - 1] = self.arr_eval_metrics[1]
@@ -186,15 +211,17 @@ class ExperimentHandler(object):
         self.exper.val_stats["rec"][self.num_val_runs - 1] = self.arr_eval_metrics[4]
         duration = time.time() - start_time
 
-        self.info("---> END VALIDATION epoch {} #slices={} loss {:.3f}: f1={:.3f} - roc_auc={:.3f} "
+        self.info("---> END VALIDATION epoch {} #slices={} (positives={}) loss {:.3f}: f1={:.3f} - roc_auc={:.3f} "
                   "- pr_auc={:.3f} - prec={:.3f} - rec={:.3f} "
-                  "- {:.2f} seconds".format(self.exper.epoch_id, self.num_of_eval_slices, self.eval_loss,
-                                                   self.arr_eval_metrics[0],
+                  "- {:.2f} seconds".format(self.exper.epoch_id, self.num_of_eval_slices, self.num_of_pos_eval_slices,
+                                            self.eval_loss, self.arr_eval_metrics[0],
                                                    self.stats_auc_roc[0], self.arr_eval_metrics[2],
                                                    self.arr_eval_metrics[3], self.arr_eval_metrics[4],
                                                    duration))
         # self.logger.info("\t Check: roc_auc={:.3f} - pr_auc={:.3f}".format(arr_val_eval[1], arr_val_eval[2]))
         self.reset_eval_metrics()
+        if keep_batch:
+            return batch
 
     def test(self, data_set=None, model=None, test_id=None, do_permute=False, keep_features=False, verbose=False):
         if model is None:
@@ -242,6 +269,7 @@ class ExperimentHandler(object):
         self.eval_loss = []
         self.arr_eval_metrics = []  # store f1, roc_auc, pr_auc, precision, recall scores
         self.num_of_eval_slices = 0
+        self.num_of_pos_eval_slices = 0
 
     def save_experiment(self, file_name=None, final_run=False):
 
@@ -273,6 +301,9 @@ class ExperimentHandler(object):
             self.logger.info(" *** RUNNING ON GPU *** ")
 
     def load_checkpoint(self, exper_dir=None, checkpoint=None, verbose=False, retrain=False):
+        # we first "re-construct" the self.exper.chkpnt_dir, because could be different on a machine when we
+        # run the evaluation.
+        self.set_checkpoint_dir()
 
         if exper_dir is None:
             # chkpnt_dir should be /home/jorg/repository/dcnn_acdc/logs/<experiment dir>/checkpoints/
@@ -389,3 +420,18 @@ class ExperimentHandler(object):
             self.logger = create_logger(self.exper, file_handler=use_logfile)
         else:
             self.logger = None
+
+
+def create_experiment(exper_id, verbose=False):
+
+    log_dir = os.path.join(config_detector.root_dir, config_detector.log_root_path)
+    exp_model_path = os.path.join(log_dir, exper_id)
+    exper_handler = ExperimentHandler()
+    exper_handler.load_experiment(exp_model_path, use_logfile=False)
+    exper_handler.set_root_dir(config_detector.root_dir)
+    exper_args = exper_handler.exper.run_args
+    if verbose:
+        info_str = "{} fold={} loss={}".format(exper_args.model, exper_args.fold_ids,
+                                               exper_args.loss_function)
+        print("INFO - Experimental details extracted:: " + info_str)
+    return exper_handler

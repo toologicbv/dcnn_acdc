@@ -98,8 +98,7 @@ def training(args):
                                                        or
                                                        exper_hdl.exper.epoch_id == exper_hdl.exper.run_args.epochs):
             # validate model
-            # exper_hdl.eval(sd_dataset, sd_vgg_model, verbose=False)
-            pass
+            exper_hdl.eval(dataset, rd_model, verbose=False)
 
     exper_hdl.save_experiment(final_run=True)
     del dataset

@@ -174,9 +174,13 @@ class RegionDetectorDataSet(object):
             # the original image, hence, we NEVER have to pad the image in order to make sure that the size (w, h)
             # is dividable by max_grid_spacing (currently 8).
             pred_lbl_roi = find_bbox_object(input_chnl3_slice, padding=0)
-            pred_lbl_roi_old = find_bbox_object(input_chnl3_slice, padding=0)
+            # in case we are dealing with slices that do not contain an automatic seg-mask we don't need to find
+            # the ROI. We will even not use these slices during testing because we're only interested in slices with
+            # an automatic seg-mask. Is slice_idx=len(self.test_images) then procedure will print slices bigger than
+            # training patch_size. We use this for debugging purposes.
             if not pred_lbl_roi.empty:
-                pred_lbl_roi = adjust_roi_bounding_box(pred_lbl_roi, slice_idx=len(self.test_images))
+                #
+                pred_lbl_roi = adjust_roi_bounding_box(pred_lbl_roi, slice_idx=None)
 
             padded_input_slices = np.concatenate((input_chnl1_slice[np.newaxis], input_chnl2_slice[np.newaxis],
                                                   input_chnl3_slice[np.newaxis]))

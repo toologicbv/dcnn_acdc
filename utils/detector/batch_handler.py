@@ -5,6 +5,7 @@ from matplotlib import cm
 from plotting.color_maps import transparent_cmap
 from common.detector.config import config_detector
 from common.detector.box_utils import BoundingBox
+from common.detector.helper import create_grid_heat_map
 
 
 class BatchHandler(object):
@@ -35,6 +36,12 @@ class BatchHandler(object):
         self.batch_images = None
         self.batch_labels_per_voxel = None
         self.target_labels_per_roi = None
+        # when calling with keep_batch=True, we also want to store the predicted probs during testing
+        # only during eval time
+        self.batch_pred_probs = None
+        # we store the last slice_id we returned for the test batch, so we can chunk the complete test set if
+        # necessary. Remember this is an index referring to the slices in list dataset.test_images
+        self.last_test_list_idx = None
         if config_detector.num_of_max_pool is None:
             self.num_of_max_pool_layers = 3
         else:
@@ -58,6 +65,9 @@ class BatchHandler(object):
             self.loss = self.loss.cuda()
             self.num_sub_batches = self.num_sub_batches.cuda()
 
+    def add_probs(self, probs):
+        self.batch_pred_probs.append(probs)
+
     @property
     def do_backward(self):
         if self.backward_freq is not None:
@@ -65,7 +75,7 @@ class BatchHandler(object):
         else:
             return True
 
-    def __call__(self, batch_size=None, do_balance=True):
+    def __call__(self, batch_size=None, do_balance=True, keep_batch=False):
         """
         Construct a batch of shape [batch_size, 3channels, w, h]
                                    3channels: (1) input image
@@ -75,6 +85,8 @@ class BatchHandler(object):
         :param batch_size:
         :param patient_id: if not None than we use all slices
         :param do_balance: if True batch is balanced w.r.t. slices containing positive target areas and not (1:3)
+        :param keep_batch: boolean, only used during TESTING. Indicates whether we keep the batch items in
+                           self.batch_images, self.target_labels_per_roi (lists)
         :return: input batch and corresponding references
         """
         self.batch_bounding_boxes = np.zeros((batch_size, 4))
@@ -87,20 +99,18 @@ class BatchHandler(object):
             # (3) target_labels_per_roi: is a dictionary (key batch-item-nr) of dictionaries (key grid spacing)
             self.batch_images, self.batch_labels_per_voxel, self.target_labels_per_roi = \
                 self._generate_train_batch(batch_size, do_balance=do_balance)
+            if self.cuda:
+                self.batch_images = self.batch_images.cuda()
+                for g_spacing, target_lbls in self.target_labels_per_roi.iteritems():
+                    # we don't use grid-spacing "1" key (overall binary indication whether patch contains target
+                    # voxels (pos/neg example)
+                    if g_spacing != 1:
+                        target_lbls = target_lbls.cuda()
+                        self.target_labels_per_roi[g_spacing] = target_lbls
+            return self.batch_images, self.target_labels_per_roi
         else:
             # during testing we process whole slices and loop over the patient_ids in the test set.
-            self.batch_images, self.batch_labels_per_voxel, self.target_labels_per_roi = \
-                self._generate_test_batch(batch_size)
-
-        if self.cuda:
-            self.batch_images = self.batch_images.cuda()
-            for g_spacing, target_lbls in self.target_labels_per_roi.iteritems():
-                # we don't use grid-spacing "1" key (overall binary indication whether patch contains target
-                # voxels (pos/neg example)
-                if g_spacing != 1:
-                    target_lbls = target_lbls.cuda()
-                    self.target_labels_per_roi[g_spacing] = target_lbls
-        return self.batch_images, self.target_labels_per_roi
+            return self._generate_test_batch(batch_size, keep_batch=keep_batch)
 
     def _generate_train_batch(self, batch_size, do_balance=True):
         """
@@ -302,12 +312,13 @@ class BatchHandler(object):
             for i in np.arange(2, self.num_of_max_pool_layers + 1):
                 grid_spacing = int(2**i)
                 # omit the [0, ...] at the front of the array, we don't want to split there
-                grid_spacings = np.arange(0, w, grid_spacing)[1:]
-                v_blocks = np.vsplit(lbl_slice, grid_spacings)
+                grid_spacings_w = np.arange(0, w, grid_spacing)[1:]
+                v_blocks = np.vsplit(lbl_slice, grid_spacings_w)
                 all_labels[grid_spacing] = []
                 # Second split label slice horizontally
                 for block in v_blocks:
-                    h_blocks = np.hsplit(block, grid_spacings)
+                    grid_spacings_h = np.arange(0, h, grid_spacing)[1:]
+                    h_blocks = np.hsplit(block, grid_spacings_h)
                     all_labels[grid_spacing].extend(h_blocks)
 
             for grid_spacing, label_patches in all_labels.iteritems():
@@ -322,8 +333,76 @@ class BatchHandler(object):
 
         return target_labels
 
-    def visualize_batch(self, grid_spacing=8):
+    def _generate_test_batch(self, batch_size=8, keep_batch=False):
+        if self.last_test_list_idx is None:
+            self.last_test_list_idx = 0
+        else:
+            # we need to increase the index by one to start with the "next" slice from the test set
+            self.last_test_list_idx += 1
+        self.current_slice_ids = []
+        self.batch_pred_probs = []
+        self.batch_images, self.target_labels_per_roi = [], []
+        # we loop over the slices in the test set, starting
+        for list_idx in np.arange(self.last_test_list_idx, self.last_test_list_idx + batch_size):
+            target_labels = {}
+            # get input images should have 3 channels [3, w, h] and corresponding binary image [w, h]
+            input_channels = self.data_set.test_images[list_idx]
+            label = self.data_set.test_labels[list_idx]
+            roi_area_spec = self.data_set.test_pred_lbl_rois[list_idx]
+            slice_x, slice_y = BoundingBox.convert_to_slices(roi_area_spec)
+
+            if slice_x.start == 0 and slice_x.stop == 0:
+                # does not contain any automatic segmentation mask, continue
+                continue
+
+            # now slice input and label according to roi specifications (automatic segmentation mask roi)
+            input_channels_patch = input_channels[:, slice_x, slice_y]
+            _, w, h = input_channels_patch.shape
+            lbl_slice = label[slice_x, slice_y]
+            # does the patch contain any target voxels?
+            contains_pos_voxels = 1 if np.count_nonzero(lbl_slice) != 0 else 0
+            # store the overall indication whether our slice contains any voxels to be inspected
+            target_labels[1] = np.array([contains_pos_voxels])
+            # construct PyTorch tensor and add a dummy batch dimension in front
+            input_channels_patch = torch.FloatTensor(torch.from_numpy(input_channels_patch[np.newaxis]).float())
+            self.current_slice_ids.append(list_idx)
+            # initialize dictionary target_labels with (currently) three keys for grid-spacing 1 (overall), 4, 8
+            for i in np.arange(2, self.num_of_max_pool_layers + 1):
+                grid_spacing = int(2 ** i)
+                g_w = int(w / grid_spacing)
+                g_h = int(h / grid_spacing)
+                # print("INFO - spacing {} - grid size {}x{}={}".format(grid_spacing, g_w, g_h, g_w * g_h))
+                # looks kind of awkward, but we always use a batch size of 1
+                target_labels[grid_spacing] = torch.zeros((1, g_w * g_h), dtype=torch.long)
+            if contains_pos_voxels:
+                target_labels = self._generate_train_labels(lbl_slice, target_labels, batch_item_nr=0,
+                                                            is_positive=contains_pos_voxels)
+            else:
+                # no target voxels to inspect in ROI
+                pass
+                # print("WARNING - does not contain pos-voxels list_idx {}".format(list_idx))
+            # if on GPU
+            if self.cuda:
+                input_channels_patch = input_channels_patch.cuda()
+                for g_spacing, target_lbls in target_labels.iteritems():
+                    # we don't use grid-spacing key "1" (overall binary indication whether patch contains target
+                    # voxels (pos/neg example)
+                    if g_spacing != 1:
+                        target_labels[g_spacing] = target_lbls.cuda()
+            # we keep the batch details in lists. Actually only used during debugging to make sure the patches
+            # are indeed what we expect them to be.
+            if keep_batch:
+                self.batch_images.append(input_channels_patch)
+                self.target_labels_per_roi.append(target_labels)
+                self.batch_label_slices.append(lbl_slice)
+            yield input_channels_patch, target_labels
+            self.last_test_list_idx = list_idx
+
+    def visualize_batch(self, grid_spacing=8, index_range=None):
+
         mycmap = transparent_cmap(plt.get_cmap('jet'))
+        if index_range is None:
+            index_range = [0, self.batch_size]
 
         width = 16
         height = self.batch_size * 8
@@ -331,31 +410,75 @@ class BatchHandler(object):
         rows = self.batch_size * 2  # 2 because we do double row plotting
         row = 0
         fig = plt.figure(figsize=(width, height))
-
-        for idx in np.arange(self.batch_size):
+        heat_map = None
+        for idx in np.arange(index_range[0], index_range[1]):
             slice_num = self.current_slice_ids[idx]
-            image_slice = self.batch_images[idx][0]
+            if not self.is_train:
+                # during testing batch_images is a list with numpy arrays of shape [1, 3, w, h]
+                # during training it's soley a numpy array of shape [batch_size, 3, w, h]
+                # Hence, during testing we need to get rid of the first dummy batch dimension
+                # idx = list item, first 0 = dummy batch dimension always equal to 1, second 0 = image channel
+                image_slice = self.batch_images[idx][0][0]
+                uncertainty_slice = self.batch_images[idx][0][1]
+                # first list key/index and then dict key 1 for overall indication
+                target_lbl_binary = self.target_labels_per_roi[idx][1][0]
+                target_lbl_binary_grid = self.target_labels_per_roi[idx][grid_spacing][0].data.cpu().numpy()
+                if len(self.batch_pred_probs) != 0:
+                    # the model softmax predictions are store in batch property (list) batch_pred_probs if we enabled
+                    # keep_batch during testing. The shape of np array is [1, w/grid_spacing, h/grid_spacing]
+                    # and we need to get rid of first batch dimension.
+                    pred_probs = np.squeeze(self.batch_pred_probs[idx])
+                    w, h = image_slice.shape
+                    heat_map, grid_map, target_lbl_grid = create_grid_heat_map(pred_probs, grid_spacing, w, h,
+                                                                               target_lbl_binary_grid,
+                                                                               prob_threshold=0.5)
+            else:
+                # training
+                image_slice = self.batch_images[idx][0]
+                uncertainty_slice = self.batch_images[idx][1]
+                target_lbl_binary = self.target_labels_per_roi[1][idx]
+                target_lbl_binary_grid = self.target_labels_per_roi[grid_spacing][idx]
             w, h = image_slice.shape
-            uncertainty_slice = self.batch_images[idx][1]
             # pred_labels_slice = self.batch_images[idx][2]
-            target_lbl_binary = self.target_labels_per_roi[1][idx]
+
             target_slice = self.batch_label_slices[idx]
             ax1 = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
-            ax1.set_title("Slice {} ({})".format(slice_num, idx + 1))
+            ax1.set_title("Slice {} ({}) ".format(slice_num, idx + 1))
             ax1.imshow(image_slice, cmap=cm.gray)
-            ax1.imshow(uncertainty_slice, cmap=mycmap)
-            plt.axis("off")
+            ax1.imshow(target_slice, cmap=mycmap, vmin=0, vmax=1)
+            ax1.set_xticks(np.arange(-.5, h, grid_spacing))
+            ax1.set_yticks(np.arange(-.5, w, grid_spacing))
+            ax1.set_xticklabels([])
+            ax1.set_yticklabels([])
+            plt.grid(True)
 
             ax2 = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
             ax2.imshow(image_slice, cmap=cm.gray)
-            ax2.set_title("Target label {}".format(int(target_lbl_binary)))
-            ax2.imshow(target_slice, cmap=mycmap)
+            ax2.set_title("Contains ta-voxels {}".format(int(target_lbl_binary)))
+
+            if heat_map is not None:
+                ax1.imshow(uncertainty_slice, cmap=mycmap)
+                ax2.imshow(heat_map, cmap=mycmap, vmin=0, vmax=1)
+                for i, map_index in enumerate(zip(grid_map[0], grid_map[1])):
+                    z_i = target_lbl_binary_grid[i]
+                    if z_i == 1:
+                        # BECAUSE, we are using ax2 with imshow, we need to swap x, y coordinates of map_index
+                        ax2.text(map_index[1], map_index[0], '{}'.format(z_i), ha='center', va='center', fontsize=15,
+                                 color="y")
+            else:
+                ax2.imshow(uncertainty_slice, cmap=mycmap)
+                _, grid_map, _ = create_grid_heat_map(None, grid_spacing, w, h, target_lbl_binary_grid,
+                                                      prob_threshold=0.5)
+                for i, map_index in enumerate(zip(grid_map[0], grid_map[1])):
+                    z_i = target_lbl_binary_grid[i]
+                    if z_i == 1:
+                        # BECAUSE, we are using ax2 with imshow, we need to swap x, y coordinates of map_index
+                        ax1.text(map_index[1], map_index[0], '{}'.format(z_i), ha='center', va='center', fontsize=15,
+                                 color="b")
 
             ax2.set_xticks(np.arange(-.5, h, grid_spacing))
             ax2.set_yticks(np.arange(-.5, w, grid_spacing))
-            # ax2.set_xticklabels(np.arange(1, h + 1, grid_spacing))
             ax2.set_xticklabels([])
-            # ax2.set_yticklabels(np.arange(1, w + 1, grid_spacing))
             ax2.set_yticklabels([])
             plt.grid(True)
             # plt.axis("off")
