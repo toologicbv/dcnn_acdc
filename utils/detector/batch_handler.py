@@ -347,7 +347,6 @@ class BatchHandler(object):
 
         if is_positive:
             all_labels = {}
-            print("lbl_slice.shape ", lbl_slice.shape)
             # First split label slice vertically
             for i in np.arange(2, self.num_of_max_pool_layers + 1):
                 grid_spacing = int(2**i)
@@ -365,12 +364,10 @@ class BatchHandler(object):
                 grid_target_labels = np.zeros(len(label_patches))
                 # REMEMBER: label_patches is a list of e.g. 81 in case of maxPool 3 layer which has
                 # a final feature map size of 9x9.
-                print("len(label_patches) ", len(label_patches))
                 for i, label_patch in enumerate(label_patches):
                     label_patch = np.array(label_patch)
                     num_of_positives = np.count_nonzero(label_patch)
                     if target_labels_stats_per_roi is not None:
-                        print(grid_spacing, i, target_labels_stats_per_roi[grid_spacing][batch_item_nr].shape)
                         target_labels_stats_per_roi[grid_spacing][batch_item_nr][i] = num_of_positives
                     grid_target_labels[i] = 1 if 0 != num_of_positives else 0
 
