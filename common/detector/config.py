@@ -38,12 +38,9 @@ class BaseConfig(object):
         # Settings for determining the target areas/pixels to be inspected. used in procedure
         # find_multiple_connected_rois (file box_utils.py)
         self.min_roi_area = 2  # minimum number of 2D 4-connected component. Otherwise target pixels are discarded
-        # if the number of 2D 4-connected components in a structure is smaller than this amount than we fill the
-        # total ROI area (make it rectangular). We do this in order to prevent target structures to be too small
-        self.max_roi_area_for_fill = 10
-
+        self.fraction_negatives = 0.5
         # patch size during training
-        self.patch_size = np.array([72, 72])
+        self.patch_size = np.array([80, 80])
         # the spacing of grids after the last maxPool layer.
         self.max_grid_spacing = 8
         self.architecture = None
@@ -61,6 +58,9 @@ class BaseConfig(object):
                                   'drop_prob': 0.5,
                                   "backward_freq": 1,
                                   "use_extra_classifier": False,
+                                  "use_fn_loss": False,
+                                  "fn_penalty_weight": 0,
+                                  "fp_penalty_weight": 0,
                                   "description": "rd1-detector"},
                              "rd2":
                                  {'model_id': "rd2",
@@ -74,7 +74,26 @@ class BaseConfig(object):
                                   'weight_decay': 0.001,
                                   "backward_freq": 1,
                                   "use_extra_classifier": True,
-                                  "description": "rd2-detector"}
+                                  "use_fn_loss": True,
+                                  "fn_penalty_weight": 1,
+                                  "fp_penalty_weight": 0,
+                                  "description": "rd2-detector"},
+                             "rd3":
+                                 {'model_id': "rd3",
+                                  'base': [16, 'M', 32, 'M', 32, 'M', 64, 'M', 128],
+                                  'num_of_input_channels': 3,
+                                  'num_of_classes': 2,
+                                  'drop_prob': 0.5,
+                                  'use_batch_norm': True,
+                                  'classification_loss': nn.NLLLoss(),
+                                  'optimizer': "adam",
+                                  'weight_decay': 0.001,
+                                  "backward_freq": 1,
+                                  "use_extra_classifier": False,
+                                  "use_fn_loss": True,
+                                  "fn_penalty_weight": 0.75,
+                                  "fp_penalty_weight": 0.5,
+                                  "description": "rd3-detector"}
         }
         self.base_class = "RegionDetector"
         # dictionary of experiment ids
@@ -99,6 +118,7 @@ class BaseConfig(object):
             self.num_of_max_pool = len([i for i, s in enumerate(self.architecture["base"]) if s == 'M'])
             # assuming patch size is quadratic
             self.output_stride = int(self.patch_size[0] / 2 ** self.num_of_max_pool)
+            self.max_grid_spacing = 8
         elif model_name == "rd2":
             self.architecture = self.detector_cfg[model_name]
             # TODO: in the beginning added all maxPool2D layers to 'base' configuration but then
@@ -107,6 +127,15 @@ class BaseConfig(object):
             self.num_of_max_pool = len([i for i, s in enumerate(self.architecture["base"]) if s == 'M']) + 1
             # assuming patch size is quadratic
             self.output_stride = int(self.patch_size[0] / 2 ** self.num_of_max_pool)
+            self.max_grid_spacing = 8
+        elif model_name == "rd3":
+            self.architecture = self.detector_cfg[model_name]
+            self.num_of_max_pool = len([i for i, s in enumerate(self.architecture["base"]) if s == 'M'])
+            # assuming patch size is quadratic
+            self.output_stride = int(self.patch_size[0] / 2 ** self.num_of_max_pool)
+            # patch size during training, we need a slightly bigger patch size 80 instead of 72
+            self.patch_size = np.array([80, 80])
+            self.max_grid_spacing = self.num_of_max_pool ** 2
         else:
             raise NotImplementedError("ERROR - {} is not a valid model name".format(model_name))
 

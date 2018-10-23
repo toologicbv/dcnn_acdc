@@ -114,6 +114,17 @@ def load_region_detector_model(exper_hdl, verbose=False):
         message = "Creating new model RegionDetector: {}".format(exper_hdl.exper.config.architecture["description"])
         if use_logger:
             exper_hdl.logger.info(message)
+            exper_hdl.logger.info("Network configuration details")
+            for c_key, c_value in exper_hdl.exper.config.architecture.iteritems():
+                c_msg = "{} = {}".format(c_key, str(c_value))
+                exper_hdl.logger.info(c_msg)
+            config_det_msg = "#max-pool = {}".format(exper_hdl.exper.config.num_of_max_pool)
+            exper_hdl.logger.info(config_det_msg)
+            config_det_msg = "fraction_negatives = {}".format(exper_hdl.exper.config.fraction_negatives)
+            exper_hdl.logger.info(config_det_msg)
+            config_det_msg = "max_grid_spacing = {}".format(exper_hdl.exper.config.max_grid_spacing)
+            exper_hdl.logger.info(config_det_msg)
+
         else:
             print(message)
         model = RegionDetector(exper_hdl.exper.config.architecture, lr=exper_hdl.exper.run_args.lr, init_weights=True)

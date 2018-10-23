@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import copy
 from matplotlib import pyplot as plt
 from matplotlib import cm
 from plotting.color_maps import transparent_cmap
@@ -10,10 +11,8 @@ from common.detector.helper import create_grid_heat_map
 
 class BatchHandler(object):
 
-    fraction_negatives = 2./3
-
     def __init__(self, data_set, is_train=True, cuda=False, verbose=False, keep_bounding_boxes=False,
-                 backward_freq=1):
+                 backward_freq=1, num_of_max_pool_layers=None):
         """
             data_set  of object type SliceDetectorDataSet
 
@@ -26,7 +25,7 @@ class BatchHandler(object):
         self.loss = torch.zeros(1)
         self.num_sub_batches = torch.zeros(1)
         self.backward_freq = backward_freq
-        self.current_slice_ids = []
+        self.dataset_slice_ids = []
         self.sample_range = self.data_set.get_size(is_train=is_train)
         self.verbose = verbose
         self.batch_bounding_boxes = None
@@ -44,13 +43,15 @@ class BatchHandler(object):
         self.batch_pred_probs = None
         self.batch_pred_labels = None
         self.batch_gt_labels = None
+        # in order to link slice_ids from the dataset used to generate batches, to the patient_id (for analysis only)
+        self.trans_dict = {}
         # we store the last slice_id we returned for the test batch, so we can chunk the complete test set if
         # necessary. Remember this is an index referring to the slices in list dataset.test_images
         self.last_test_list_idx = None
-        if config_detector.num_of_max_pool is None:
+        if num_of_max_pool_layers is None:
             self.num_of_max_pool_layers = 3
         else:
-            self.num_of_max_pool_layers = config_detector.num_of_max_pool
+            self.num_of_max_pool_layers = num_of_max_pool_layers
 
         if self.cuda:
             self.loss = self.loss.cuda()
@@ -71,7 +72,26 @@ class BatchHandler(object):
             self.num_sub_batches = self.num_sub_batches.cuda()
 
     def add_probs(self, probs):
-        self.batch_pred_probs.extend(probs)
+        self.batch_pred_probs.append(probs)
+
+    def flatten_batch_probs(self):
+        # Only used during testing
+        # batch_pred_probs is a list of numpy arrays with shape [1, w_grid, h_grid]. For our analysis of the model
+        # performance we flatten here all probs and concatenate them into ONE np array
+        flattend_probs = np.empty(0)
+        for probs in self.batch_pred_probs:
+            flattend_probs = np.concatenate((flattend_probs, probs.flatten()))
+        return flattend_probs
+
+    def fill_trans_dict(self):
+        self.trans_dict = {}
+
+        for slice_id in self.dataset_slice_ids:
+            for patient_id, slice_info in self.data_set.trans_dict.iteritems():
+                if slice_info[0] == self.is_train:
+                    if slice_id in slice_info[1]:
+                        self.trans_dict[slice_id] = patient_id
+                        break
 
     def add_pred_labels(self, pred_labels):
         self.batch_pred_labels.extend(pred_labels)
@@ -86,12 +106,12 @@ class BatchHandler(object):
         else:
             return True
 
-    def __call__(self, batch_size=None, do_balance=True, keep_batch=False):
+    def __call__(self, batch_size=None, do_balance=True, keep_batch=False, disrupt_chnnl=None):
         """
         Construct a batch of shape [batch_size, 3channels, w, h]
                                    3channels: (1) input image
-                                              (2) predicted segmentation mask
-                                              (3) generated (raw/unfiltered) u-map/entropy map
+                                              (2) generated (raw/unfiltered) u-map/entropy map
+                                              (3) predicted segmentation mask
 
         :param batch_size:
         :param patient_id: if not None than we use all slices
@@ -121,7 +141,7 @@ class BatchHandler(object):
             return self.batch_images, self.target_labels_per_roi
         else:
             # during testing we process whole slices and loop over the patient_ids in the test set.
-            return self._generate_test_batch(batch_size, keep_batch=keep_batch)
+            return self._generate_test_batch(batch_size, keep_batch=keep_batch, disrupt_chnnl=disrupt_chnnl)
 
     def _generate_train_batch(self, batch_size, do_balance=True):
         """
@@ -134,7 +154,7 @@ class BatchHandler(object):
                  (3) target_labels: dictionary (key batch-item-nr) of dictionary torch.LongTensors.
                                                                 keys 1, 4, 8 (currently representing grid spacing)
         """
-        num_of_negatives = int(batch_size * BatchHandler.fraction_negatives)
+        num_of_negatives = int(batch_size * config_detector.fraction_negatives)
         num_of_positives = batch_size - num_of_negatives
         negative_idx = []
         positive_idx = []
@@ -218,7 +238,7 @@ class BatchHandler(object):
                                                         is_positive=overall_lbls)
             target_labels[1][b] = overall_lbls
             b += 1
-            self.current_slice_ids.append(slice_area_spec[0])
+            self.dataset_slice_ids.append(slice_area_spec[0])
         for slice_area_spec in negative_idx:
             # print("INFO - Negatives slice num {}".format(slice_area_spec))
             # _create_train_batch_item returns: torch.FloatTensor [3, patch_size, patch_size],
@@ -229,7 +249,7 @@ class BatchHandler(object):
                                                                                              batch_item_nr=b)
             target_labels[1][b] = overall_lbls
             b += 1
-            self.current_slice_ids.append(slice_area_spec[0])
+            self.dataset_slice_ids.append(slice_area_spec[0])
 
         return batch_imgs, np_batch_lbls, target_labels
 
@@ -324,8 +344,10 @@ class BatchHandler(object):
         if is_positive == 0:
             raise ValueError("ERROR - _generate_train_labels. is_positive must be equal to True/1, not {}"
                              "".format(is_positive))
+
         if is_positive:
             all_labels = {}
+            print("lbl_slice.shape ", lbl_slice.shape)
             # First split label slice vertically
             for i in np.arange(2, self.num_of_max_pool_layers + 1):
                 grid_spacing = int(2**i)
@@ -343,12 +365,15 @@ class BatchHandler(object):
                 grid_target_labels = np.zeros(len(label_patches))
                 # REMEMBER: label_patches is a list of e.g. 81 in case of maxPool 3 layer which has
                 # a final feature map size of 9x9.
+                print("len(label_patches) ", len(label_patches))
                 for i, label_patch in enumerate(label_patches):
                     label_patch = np.array(label_patch)
                     num_of_positives = np.count_nonzero(label_patch)
                     if target_labels_stats_per_roi is not None:
+                        print(grid_spacing, i, target_labels_stats_per_roi[grid_spacing][batch_item_nr].shape)
                         target_labels_stats_per_roi[grid_spacing][batch_item_nr][i] = num_of_positives
                     grid_target_labels[i] = 1 if 0 != num_of_positives else 0
+
                 target_labels[grid_spacing][batch_item_nr] = \
                     torch.LongTensor(torch.from_numpy(grid_target_labels).long())
 
@@ -358,14 +383,14 @@ class BatchHandler(object):
         else:
             return target_labels
 
-    def _generate_test_batch(self, batch_size=8, keep_batch=False):
+    def _generate_test_batch(self, batch_size=8, keep_batch=False, disrupt_chnnl=None):
         if self.last_test_list_idx is None:
             self.last_test_list_idx = 0
         else:
             # we need to increase the index by one to start with the "next" slice from the test set
             self.last_test_list_idx += 1
         self.num_of_skipped_slices = 0
-        self.current_slice_ids = []
+        self.dataset_slice_ids = []
         self.batch_pred_probs = []
         self.batch_pred_labels = []
         self.batch_gt_labels = []
@@ -374,13 +399,19 @@ class BatchHandler(object):
         for i in np.arange(2, self.num_of_max_pool_layers + 1):
             grid_spacing = int(2 ** i)
             self.target_labels_stats_per_roi[grid_spacing] = []
-
+        if disrupt_chnnl is not None:
+            print("WARNING - Disrupting input channel {}".format(disrupt_chnnl))
         # we loop over the slices in the test set, starting
         for list_idx in np.arange(self.last_test_list_idx, self.last_test_list_idx + batch_size):
             target_labels = {}
             target_labels_stats_per_roi = {}
             # get input images should have 3 channels [3, w, h] and corresponding binary image [w, h]
-            input_channels = self.data_set.test_images[list_idx]
+            if disrupt_chnnl is not None:
+                input_channels = copy.deepcopy(self.data_set.test_images[list_idx])
+                _, w, h = input_channels.shape
+                input_channels[disrupt_chnnl] = np.random.randn(w, h)
+            else:
+                input_channels = self.data_set.test_images[list_idx]
             label = self.data_set.test_labels[list_idx]
             roi_area_spec = self.data_set.test_pred_lbl_rois[list_idx]
             slice_x, slice_y = BoundingBox.convert_to_slices(roi_area_spec)
@@ -402,7 +433,7 @@ class BatchHandler(object):
             target_labels_stats_per_roi[1] = np.array([contains_pos_voxels])
             # construct PyTorch tensor and add a dummy batch dimension in front
             input_channels_patch = torch.FloatTensor(torch.from_numpy(input_channels_patch[np.newaxis]).float())
-            self.current_slice_ids.append(list_idx)
+            self.dataset_slice_ids.append(list_idx)
             # initialize dictionary target_labels with (currently) three keys for grid-spacing 1 (overall), 4, 8
             for i in np.arange(2, self.num_of_max_pool_layers + 1):
                 grid_spacing = int(2 ** i)
@@ -413,6 +444,7 @@ class BatchHandler(object):
                 target_labels[grid_spacing] = torch.zeros((1, g_w * g_h), dtype=torch.long)
                 # we need the dummy batch dimension (which is always 1) for the _generate_batch_labels method
                 target_labels_stats_per_roi[grid_spacing] = np.zeros((1, g_w * g_h))
+
             if contains_pos_voxels:
                 target_labels, target_labels_stats_per_roi = self._generate_batch_labels(lbl_slice, target_labels,
                                                                                          batch_item_nr=0,
@@ -447,16 +479,23 @@ class BatchHandler(object):
         mycmap = transparent_cmap(plt.get_cmap('jet'))
         if index_range is None:
             index_range = [0, self.batch_size]
+        slice_idx_generator = np.arange(index_range[0], index_range[1])
+        number_of_slices = slice_idx_generator.shape[0]
 
         width = 16
-        height = self.batch_size * 8
+        height = number_of_slices * 8
+        print("number_of_slices {} height, width {}, {}".format(number_of_slices, height, width))
         columns = 4
-        rows = self.batch_size * 2  # 2 because we do double row plotting
+        rows = number_of_slices * 2  # 2 because we do double row plotting
         row = 0
         fig = plt.figure(figsize=(width, height))
         heat_map = None
-        for idx in np.arange(index_range[0], index_range[1]):
-            slice_num = self.current_slice_ids[idx]
+        for idx in slice_idx_generator:
+            slice_num = self.dataset_slice_ids[idx]
+            if self.batch_label_slices is not None and len(self.batch_label_slices) != 0:
+                target_slice = self.batch_label_slices[idx]
+            else:
+                print("WARNING - self.batch_label_slices is empty")
             if not self.is_train:
                 # during testing batch_images is a list with numpy arrays of shape [1, 3, w, h]
                 # during training it's soley a numpy array of shape [batch_size, 3, w, h]
@@ -471,7 +510,8 @@ class BatchHandler(object):
                     # the model softmax predictions are store in batch property (list) batch_pred_probs if we enabled
                     # keep_batch during testing. The shape of np array is [1, w/grid_spacing, h/grid_spacing]
                     # and we need to get rid of first batch dimension.
-                    pred_probs = np.squeeze(self.batch_pred_probs[idx])
+                    p = self.batch_pred_probs[idx]
+                    pred_probs = np.squeeze(p)
                     w, h = image_slice.shape
                     heat_map, grid_map, target_lbl_grid = create_grid_heat_map(pred_probs, grid_spacing, w, h,
                                                                                target_lbl_binary_grid,
@@ -483,13 +523,11 @@ class BatchHandler(object):
                 target_lbl_binary = self.target_labels_per_roi[1][idx]
                 target_lbl_binary_grid = self.target_labels_per_roi[grid_spacing][idx]
             w, h = image_slice.shape
-            # pred_labels_slice = self.batch_images[idx][2]
 
-            target_slice = self.batch_label_slices[idx]
             ax1 = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
             ax1.set_title("Slice {} ({}) ".format(slice_num, idx + 1))
             ax1.imshow(image_slice, cmap=cm.gray)
-            ax1.imshow(target_slice, cmap=mycmap, vmin=0, vmax=1)
+            # ax1.imshow(target_slice, cmap=mycmap, vmin=0, vmax=1)
             ax1.set_xticks(np.arange(-.5, h, grid_spacing))
             ax1.set_yticks(np.arange(-.5, w, grid_spacing))
             ax1.set_xticklabels([])
@@ -501,7 +539,11 @@ class BatchHandler(object):
             ax2.set_title("Contains ta-voxels {}".format(int(target_lbl_binary)))
 
             if heat_map is not None:
+                fontsize = 10 if grid_spacing == 4 else 15
                 ax1.imshow(uncertainty_slice, cmap=mycmap)
+                ax2.imshow(target_slice, cmap=mycmap, vmin=0, vmax=1)
+                # automatic seg-mask
+                # ax2.imshow(self.batch_images[idx][0][2], cmap=mycmap)
                 ax2.imshow(heat_map, cmap=mycmap, vmin=0, vmax=1)
                 for i, map_index in enumerate(zip(grid_map[0], grid_map[1])):
                     z_i = target_lbl_binary_grid[i]
@@ -512,13 +554,13 @@ class BatchHandler(object):
             else:
                 ax2.imshow(uncertainty_slice, cmap=mycmap)
                 _, grid_map, _ = create_grid_heat_map(None, grid_spacing, w, h, target_lbl_binary_grid,
-                                                      prob_threshold=0.5)
+                                                      prob_threshold=0.)
                 for i, map_index in enumerate(zip(grid_map[0], grid_map[1])):
                     z_i = target_lbl_binary_grid[i]
                     if z_i == 1:
                         # BECAUSE, we are using ax2 with imshow, we need to swap x, y coordinates of map_index
-                        ax1.text(map_index[1], map_index[0], '{}'.format(z_i), ha='center', va='center', fontsize=15,
-                                 color="b")
+                        ax1.text(map_index[1], map_index[0], '{}'.format(z_i), ha='center', va='center',
+                                 fontsize=fontsize, color="b")
 
             ax2.set_xticks(np.arange(-.5, h, grid_spacing))
             ax2.set_yticks(np.arange(-.5, w, grid_spacing))

@@ -27,11 +27,13 @@ def find_multiple_connected_rois(label_slice, padding=1, min_size=config_detecto
     :param padding: in fact extending the roi area that we detected. Because the target structure is of connectivity
                     six (3x3), we at least extend by 1 pixel to both sides
     :param min_size: the minimum area size of the 2D 4-connected component
-    :return:
+    :return: roi_binary_mask: the new label_slice containing binary values indicating whether a voxels should
+             be detected as "to be examined" voxel
     """
     structure = [[0, 1, 0],
                      [1, 1, 1],
                      [0, 1, 0]]
+    # find 4-connected components in slice
     cc_labels, n_comps = label(label_slice, structure=structure)
     roi_boxes = np.empty((0, 4))
     roi_box_areas = []
@@ -47,10 +49,13 @@ def find_multiple_connected_rois(label_slice, padding=1, min_size=config_detecto
             roi_box_areas.append(roi_box.area)
             roi_boxes = np.concatenate((roi_boxes, roi_box.box_four[np.newaxis])) if roi_boxes.size else \
                 roi_box.box_four[np.newaxis]
-            # if comp_mask_size <= config_detector.max_roi_area_for_fill:
-            #    roi_binary_mask[roi_box.slice_x, roi_box.slice_y] = 1
-            # else:
+
             roi_binary_mask[cc_labels == i_comp] = 1
+        else:
+            # we discard voxels of the auto-seg mask as targets (for detection) if the 4-connected component
+            # comprises less than min_size=currently 2 (see config file) voxels.
+            # roi_binary_mask is already set to zero for these voxels
+            pass
     del cc_labels
     del comp_mask
 
@@ -148,7 +153,7 @@ def find_box_four_rois(label_slice):
     return roi_boxes
 
 
-def adjust_roi_bounding_box(roi_bbox, slice_idx=None):
+def adjust_roi_bounding_box(roi_bbox, slice_idx=None, config=config_detector):
     """
 
     :param roi_bbox: BoundingBox object
@@ -157,11 +162,11 @@ def adjust_roi_bounding_box(roi_bbox, slice_idx=None):
              e.g. 8 voxels.
     """
     # patch_size that is used during training, currently 72x72.
-    half_width = config_detector.patch_size[0] / 2
+    half_width = config.patch_size[0] / 2
     w, h = roi_bbox.width, roi_bbox.height
     tiny_w = False
     tiny_h = False
-    if w < config_detector.patch_size[0]:
+    if w < config.patch_size[0]:
         mid_point = (roi_bbox.slice_x.stop + roi_bbox.slice_x.start) / 2
         roi_bbox.slice_x = slice(mid_point - half_width, mid_point + half_width, 0)
         roi_bbox.width = roi_bbox.slice_x.stop - roi_bbox.slice_x.start
@@ -172,7 +177,7 @@ def adjust_roi_bounding_box(roi_bbox, slice_idx=None):
         if slice_idx is not None:
             print("WARNING - width >= patch_size - slice {}".format(slice_idx))
 
-    if h < config_detector.patch_size[0]:
+    if h < config.patch_size[0]:
         mid_point = (roi_bbox.slice_y.stop + roi_bbox.slice_y.start) / 2
         roi_bbox.slice_y = slice(mid_point - half_width, mid_point + half_width, 0)
         roi_bbox.height = roi_bbox.slice_y.stop - roi_bbox.slice_y.start
@@ -183,19 +188,19 @@ def adjust_roi_bounding_box(roi_bbox, slice_idx=None):
         if slice_idx is not None:
             print("WARNING - height >= patch_size - slice {}".format(slice_idx))
 
-    if w % config_detector.max_grid_spacing != 0:
-        extend_w = config_detector.max_grid_spacing - (w % config_detector.max_grid_spacing)
+    if w % config.max_grid_spacing != 0:
+        extend_w = config.max_grid_spacing - (w % config.max_grid_spacing)
     else:
         extend_w = 0
-    if h % config_detector.max_grid_spacing != 0:
-        extend_h = config_detector.max_grid_spacing - (h % config_detector.max_grid_spacing)
+    if h % config.max_grid_spacing != 0:
+        extend_h = config.max_grid_spacing - (h % config.max_grid_spacing)
     else:
         extend_h = 0
     # if our mask is greater than the training patch size (currently 72x72) then we make it even bigger
     if not tiny_w:
-        extend_w += config_detector.max_grid_spacing
+        extend_w += config.max_grid_spacing
     if not tiny_h:
-        extend_h += config_detector.max_grid_spacing
+        extend_h += config.max_grid_spacing
 
     if extend_w % 2 != 0:
         extend_w_x = extend_w / 2

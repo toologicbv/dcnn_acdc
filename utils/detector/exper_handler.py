@@ -7,7 +7,9 @@ import torch
 from collections import OrderedDict
 import numpy as np
 from common.common import create_logger
-from sklearn.metrics import precision_recall_curve, roc_curve, auc
+from sklearn.metrics import auc
+
+from scipy.signal import convolve2d
 
 from models.model_handler import load_region_detector_model
 from common.detector.config import config_detector
@@ -107,43 +109,57 @@ class ExperimentHandler(object):
         std_auc_roc = np.std(self.aucs_roc)
         self.stats_auc_roc = tuple((mean_auc_roc, std_auc_roc))
 
-    def run_eval(self, data_set, model, keep_features=False, verbose=False, eval_size=None, keep_batch=False):
+    def run_eval(self, data_set, model, verbose=False, eval_size=None, keep_batch=False):
         self.reset_eval_metrics()
         not_one_tp = True
         eval_set_size = data_set.get_size(is_train=False)
         # Currently not using the complete test set
         if eval_size is not None and eval_set_size > eval_size:
             eval_set_size = eval_size
-
-        eval_batch = BatchHandler(data_set=data_set, is_train=False, cuda=self.exper.run_args.cuda, backward_freq=1)
-        if keep_features:
-            # TODO: this is currently not working, the keep_features functionality. we should implement this
-            # TODO in order to check whether there're clusters in the features of the last conv-layer
-            spp_features = np.empty((0, model.fc_no_params))
-
-            np_extra_lbls = np.empty(0)
+        print("self.exper.config.num_of_max_pool ", self.exper.config.num_of_max_pool)
+        eval_batch = BatchHandler(data_set=data_set, is_train=False, cuda=self.exper.run_args.cuda, backward_freq=1,
+                                  num_of_max_pool_layers=self.exper.config.num_of_max_pool)
         model.eval()
         # we use the following 3 arrays to collect the predicted (and gt) results in order to calculate the
         # final performance measures (f1, roc_auc, pr_auc, rec, precision
         np_gt_labels = np.empty(0)
         np_pred_labels = np.empty(0)
         np_pred_probs = np.empty(0)
-        for x_input, y_labels_dict in eval_batch(batch_size=eval_set_size, keep_batch=keep_batch):
+        """
+            Parameter: disrupt_chnnl {None, 0, 1, 2} 
+            Input channels for network: 0=mri image 1=uncertainty map 2=auto seg-mask
+        """
+        for x_input, y_labels_dict in eval_batch(batch_size=eval_set_size, keep_batch=keep_batch, disrupt_chnnl=None):
             # New in pytorch 0.4.0, use local context manager to turn off history tracking
             with torch.set_grad_enabled(False):
                 # batch_size=None and do_balance=True => number of degenerate slices/per patient determines
                 #                                        the batch_size.
                 # batch_size=None and do_balance=False => classify all slices for a particular patient
-                y_lbl_grid8 = y_labels_dict[8]
+                """
+                    NOTE: we can evaluate the model with grid-spacing 8 or 4 (default former)
+                    grid-spacing 8: y_pred_lbls = y_lbl_grid8 and pred_probs = pred_probs_list[0]
+                    grid-spacing 4: y_pred_lbls = y_lbl_grid4 and pred_probs = pred_probs_list[1]
+                """
+                y_lbl_max_grid = y_labels_dict[self.exper.config.max_grid_spacing]
                 y_lbl_grid4 = y_labels_dict[4]
-                eval_loss, pred_probs = model.do_forward_pass(x_input, y_lbl_grid8, y_labels_extra=y_lbl_grid4)
-                pred_labels = np.argmax(pred_probs.data.cpu().numpy(), axis=1)
-                if keep_features:
-                    spp_features = np.vstack([spp_features, model.features]) if spp_features.size else model.features
-                    np_labels = np.concatenate((np_labels, y_lbl_grid8.data.cpu().numpy()))
-            # first convert to numpy
-            pred_probs = pred_probs.data.cpu().numpy()
-            np_gt_labels = np.concatenate((np_gt_labels, (y_lbl_grid8.data.cpu().numpy()).flatten()))
+                y_pred_lbls = y_lbl_max_grid
+                eval_loss, pred_probs_list = model.do_forward_pass(x_input, y_lbl_max_grid, y_labels_extra=y_lbl_grid4)
+                # 0 index = 8 grid-spacing hence 9x9 predictions
+                # 1 index = 4 grid-spacing hence 18x18 predictions
+                pred_probs = pred_probs_list[0]
+                pred_probs = pred_probs.data.cpu().numpy()
+                pred_labels = np.argmax(pred_probs, axis=1)
+            # NOTE: THIS IS EXPERIMENTAL STUFF: we convolve the pred_labels i.o.t. smooth them. Increases recall
+            #                                   and reduce precision.
+            # pred_labels = convolve2d(pred_labels.squeeze(), np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]]), mode="same",
+            #                         boundary="wrap")
+            # pred_labels[pred_labels != 0] = 1
+            # pred_labels = pred_labels.astype(np.bool)
+            # other than pred_labels and gt_labels we store pred_probs per slice because we want the softmax-probs
+            # per slice in the grid form (probably 8x8) in order to produce the probs heat map per slice (batch_handler)
+            if keep_batch:
+                eval_batch.add_probs(pred_probs[:, 1])
+            np_gt_labels = np.concatenate((np_gt_labels, (y_pred_lbls.data.cpu().numpy()).flatten()))
             np_pred_labels = np.concatenate((np_pred_labels, pred_labels.flatten()))
             # Remember, we're only interested in the softmax-probs for the positive class
             np_pred_probs = np.concatenate((np_pred_probs, pred_probs[:, 1].flatten()))
@@ -157,7 +173,6 @@ class ExperimentHandler(object):
             compute_eval_metrics(np_gt_labels, np_pred_labels, np_pred_probs)
         # keep predicted probs & labels
         if keep_batch:
-            eval_batch.add_probs(np_pred_probs)
             eval_batch.add_pred_labels(np_pred_labels)
             eval_batch.add_gt_labels(np_gt_labels)
         if f1 != -1:
@@ -181,8 +196,6 @@ class ExperimentHandler(object):
                                                                           self.num_of_neg_eval_slices,
                                                                           self.num_of_pos_eval_slices,
                                                                           f1, roc_auc, pr_auc, prec, rec))
-        if keep_features:
-            self._save_eval_features(spp_features, np_labels, np_extra_lbls)
         model.train()
         if keep_batch:
             return eval_batch
@@ -237,8 +250,7 @@ class ExperimentHandler(object):
         start_time = time.time()
         self.info("INFO - Begin test run {}".format(test_id))
         test_stats = {}
-        self.run_eval(data_set=data_set, model=model, do_balance=False, keep_features=keep_features,
-                      do_permute=do_permute, verbose=verbose)
+        self.run_eval(data_set=data_set, model=model, verbose=verbose)
         test_stats["loss"] = self.eval_loss
         test_stats["f1"] = self.arr_eval_metrics[0]
         test_stats["roc_auc"] = self.arr_eval_metrics[1]

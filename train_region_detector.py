@@ -30,7 +30,8 @@ def training(args):
     dataset = create_dataset(seg_exper_ensemble, train_fold_id=exper_hdl.exper.run_args.fold_id,
                              quick_run=exper_hdl.exper.run_args.quick_run,
                              type_of_map=exper_hdl.exper.run_args.type_of_map,
-                             num_of_input_chnls=exper_hdl.exper.run_args.num_input_chnls)
+                             num_of_input_chnls=exper_hdl.exper.run_args.num_input_chnls,
+                             model_name=exper_hdl.exper.run_args.model)
 
     # Load model. In the same procedure the model is assigned to the CPU or GPU
     rd_model = load_region_detector_model(exper_hdl)
@@ -38,7 +39,8 @@ def training(args):
     # IMPORTANT: I AM CURRENTLY NOT USING THE FUNCTIONALITY TO RUN MULTIPLE BATCHES PER EPOCH!!!
     exper_hdl.exper.batches_per_epoch = 1
     train_batch = BatchHandler(data_set=dataset, is_train=True, cuda=args.cuda, verbose=False,
-                               keep_bounding_boxes=False, backward_freq=rd_model.backward_freq)
+                               keep_bounding_boxes=False, backward_freq=rd_model.backward_freq,
+                               num_of_max_pool_layers=config_detector.num_of_max_pool)
     mean_epoch_loss = []
     # mean_epoch_stats = np.zeros((exper_hdl.exper.run_args.print_freq, ))
     for epoch_id in range(exper_hdl.exper.run_args.epochs):
@@ -46,9 +48,12 @@ def training(args):
         start_time = time.time()
         x_input, y_lbl_dict = train_batch(batch_size=args.batch_size, do_balance=True)
         # returns cross-entropy loss (binary) and predicted probabilities [batch-size, 2] for this batch
-        y_lbl_grid8 = y_lbl_dict[8]
+        y_lbl_max_grid = y_lbl_dict[config_detector.max_grid_spacing]
         y_lbl_grid4 = y_lbl_dict[4]
-        loss, pred_probs = rd_model.do_forward_pass(x_input, y_lbl_grid8, y_labels_extra=y_lbl_grid4)
+        # pred_probs is a list with two items (1) softmax last layer grid 9x9 (2) extra classifier softmax
+        loss, pred_probs_list = rd_model.do_forward_pass(x_input, y_lbl_max_grid, y_labels_extra=y_lbl_grid4)
+        # currently only processing the 9x9 predictions
+        pred_probs = pred_probs_list[0]
         train_batch.add_loss(loss)
         exper_hdl.set_loss(loss.item())
         mean_epoch_loss.append(loss.item())
@@ -85,7 +90,7 @@ def training(args):
             np_pred_probs = pred_probs.data.cpu().numpy()
             mean_epoch_loss = np.mean(mean_epoch_loss)
             f1, roc_auc, pr_auc, prec, rec, fpr, tpr, precision, recall = \
-                compute_eval_metrics(y_lbl_grid8.data.cpu().numpy(), np.argmax(pred_probs.data.cpu().numpy(), axis=1),
+                compute_eval_metrics(y_lbl_max_grid.data.cpu().numpy(), np.argmax(pred_probs.data.cpu().numpy(), axis=1),
                                      np_pred_probs[:, 1])
 
             exper_hdl.logger.info("End epoch ID: {} mean-loss {:.3f} / f1={:.3f} / roc_auc={:.3f} / "
@@ -126,7 +131,7 @@ CUDA_VISIBLE_DEVICES=0 python train_region_detector.py --use_cuda --batch_size=1
 --epochs=2000 --model=rd1 --lr=0.0001 --fold_id=0 --type_of_map=e_map --quick_run
 
 
-CUDA_VISIBLE_DEVICES=0 nohup python train_slice_detector.py --use_cuda --batch_size=4 --val_freq=100 --print_freq=25
---epochs=5000 --model=sdvgg11_bn --lr=0.00005 --fold_id=0 --type_of_map=e_map --chkpnt --chkpnt_freq=1500
-> /home/jorg/tmp/tr_sdvgg_f3_6000_bs8.log 2>&1&
+CUDA_VISIBLE_DEVICES=2 nohup python train_region_detector.py --use_cuda --batch_size=32 --val_freq=2000 
+ --print_freq=500 --lr=0.0001 --model=rd3 --fold_id=0  --epochs=50000 --type_of_map=e_map --chkpnt 
+ --chkpnt_freq=25000 > /home/jorg/tmp/rd2_detector_emaps.log 2>&1&
 """

@@ -40,6 +40,12 @@ class RegionDetector(nn.Module):
         self.log_softmax_layer = nn.LogSoftmax(dim=1)
         self.loss_function = model_cfg["classification_loss"]
         self.use_extra_classifier = model_cfg["use_extra_classifier"]
+        self.use_fn_loss = model_cfg["use_fn_loss"]
+        self.fn_penalty_weight = model_cfg["fn_penalty_weight"]
+        if "fp_penalty_weight" in model_cfg.keys():
+            self.fp_penalty_weight = model_cfg["fp_penalty_weight"]
+        else:
+            self.fp_penalty_weight = 0.25
         self._compute_num_trainable_params()
         print("INFO - RegionDetector - debug - total #parameters {}".format(self.model_total_params))
 
@@ -68,6 +74,7 @@ class RegionDetector(nn.Module):
                 nn.Conv2d(32, 64, kernel_size=3, padding=1),
                 nn.BatchNorm2d(64),
                 nn.ReLU(inplace=True),
+                # This is actually fully convolutional part instead of fc
                 nn.Conv2d(64, 128, kernel_size=1, padding=0),
                 nn.ReLU(inplace=True),
                 nn.Dropout(p=self.drop_prob),
@@ -85,6 +92,17 @@ class RegionDetector(nn.Module):
                 # This is actually fully convolutional part instead of fc
                 nn.Conv2d(64, 128, kernel_size=1, padding=0),
                 nn.ReLU(inplace=True),
+                nn.Dropout(p=self.drop_prob),
+                nn.Conv2d(128, self.nclasses, kernel_size=1, padding=0),
+            )
+
+        elif model_cfg["model_id"] == "rd3":
+            self.classifier = nn.Sequential(
+                nn.Conv2d(num_of_channels_last_layer, 128, kernel_size=1, padding=0),
+                nn.ReLU(True),
+                nn.Dropout(p=self.drop_prob),
+                nn.Conv2d(num_of_channels_last_layer, 128, kernel_size=1, padding=0),
+                nn.ReLU(True),
                 nn.Dropout(p=self.drop_prob),
                 nn.Conv2d(128, self.nclasses, kernel_size=1, padding=0),
             )
@@ -127,9 +145,38 @@ class RegionDetector(nn.Module):
                 self.parameters(), lr=lr, weight_decay=self.weight_decay, betas=(0.9, 0.999))
         self.lr = lr
 
-    def get_loss(self, pred_lbls, lbls, average=False):
+    def get_loss(self, log_pred_probs, lbls, average=False, pred_probs=None):
+        """
+
+        :param log_pred_probs: LOG predicted probabilities [batch_size, 2, w, h]
+        :param lbls: ground truth labels [batch_size, w, h ]
+        :param average:
+        :param pred_probs: [batch_size, 2, w, h]
+        :return: torch scalar
+        """
         # The input given through a forward call is expected to contain log-probabilities of each class
-        b_loss = self.loss_function(pred_lbls, lbls)
+        b_loss = self.loss_function(log_pred_probs, lbls)
+        if self.use_fn_loss:
+            # pred_probs last 2 dimensions need to be merged because lbls has shape [batch_size, w, h ]
+            pred_probs = pred_probs.view(pred_probs.size(0), 2, -1)
+            fn_soft = pred_probs[:, 0] * lbls.float()
+            fn_nonzero = torch.nonzero(fn_soft.data).size(0)
+            if fn_nonzero != 0:
+                t = torch.sum(fn_soft)
+                fn_soft = torch.sum(fn_soft) * 1 / float(fn_nonzero)
+                # print("EXTRA INFO b_loss {:.3f} + loss={:.3f} - "
+                #      "fn_soft {:.3f} fn_nonzero {}".format(b_loss.item(), fn_soft.item(), t.item(), fn_nonzero))
+            else:
+                fn_soft = torch.mean(fn_soft)
+            # same for false positive
+            ones = torch.ones(lbls.size()).cuda()
+            fp_soft = (ones - lbls.float()) * pred_probs[:, 1]
+            fp_nonzero = torch.nonzero(fp_soft).size(0)
+            if fp_nonzero != 0:
+                fp_soft = torch.sum(fp_soft) * 1 / float(fp_nonzero)
+            else:
+                fp_soft = torch.mean(fp_soft)
+            b_loss = b_loss + self.fn_penalty_weight * fn_soft + self.fp_penalty_weight * fp_soft
         if average:
             # assuming first dim contains batch dimension
             b_loss = torch.mean(b_loss, dim=0)
@@ -138,13 +185,14 @@ class RegionDetector(nn.Module):
     def do_forward_pass(self, x_input, y_labels, y_labels_extra=None):
         out, out_extra = self(x_input)
         batch_size, channels, _, _ = out["log_softmax"].size()
-        loss = self.get_loss(out["log_softmax"].view(batch_size, channels, -1), y_labels, average=False)
+        loss = self.get_loss(out["log_softmax"].view(batch_size, channels, -1), y_labels, average=False,
+                             pred_probs=out["softmax"])
         if out_extra is not None and y_labels_extra is not None:
             loss_extra = self.get_loss(out_extra["log_softmax"].view(batch_size, channels, -1), y_labels_extra,
-                                       average=False)
+                                       average=False, pred_probs=out_extra["softmax"])
             loss += loss_extra
 
-        return loss, out["softmax"]
+        return loss, [out["softmax"], None if out_extra is None else out_extra["softmax"]]
 
     def _compute_num_trainable_params(self):
         self.model_total_params = sum(p.numel() for p in self.parameters() if p.requires_grad)

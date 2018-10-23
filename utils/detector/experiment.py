@@ -135,9 +135,8 @@ class Experiment(object):
         # experiments
         map_name = "no" + self.run_args.type_of_map.replace("_", "") if self.run_args.use_no_map else \
             self.run_args.type_of_map.replace("_", "")
-        prob = "p" + str(seg_exper.run_args.drop_prob).replace(".", "")
-        prob += "_" + loss_func_name + "_" + map_name
+        map_name = "_" + loss_func_name + "_" + map_name
         exper_label = self.run_args.model + "_f" + str(seg_exper.run_args.fold_ids[0]) + \
-                      prob + "_" + str(self.run_args.epochs / 1000) + "KE"
+                      map_name + "_" + str(self.run_args.epochs / 1000) + "KE"
 
         return exper_label

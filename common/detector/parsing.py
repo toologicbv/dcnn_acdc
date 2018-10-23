@@ -7,7 +7,7 @@ def do_parse_args():
     # Training settings
     parser = argparse.ArgumentParser(description='PyTorch VGG-style region detection model')
 
-    parser.add_argument('--model', default="rd1", choices=['rd1', 'rd2'])
+    parser.add_argument('--model', default="rd1", choices=['rd1', 'rd2', 'rd3'])
     parser.add_argument('--version', type=str, default='v1')
     # basics
     parser.add_argument('--use_cuda', action='store_true', default=False,
