@@ -67,6 +67,7 @@ class BaseConfig(object):
         # directory for models
         self.model_path = "models"
         self.numpy_save_filename = "aug_"
+        self.bayes_umap_suffix = "_umaps.npz"
 
         # optimizer
         self.optimizer = "adam"

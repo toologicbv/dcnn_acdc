@@ -1,5 +1,6 @@
 import torch.nn as nn
 import math
+import copy
 import torch
 from models.detector.vgg_style_model import make_layers
 from common.detector.config import config_detector
@@ -41,13 +42,13 @@ class RegionDetector(nn.Module):
         self.loss_function = model_cfg["classification_loss"]
         self.use_extra_classifier = model_cfg["use_extra_classifier"]
         self.use_fn_loss = model_cfg["use_fn_loss"]
-        self.fn_penalty_weight = model_cfg["fn_penalty_weight"]
-        if "fp_penalty_weight" in model_cfg.keys():
+        if self.use_fn_loss:
+            self.fn_penalty_weight = model_cfg["fn_penalty_weight"]
             self.fp_penalty_weight = model_cfg["fp_penalty_weight"]
         else:
-            self.fp_penalty_weight = 0.25
+            self.fn_penalty_weight = 0
+            self.fp_penalty_weight = 0
         self._compute_num_trainable_params()
-        print("INFO - RegionDetector - debug - total #parameters {}".format(self.model_total_params))
 
     def _make_classifiers(self, model_cfg):
         # get the last sequential module, -1=MaxPooling, -2=[Conv2d, Batchnorm, ReLU]
@@ -65,17 +66,22 @@ class RegionDetector(nn.Module):
                 nn.Conv2d(num_of_channels_last_layer, 128, kernel_size=1, padding=0),
                 nn.ReLU(True),
                 nn.Dropout(p=self.drop_prob),
+                nn.Conv2d(128, 128, kernel_size=1, padding=0),
+                nn.ReLU(True),
+                nn.Dropout(p=self.drop_prob),
                 nn.Conv2d(128, self.nclasses, kernel_size=1, padding=0),
             )
 
         elif model_cfg["model_id"] == "rd2":
             self.classifier_extra = nn.Sequential(
-                nn.Conv2d(num_of_channels_last_layer, 32, kernel_size=1, padding=0),
-                nn.Conv2d(32, 64, kernel_size=3, padding=1),
+                nn.Conv2d(num_of_channels_last_layer, 64, kernel_size=3, padding=1),
                 nn.BatchNorm2d(64),
                 nn.ReLU(inplace=True),
                 # This is actually fully convolutional part instead of fc
                 nn.Conv2d(64, 128, kernel_size=1, padding=0),
+                nn.ReLU(inplace=True),
+                nn.Dropout(p=self.drop_prob),
+                nn.Conv2d(128, 128, kernel_size=1, padding=0),
                 nn.ReLU(inplace=True),
                 nn.Dropout(p=self.drop_prob),
                 nn.Conv2d(128, self.nclasses, kernel_size=1, padding=0),
@@ -101,10 +107,18 @@ class RegionDetector(nn.Module):
                 nn.Conv2d(num_of_channels_last_layer, 128, kernel_size=1, padding=0),
                 nn.ReLU(True),
                 nn.Dropout(p=self.drop_prob),
-                nn.Conv2d(num_of_channels_last_layer, 128, kernel_size=1, padding=0),
+                nn.Conv2d(128, 128, kernel_size=1, padding=0),
                 nn.ReLU(True),
                 nn.Dropout(p=self.drop_prob),
                 nn.Conv2d(128, self.nclasses, kernel_size=1, padding=0),
+                # LARGE MODEL
+                # nn.Conv2d(num_of_channels_last_layer, 512, kernel_size=1, padding=0),
+                # nn.ReLU(True),
+                # nn.Dropout(p=self.drop_prob),
+                # nn.Conv2d(512, 512, kernel_size=1, padding=0),
+                # nn.ReLU(True),
+                # nn.Dropout(p=self.drop_prob),
+                # nn.Conv2d(512, self.nclasses, kernel_size=1, padding=0),
             )
 
     def forward(self, x):
@@ -148,14 +162,19 @@ class RegionDetector(nn.Module):
     def get_loss(self, log_pred_probs, lbls, average=False, pred_probs=None):
         """
 
-        :param log_pred_probs: LOG predicted probabilities [batch_size, 2, w, h]
-        :param lbls: ground truth labels [batch_size, w, h ]
+        :param log_pred_probs: LOG predicted probabilities [batch_size, 2, w * h]
+        :param lbls: ground truth labels [batch_size, w * h]
         :param average:
-        :param pred_probs: [batch_size, 2, w, h]
+        :param pred_probs: [batch_size, 2, w * h]
         :return: torch scalar
         """
+        # print("INFO - get_loss - log_pred_probs.shape, lbls.shape ", log_pred_probs.shape, lbls.shape)
+        # NOTE: this was a tryout (not working) for hard negative mining
+        # batch_loss_indices = RegionDetector.hard_negative_mining(pred_probs, lbls)
+        # b_loss_idx_preds = batch_loss_indices.unsqueeze(1).expand_as(log_pred_probs)
         # The input given through a forward call is expected to contain log-probabilities of each class
         b_loss = self.loss_function(log_pred_probs, lbls)
+
         if self.use_fn_loss:
             # pred_probs last 2 dimensions need to be merged because lbls has shape [batch_size, w, h ]
             pred_probs = pred_probs.view(pred_probs.size(0), 2, -1)
@@ -207,6 +226,35 @@ class RegionDetector(nn.Module):
                     print("WARNING - No gradients for parameter >>> {} <<<".format(name))
 
         return sum_grads
+
+    @staticmethod
+    def hard_negative_mining(pred_probs, gt_targets):
+        """Return negative indices that is 3x the number as positive indices.
+        Args:
+          pred_probs: (tensor) predicted softmax probabilities [batch_size, 2, w * h].
+          gt_targets: (tensor) ground truth labels [batch_size, w * h]
+        Return:
+          (tensor) indices of false negatives with high softmax (high confidence)
+        """
+        # we only use the softmax responses indicating this is a positive grid.
+
+        soft_resp = (pred_probs[:, 1]).clone()
+        soft_resp = soft_resp.view(soft_resp.size(0), -1)
+        positve_idx = gt_targets != 0
+        batch_size, num_of_grids = positve_idx.size()
+
+        # set pos grids = 0, the rest are negative examples
+        soft_resp[positve_idx] = 0
+        soft_resp = soft_resp.view(batch_size, -1)  # [batch_size, g * h]
+
+        _, idx = soft_resp.sort(1, descending=True)  # sort by neg softmax-response
+        _, rank = idx.sort(1)  # [batch_size, g * h]
+
+        num_pos = positve_idx.long().sum(1)  # [batch_size, 1]
+        num_pos = num_pos.unsqueeze(1)
+        num_neg = torch.clamp(3 * num_pos, max=num_of_grids - 1)  # [batch_size, 1]
+        negative_idx = rank < num_neg  # [batch_size, g * h]
+        return negative_idx
 
 
 if __name__ == '__main__':

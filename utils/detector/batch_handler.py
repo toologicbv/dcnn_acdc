@@ -551,7 +551,7 @@ class BatchHandler(object):
             else:
                 ax2.imshow(uncertainty_slice, cmap=mycmap)
                 _, grid_map, _ = create_grid_heat_map(None, grid_spacing, w, h, target_lbl_binary_grid,
-                                                      prob_threshold=0.)
+                                                      prob_threshold=0.5)
                 for i, map_index in enumerate(zip(grid_map[0], grid_map[1])):
                     z_i = target_lbl_binary_grid[i]
                     if z_i == 1:

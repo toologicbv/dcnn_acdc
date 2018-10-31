@@ -497,6 +497,47 @@ class ExperimentHandler(object):
         # [2, 4classes, width, height, #slices]
         self.u_maps = ImageUncertainties.load_uncertainty_maps(self, u_maps_only=True)
 
+    def get_bayes_umaps(self, patient_id=None, aggregate_func=None, force_reload=False):
+        if self.umap_output_dir is None:
+            self._check_dirs(config)
+
+        if aggregate_func is not None:
+            u_maps = self.agg_umaps
+            map_suffix = "_" + aggregate_func + config.bayes_umap_suffix
+            archive_name = "agg_umap"
+        else:
+            u_maps = self.u_maps
+            archive_name = "u_map"
+            map_suffix = "_raw" + config.bayes_umap_suffix
+        # may be we already stored the umap for this patient
+        if u_maps is not None and patient_id is not None and not force_reload:
+            if patient_id in u_maps.keys():
+                print(u_maps.keys())
+                return u_maps[patient_id]
+
+        if patient_id is None:
+            search_path = os.path.join(self.umap_output_dir, "*" + map_suffix)
+        else:
+            filename = patient_id + map_suffix
+            search_path = os.path.join(self.umap_output_dir, filename)
+
+        if len(glob.glob(search_path)) == 0:
+            raise ValueError("ERROR - No search result for {}".format(search_path))
+
+        for fname in glob.glob(search_path):
+            # get base filename first and then extract patient/name/ID (filename is e.g. patient012_raw_umap.npz)
+            file_basename = os.path.splitext(os.path.basename(fname))[0]
+            patient_id = file_basename[:file_basename.find("_")]
+            try:
+                data = np.load(fname)
+                u_maps[patient_id] = data[archive_name]
+                del data
+            except IOError:
+                self.info("ERROR - Unable to load uncertainty maps from {}".format(fname))
+
+        if patient_id is not None:
+            return u_maps[patient_id]
+
     def create_outlier_dataset(self, dataset, model=None, checkpoint=None, mc_samples=10, u_threshold=0.1,
                                do_save_u_stats=False, use_high_threshold=False, use_train_set=True,
                                do_save_outlier_stats=False, test_set=None, use_existing_umaps=False,
@@ -656,7 +697,9 @@ class ExperimentHandler(object):
             self.ref_map_blobs = OrderedDict()
         if patient_id is not None:
             if patient_id in self.referral_umaps.keys():
-                return
+                # TODO THIS could let to problems but added return of map. Before we just returned None and
+                # the programming code had to retrieve the patient u-map literally from the dictionary
+                return self.referral_umaps[patient_id]
 
         input_dir = os.path.join(self.exper.config.root_dir,
                                            os.path.join(self.exper.output_dir, config.u_map_dir))
@@ -697,6 +740,8 @@ class ExperimentHandler(object):
                 except KeyError:
                     print("WARNING - ExperimentHandler.get_referral_maps - filtered_stddev_blobs "
                           "object does not exist for {}".format(patientID))
+        if patient_id is not None:
+            return self.referral_umaps[patient_id]
 
     def get_referred_slices(self, referral_threshold, slice_filter_type=None, patient_id=None):
 

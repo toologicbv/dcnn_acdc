@@ -44,7 +44,7 @@ class ExperHandlerEnsemble(object):
         del self.seg_exper_handlers[fold_id].test_set
 
     def prepare_handlers(self, fold_id=None, patient_ids=None, type_of_map="e_map", force_reload=False,
-                         for_detector_dtaset=False):
+                         for_detector_dtaset=False, load_dt_roi_maps=False):
         """
 
         :param fold_id: we use the fold_id to determine for which seg-handler we're loading all the necessary
@@ -60,6 +60,8 @@ class ExperHandlerEnsemble(object):
                              by the handlers.
         :param for_detector_dtaset: boolean, limit the load process to uncertainty maps and predicted labels!
         :param quick_run: boolean, reduce number of patients for debug purposes
+        :param load_dt_roi_maps: boolean, if True we load distance transform and roi target maps for each of the folds.
+                    In the past I only used this in order to inspect the dt and target roi maps visually.
         :return:
         """
 
@@ -94,7 +96,7 @@ class ExperHandlerEnsemble(object):
             else:
                 raise ValueError("ERROR - type of map {} is not supported".format(type_of_map))
             # For the RegionDetector dataset, we only need the uncertainty maps and predicted labels
-            if not for_detector_dtaset:
+            if load_dt_roi_maps:
                 exper_hdl.get_dt_maps(patient_id=p_id, force_reload=force_reload)
                 exper_hdl.get_target_roi_maps(patient_id=p_id, force_reload=force_reload, mc_dropout=mc_dropout)
                 _ = exper_hdl.get_pred_prob_maps(patient_id=p_id, mc_dropout=mc_dropout)

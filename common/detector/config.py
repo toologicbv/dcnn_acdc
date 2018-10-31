@@ -31,14 +31,15 @@ class BaseConfig(object):
         self.acdc_inter_observ_var = {1: [14.05, 9.05], 2: [7.8, 5.8], 3: [8.3, 5.65],  # ES
                                       5: [12.35, 8.15], 6: [6.95, 5.25], 7: [5.9, 4.65]}  # ED
         self.acdc_background_classes = [0, 4]
-        # TODO We don't know size of padding yet. Depends on model architecture!
+        # IMPORTANT: we don't use PADDING because during batch training and testing we crop out a region that fits
+        # the max-pool operations & convolutions. Due toe fully-conv NN we can process different sizes of images.
         self.acdc_pad_size = 0
         self.quick_run_size = 6
 
         # Settings for determining the target areas/pixels to be inspected. used in procedure
         # find_multiple_connected_rois (file box_utils.py)
         self.min_roi_area = 2  # minimum number of 2D 4-connected component. Otherwise target pixels are discarded
-        self.fraction_negatives = 0.5
+        self.fraction_negatives = 0.67
         # patch size during training
         self.patch_size = np.array([80, 80])
         # the spacing of grids after the last maxPool layer.
@@ -58,9 +59,9 @@ class BaseConfig(object):
                                   'drop_prob': 0.5,
                                   "backward_freq": 1,
                                   "use_extra_classifier": False,
-                                  "use_fn_loss": False,
-                                  "fn_penalty_weight": 0,
-                                  "fp_penalty_weight": 0,
+                                  "use_fn_loss": True,
+                                  "fn_penalty_weight": 0.3,
+                                  "fp_penalty_weight": 0.15,
                                   "description": "rd1-detector"},
                              "rd2":
                                  {'model_id': "rd2",
@@ -75,12 +76,12 @@ class BaseConfig(object):
                                   "backward_freq": 1,
                                   "use_extra_classifier": True,
                                   "use_fn_loss": True,
-                                  "fn_penalty_weight": 1,
-                                  "fp_penalty_weight": 0,
+                                  "fn_penalty_weight": 0.1,
+                                  "fp_penalty_weight": 0.15,
                                   "description": "rd2-detector"},
                              "rd3":
                                  {'model_id': "rd3",
-                                  'base': [16, 'M', 32, 'M', 32, 'M', 64, 'M', 128],
+                                  'base': [16, 'M', 32, 'M', 32, 'M', 64, 'M', 64],  # first version
                                   'num_of_input_channels': 3,
                                   'num_of_classes': 2,
                                   'drop_prob': 0.5,
@@ -91,8 +92,25 @@ class BaseConfig(object):
                                   "backward_freq": 1,
                                   "use_extra_classifier": False,
                                   "use_fn_loss": True,
-                                  "fn_penalty_weight": 0.75,
-                                  "fp_penalty_weight": 0.5,
+                                  "fn_penalty_weight": 0.45,
+                                  "fp_penalty_weight": 0.15,
+                                  "description": "rd3-detector"},
+                             "rd3L":
+                                 {'model_id': "rd3",
+                                  # 'base': [16, 'M', 32, 'M', 32, 'M', 64, 'M', 64],  first version
+                                  'base': [16, 'M', 32, 'M', 64, 'M', 128, 'M', 256],
+                                  'num_of_input_channels': 3,
+                                  'num_of_classes': 2,
+                                  'drop_prob': 0.5,
+                                  'use_batch_norm': True,
+                                  'classification_loss': nn.NLLLoss(),
+                                  'optimizer': "adam",
+                                  'weight_decay': 0.001,
+                                  "backward_freq": 1,
+                                  "use_extra_classifier": False,
+                                  "use_fn_loss": True,
+                                  "fn_penalty_weight": 0.35,
+                                  "fp_penalty_weight": 0.15,
                                   "description": "rd3-detector"}
         }
         self.base_class = "RegionDetector"
@@ -113,13 +131,13 @@ class BaseConfig(object):
                                     0: "20180703_18_09_33_dcnn_mc_f0p01_entrpy_150KE_lr2e02"}
 
     def get_architecture(self, model_name):
-        if model_name == "rd1":
+        if model_name[:3] == "rd1":
             self.architecture = self.detector_cfg[model_name]
             self.num_of_max_pool = len([i for i, s in enumerate(self.architecture["base"]) if s == 'M'])
             # assuming patch size is quadratic
             self.output_stride = int(self.patch_size[0] / 2 ** self.num_of_max_pool)
             self.max_grid_spacing = 8
-        elif model_name == "rd2":
+        elif model_name[:3] == "rd2":
             self.architecture = self.detector_cfg[model_name]
             # TODO: in the beginning added all maxPool2D layers to 'base' configuration but then
             # started to define different network paths in the RegionDetector object. Hence, started to add
@@ -128,7 +146,7 @@ class BaseConfig(object):
             # assuming patch size is quadratic
             self.output_stride = int(self.patch_size[0] / 2 ** self.num_of_max_pool)
             self.max_grid_spacing = 8
-        elif model_name == "rd3":
+        elif model_name[:3] == "rd3":
             self.architecture = self.detector_cfg[model_name]
             self.num_of_max_pool = len([i for i, s in enumerate(self.architecture["base"]) if s == 'M'])
             # assuming patch size is quadratic

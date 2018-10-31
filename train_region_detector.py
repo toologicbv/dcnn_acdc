@@ -35,6 +35,8 @@ def training(args):
 
     # Load model. In the same procedure the model is assigned to the CPU or GPU
     rd_model = load_region_detector_model(exper_hdl)
+
+    exper_hdl.logger.info("INFO - RegionDetector - debug - total #parameters {}".format(rd_model.model_total_params))
     decayed_lr = False
     # IMPORTANT: I AM CURRENTLY NOT USING THE FUNCTIONALITY TO RUN MULTIPLE BATCHES PER EPOCH!!!
     exper_hdl.exper.batches_per_epoch = 1
@@ -127,11 +129,11 @@ if __name__ == '__main__':
     main()
 
 """
-CUDA_VISIBLE_DEVICES=0 python train_region_detector.py --use_cuda --batch_size=16  --print_freq=10 
---epochs=2000 --model=rd1 --lr=0.0001 --fold_id=0 --type_of_map=e_map --quick_run
+CUDA_VISIBLE_DEVICES=0 python train_region_detector.py --use_cuda --batch_size=32  --print_freq=500 
+--epochs=20000 --model=rd2 --lr=0.00001 --fold_id=0 --type_of_map=e_map --quick_run --val_freq=1000
 
 
-CUDA_VISIBLE_DEVICES=2 nohup python train_region_detector.py --use_cuda --batch_size=32 --val_freq=2000 
+CUDA_VISIBLE_DEVICES=0 nohup python train_region_detector.py --use_cuda --batch_size=32 --val_freq=2000 
  --print_freq=500 --lr=0.0001 --model=rd3 --fold_id=0  --epochs=50000 --type_of_map=e_map --chkpnt 
  --chkpnt_freq=25000 > /home/jorg/tmp/rd2_detector_emaps.log 2>&1&
 """

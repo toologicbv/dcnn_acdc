@@ -260,7 +260,6 @@ class HVSMRExperimentHandler(ExperimentHandler):
         # may be we already stored the umap for this patient
         if u_maps is not None and patient_id is not None and not force_reload:
             if patient_id in u_maps.keys():
-                print(u_maps.keys())
                 return u_maps[patient_id]
 
         if patient_id is None:

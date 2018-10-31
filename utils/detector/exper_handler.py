@@ -116,7 +116,7 @@ class ExperimentHandler(object):
         # Currently not using the complete test set
         if eval_size is not None and eval_set_size > eval_size:
             eval_set_size = eval_size
-        
+
         eval_batch = BatchHandler(data_set=data_set, is_train=False, cuda=self.exper.run_args.cuda, backward_freq=1,
                                   num_of_max_pool_layers=self.exper.config.num_of_max_pool)
         model.eval()

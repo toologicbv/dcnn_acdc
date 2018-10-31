@@ -4,25 +4,50 @@ from pylab import MaxNLocator
 import numpy as np
 import os
 from matplotlib import cm
-from common.hvsmr.helper import detect_seg_errors
+from common.hvsmr.helper import detect_seg_errors, convert_to_multiclass
 
 
-def plot_slices(exper_handler, patient_id, do_show=True, do_save=False, threshold=None,
-                slice_range=None, type_of_map="emap", aggregate_func=None):
+def plot_slices(exper_handler, patient_id, do_show=True, do_save=False, threshold=None, plot_umap=True,
+                slice_range=None, type_of_map="emap", aggregate_func=None, seg_mask_type="error",
+                ):
+
+    """
+
+    :param exper_handler:
+    :param patient_id:
+    :param do_show:
+    :param do_save:
+    :param threshold: related to bayesian u-map. we always use 0.001
+    :param slice_range:  e.g. [0, 5]
+    :param type_of_map: emap or umap
+    :param aggregate_func:
+    :param plot_reference:  plot reference segmentation as overlay in right plot
+    :param plot_umap: boolean, if False plot to the left only shows original MRI slice
+    :param seg_mask_type: ["ref", "error", "auto"] type of segmentation mask that we plot in the right figure
+    :return:
+    """
 
     def transparent_cmap(cmap, N=255):
-        "Copy colormap and set alpha values"
+        """ Copy colormap and set alpha values """
         mycmap = cmap
         mycmap._init()
         mycmap._lut[:, -1] = np.linspace(0, 0.8, N + 4)
         return mycmap
+
+    if seg_mask_type not in ["ref", "error", "auto"]:
+        raise ValueError("ERROR - seg_mask_type must be ref, error or auto! (and not {})".format(seg_mask_type))
 
     if type_of_map not in ["emap", "umap"]:
         raise ValueError("ERROR - type_of_map must be emap or umap! (and not {})".format(type_of_map))
     # Use base cmap to create transparent
     mycmap = transparent_cmap(plt.get_cmap('jet'))
     if type_of_map == "umap":
-        umap = exper_handler.get_bayes_umaps(patient_id=patient_id, aggregate_func=aggregate_func)
+        if exper_handler.test_set.__class__.__name__ != "HVSMRTesthandler":
+            umap = exper_handler.get_referral_maps(0.001, per_class=False, aggregate_func=aggregate_func, use_raw_maps=True,
+                                                   patient_id=patient_id, load_ref_map_blobs=False)
+        else:
+            umap = exper_handler.get_bayes_umaps(patient_id=patient_id, aggregate_func=aggregate_func)
+
     else:
         umap = exper_handler.get_entropy_maps(patient_id=patient_id)
 
@@ -55,7 +80,7 @@ def plot_slices(exper_handler, patient_id, do_show=True, do_save=False, threshol
 
     columns = 4
     width = 16
-    height = 14 * num_of_slices / 2  # num_of_classes * 2 * num_of_slices
+    height = 14 * num_of_slices   # num_of_classes * 2 * num_of_slices
     row = 0
 
     model_info = "{} p={:.2f} fold={} loss={}".format(exper_args.model, exper_args.drop_prob,
@@ -68,17 +93,17 @@ def plot_slices(exper_handler, patient_id, do_show=True, do_save=False, threshol
     fig.suptitle(model_info + ": " + patient_id, **config.title_font_medium)
     for slice_id in slice_range:
         for phase in np.arange(num_of_phases):
+
             cls_offset = phase * num_of_classes
             if num_of_phases > 1:
                 rows = 4 * num_of_slices
                 umap_slice = umap[phase, :, :, slice_id]
                 img_slice = mri_image[phase, :, :, slice_id]
-                # TODO never tested this part for ACDC. Assuming labels has shape [8, w, h, #slices]
+                # IMPORTANT: (already verified) Assuming labels AND pred_labels has shape [8, w, h, #slices]
                 labels_slice = labels[cls_offset:cls_offset+num_of_classes, :, :, slice_id]
-                pred_labels_slice = pred_labels[phase, :, :, slice_id]
+                pred_labels_slice = pred_labels[cls_offset:cls_offset+num_of_classes, :, :, slice_id]
                 errors_slice = detect_seg_errors(labels_slice, pred_labels_slice, is_multi_class=False)
             else:
-
                 rows = 2 * num_of_slices
                 umap_slice = umap[:, :, slice_id]
                 img_slice = mri_image[:, :, slice_id]
@@ -93,8 +118,8 @@ def plot_slices(exper_handler, patient_id, do_show=True, do_save=False, threshol
             #                                            np.max(entropy_slice_map)))
             ax1 = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
             ax1.imshow(img_slice, cmap=cm.gray)
-            ax1plot = ax1.imshow(umap_slice, cmap=mycmap,
-                                   vmin=0., vmax=0.4)
+            if plot_umap:
+                _ = ax1.imshow(umap_slice, cmap=mycmap, vmin=0., vmax=0.4)
             # ax1.set_aspect('auto')
             # fig.colorbar(ax1plot, ax=ax1, fraction=0.046, pad=0.04)
             plt.axis("off")
@@ -105,10 +130,20 @@ def plot_slices(exper_handler, patient_id, do_show=True, do_save=False, threshol
             ax1.set_title(p_title, **config.title_font_small)
             ax2 = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
             ax2.imshow(img_slice, cmap=cm.gray)
-            ax2.imshow(errors_slice, cmap=mycmap)
-            ax2.set_title("Segmentation errors (r=LV/g=myo)", **config.title_font_small)
+            if seg_mask_type == "ref":
+                multi_label_slice = convert_to_multiclass(labels_slice)
+                ax2.imshow(multi_label_slice, cmap=mycmap)
+                ax2.set_title("Reference (r=LV/y=myo/b=RV)", **config.title_font_small)
+            elif seg_mask_type == "error":
+                ax2.imshow(errors_slice, cmap=mycmap)
+                ax2.set_title("Segmentation errors (r=LV/y=myo/b=RV)", **config.title_font_small)
+            else:
+                # automatic seg-mask
+                multi_pred_labels = convert_to_multiclass(pred_labels_slice)
+                ax2.imshow(multi_pred_labels, cmap=mycmap)
+                ax2.set_title("Automatic mask (r=LV/y=myo/b=RV)", **config.title_font_small)
             plt.axis("off")
-        row += 2
+            row += 2
 
     fig.tight_layout(rect=[0.03, 0.03, 0.97, 0.97])
     if do_save:
