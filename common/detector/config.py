@@ -26,7 +26,7 @@ class BaseConfig(object):
         self.dt_map_dir = "dt_maps"
         self.checkpoint_path = "checkpoints"
         self.logger_filename = "run_out.log"
-        # ES: 1 = RV; 2 = MYO; 3 = LV; tuple(non-apex-basal inter-observ-var, apex-basal inter-observ-var)
+        # ES: 1 = RV; 2 = MYO; 3 = LV; tuple(apex-base inter-observer-var, NON-apex-base inter-observer-var)
         # ED: 5 = RV; 6 = MYO; 7 = LV
         self.acdc_inter_observ_var = {1: [14.05, 9.05], 2: [7.8, 5.8], 3: [8.3, 5.65],  # ES
                                       5: [12.35, 8.15], 6: [6.95, 5.25], 7: [5.9, 4.65]}  # ED
@@ -49,7 +49,8 @@ class BaseConfig(object):
         self.output_stride = None
         self.detector_cfg = {"rd1":
                                  {'model_id': "rd1",
-                                  'base': [16, 'M', 32, 'M', 32, 'M', 64],
+                                  # 'base': [16, 'M', 32, 'M', 32, 'M', 64],
+                                  'base': [16, 'M', 16, 'M', 32, 'M', 32],
                                   'num_of_input_channels': 3,
                                   'num_of_classes': 2,
                                   'use_batch_norm': True,
@@ -59,9 +60,9 @@ class BaseConfig(object):
                                   'drop_prob': 0.5,
                                   "backward_freq": 1,
                                   "use_extra_classifier": False,
-                                  "use_fn_loss": False,
-                                  "fn_penalty_weight": 0.,
-                                  "fp_penalty_weight": 0.,
+                                  "use_fn_loss": True,
+                                  "fn_penalty_weight": 0.1,
+                                  "fp_penalty_weight": 0.5,
                                   "description": "rd1-detector"},
                              "rd2":
                                  {'model_id': "rd2",
@@ -81,7 +82,8 @@ class BaseConfig(object):
                                   "description": "rd2-detector"},
                              "rd3":
                                  {'model_id': "rd3",
-                                  'base': [16, 'M', 32, 'M', 32, 'M', 64, 'M', 64],  # first version
+                                  # 'base': [16, 'M', 32, 'M', 32, 'M', 64, 'M', 64],  # first version
+                                  'base': [16, 'M', 16, 'M', 32, 'M', 32, 'M', 32],  # first version
                                   'num_of_input_channels': 3,
                                   'num_of_classes': 2,
                                   'drop_prob': 0.5,
@@ -92,8 +94,8 @@ class BaseConfig(object):
                                   "backward_freq": 1,
                                   "use_extra_classifier": False,
                                   "use_fn_loss": True,
-                                  "fn_penalty_weight": 0.45,
-                                  "fp_penalty_weight": 0.15,
+                                  "fn_penalty_weight": 0.1,
+                                  "fp_penalty_weight": 0.3,
                                   "description": "rd3-detector"},
                              "rd3L":
                                  {'model_id': "rd3",

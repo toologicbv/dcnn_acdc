@@ -97,9 +97,9 @@ class ExperHandlerEnsemble(object):
                 raise ValueError("ERROR - type of map {} is not supported".format(type_of_map))
             # For the RegionDetector dataset, we only need the uncertainty maps and predicted labels
             if load_dt_roi_maps:
-                exper_hdl.get_dt_maps(patient_id=p_id, force_reload=force_reload)
+                # exper_hdl.get_dt_maps(patient_id=p_id, force_reload=force_reload)
                 exper_hdl.get_target_roi_maps(patient_id=p_id, force_reload=force_reload, mc_dropout=mc_dropout)
-                _ = exper_hdl.get_pred_prob_maps(patient_id=p_id, mc_dropout=mc_dropout)
+                # _ = exper_hdl.get_pred_prob_maps(patient_id=p_id, mc_dropout=mc_dropout)
             exper_hdl.get_pred_labels(patient_id=p_id, mc_dropout=mc_dropout, force_reload=force_reload)
 
         # get images

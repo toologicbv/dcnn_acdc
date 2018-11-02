@@ -109,7 +109,7 @@ class ExperimentHandler(object):
         std_auc_roc = np.std(self.aucs_roc)
         self.stats_auc_roc = tuple((mean_auc_roc, std_auc_roc))
 
-    def run_eval(self, data_set, model, verbose=False, eval_size=None, keep_batch=False):
+    def run_eval(self, data_set, model, verbose=False, eval_size=None, keep_batch=False, disrupt_chnnl=None):
         self.reset_eval_metrics()
         not_one_tp = True
         eval_set_size = data_set.get_size(is_train=False)
@@ -129,7 +129,8 @@ class ExperimentHandler(object):
             Parameter: disrupt_chnnl {None, 0, 1, 2} 
             Input channels for network: 0=mri image 1=uncertainty map 2=auto seg-mask
         """
-        for x_input, y_labels_dict in eval_batch(batch_size=eval_set_size, keep_batch=keep_batch, disrupt_chnnl=None):
+        for x_input, y_labels_dict in eval_batch(batch_size=eval_set_size, keep_batch=keep_batch,
+                                                 disrupt_chnnl=disrupt_chnnl):
             # New in pytorch 0.4.0, use local context manager to turn off history tracking
             with torch.set_grad_enabled(False):
                 # batch_size=None and do_balance=True => number of degenerate slices/per patient determines
@@ -144,10 +145,13 @@ class ExperimentHandler(object):
                 y_lbl_grid4 = y_labels_dict[4]
                 y_pred_lbls = y_lbl_max_grid
                 eval_loss, pred_probs_list = model.do_forward_pass(x_input, y_lbl_max_grid, y_labels_extra=y_lbl_grid4)
+                # indices of pred_probs_list:
                 # 0 index = 8 grid-spacing hence 9x9 predictions
                 # 1 index = 4 grid-spacing hence 18x18 predictions
                 pred_probs = pred_probs_list[0]
                 pred_probs = pred_probs.data.cpu().numpy()
+                # IMPORTANT: Enable this when you want to TEST THE NAIVE APPROACH!!!
+                # pred_probs[:, 1] = 1.
                 pred_labels = np.argmax(pred_probs, axis=1)
             # NOTE: THIS IS EXPERIMENTAL STUFF: we convolve the pred_labels i.o.t. smooth them. Increases recall
             #                                   and reduce precision.
@@ -212,17 +216,31 @@ class ExperimentHandler(object):
         except IOError:
             print("ERROR - Can't save features+labels to {}".format(out_filename))
 
-    def eval(self, data_set, model, eval_size=25, keep_batch=False, verbose=False):
+    def eval(self, data_set, model, eval_size=25, keep_batch=False, verbose=False, is_test=False, disrupt_chnnl=None):
         start_time = time.time()
-        self.next_val_run()
+        if is_test:
+            test_id = self.next_test_id()
+            self.next_test_id()
+        else:
+            self.next_val_run()
         batch = self.run_eval(data_set=data_set, model=model, eval_size=eval_size, keep_batch=keep_batch,
-                              verbose=verbose)
-        self.exper.val_stats["loss"][self.num_val_runs - 1] = self.eval_loss
-        self.exper.val_stats["f1"][self.num_val_runs - 1] = self.arr_eval_metrics[0]
-        self.exper.val_stats["roc_auc"][self.num_val_runs - 1] = self.arr_eval_metrics[1]
-        self.exper.val_stats["pr_auc"][self.num_val_runs - 1] = self.arr_eval_metrics[2]
-        self.exper.val_stats["prec"][self.num_val_runs - 1] = self.arr_eval_metrics[3]
-        self.exper.val_stats["rec"][self.num_val_runs - 1] = self.arr_eval_metrics[4]
+                              verbose=verbose, disrupt_chnnl=disrupt_chnnl)
+        if is_test:
+            test_stats = {}
+            test_stats["loss"] = self.eval_loss
+            test_stats["f1"] = self.arr_eval_metrics[0]
+            test_stats["roc_auc"] = self.arr_eval_metrics[1]
+            test_stats["pr_auc"] = self.arr_eval_metrics[2]
+            test_stats["prec"] = self.arr_eval_metrics[3]
+            test_stats["rec"] = self.arr_eval_metrics[4]
+            self.test_stats[test_id] = test_stats
+        else:
+            self.exper.val_stats["loss"][self.num_val_runs - 1] = self.eval_loss
+            self.exper.val_stats["f1"][self.num_val_runs - 1] = self.arr_eval_metrics[0]
+            self.exper.val_stats["roc_auc"][self.num_val_runs - 1] = self.arr_eval_metrics[1]
+            self.exper.val_stats["pr_auc"][self.num_val_runs - 1] = self.arr_eval_metrics[2]
+            self.exper.val_stats["prec"][self.num_val_runs - 1] = self.arr_eval_metrics[3]
+            self.exper.val_stats["rec"][self.num_val_runs - 1] = self.arr_eval_metrics[4]
         duration = time.time() - start_time
 
         self.info("---> END VALIDATION epoch {} #slices={}(skipped {}) (negatives/positives={}/{}) loss {:.3f}: "
@@ -237,43 +255,6 @@ class ExperimentHandler(object):
         self.reset_eval_metrics()
         if keep_batch:
             return batch
-
-    def test(self, data_set=None, model=None, test_id=None, do_permute=False, keep_features=False, verbose=False):
-        if model is None:
-            # get model. 1st arg=experiment label "20180824_13_06_44_sdvgg11_bn_f1p01_brier_umap_6KE_lr1e05"
-            #            2nd arg=last epoch id aka checkpoint
-            model = self.load_checkpoint(self.exper.run_args.log_dir, checkpoint=self.exper.epoch_id)
-        if data_set is None:
-            data_set = self.load_dataset()
-        if test_id is None:
-            test_id = self.next_test_id()
-        start_time = time.time()
-        self.info("INFO - Begin test run {}".format(test_id))
-        test_stats = {}
-        self.run_eval(data_set=data_set, model=model, verbose=verbose)
-        test_stats["loss"] = self.eval_loss
-        test_stats["f1"] = self.arr_eval_metrics[0]
-        test_stats["roc_auc"] = self.arr_eval_metrics[1]
-        test_stats["pr_auc"] = self.arr_eval_metrics[2]
-        test_stats["prec"] = self.arr_eval_metrics[3]
-        test_stats["rec"] = self.arr_eval_metrics[4]
-        # test_stats["pr_curve"] = tuple((precision, recall))
-        # in order to plot the average AUC-ROC we need the x-values (just linespace) and the mean auc-roc values
-        # for each threshold (stats_auc_roc[0]) en the corresponding stddev's of the mean_auc_roc values (third item)
-        test_stats["roc_curve"] = tuple((self.mean_x_values, self.stats_auc_roc[0], self.stats_auc_roc[1]))
-        self.test_stats[test_id] = test_stats
-        duration = time.time() - start_time
-        self.info("END test run {} #slices={} loss {:.3f}: f1={:.3f} - roc_auc={:.3f} "
-                  "- pr_auc={:.3f} - prec={:.3f} - rec={:.3f} "
-                  "- {:.2f} seconds".format(test_id, self.num_of_eval_slices, self.eval_loss,
-                                                   self.arr_eval_metrics[0],
-                                                   self.stats_auc_roc[0], self.arr_eval_metrics[2],
-                                                   self.arr_eval_metrics[3], self.arr_eval_metrics[4],
-                                                   duration))
-
-        del data_set
-        del model
-        self.reset_eval_metrics()
 
     def reset_eval_metrics(self):
         self.mean_tpos_rate = []

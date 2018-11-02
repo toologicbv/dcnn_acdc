@@ -20,6 +20,7 @@ class RegionDetectorDataSet(object):
         # The key of the dictionaries is patient_id.
         self.train_images = []
         self.train_labels = []
+        self.train_labels_extra = []
         # list of numpy [N, 4] arrays that describe the target tissue area of the automatic predictions
         # we use these to sample from when generating batches (in order to stay close to the target tissue area)
         self.train_pred_lbl_rois = []
@@ -29,6 +30,7 @@ class RegionDetectorDataSet(object):
         self.test_images = []
         # contain numpy array with shape [#slices]
         self.test_labels = []
+        self.test_labels_extra = []
         self.test_pred_lbl_rois = []
         self.test_lbl_rois = []
         # stores the padding we applied to the test images. tuple of tuples e.g. ((2, 1), (5, 3))
@@ -153,11 +155,23 @@ class RegionDetectorDataSet(object):
                 if z == 0 or z == (num_of_slices - 1):
                     self.roi_stats["train" if is_train else "test"][2] += num_of_rois
                     self.roi_areas[0].extend(bbox_areas)
+                    base_apex_slice = 1
                 else:
                     self.roi_stats["train" if is_train else "test"][3] += num_of_rois
                     self.roi_areas[1].extend(bbox_areas)
+                    base_apex_slice = 0
+
             else:
+                # determine base/apex or middle slice
+                if z == 0 or z == (num_of_slices - 1):
+                    base_apex_slice = 1
+                else:
+                    base_apex_slice = 0
                 label_slice_filtered = label_slice
+            if is_train:
+                self.train_labels_extra.append(base_apex_slice)
+            else:
+                self.test_labels_extra.append(base_apex_slice)
             if do_rotate:
                 rotate_slice(input_chnl1_slice, input_chnl2_slice, input_chnl3_slice, label_slice_filtered,
                              is_train)
@@ -285,7 +299,7 @@ def create_dataset(exper_ensemble, train_fold_id, type_of_map="e_map", num_of_in
                    model_name=None):
     """
 
-    :param fold_id: This is the fold_id we use for the experiment handler
+    :param train_fold_id: This is the fold_id we use for the experiment handler
     :param exper_ensemble: This is an ensemble of DCNN segmentation handlers from the previous experiments on ACDC data
     :param type_of_map: u_map: Bayesian uncertainty map; e_map: Entropy maps;
     :param num_of_input_chnls: 2: automatic segmentation masks + uncertainties; 3: + original image
@@ -293,8 +307,14 @@ def create_dataset(exper_ensemble, train_fold_id, type_of_map="e_map", num_of_in
     :param logger:
     :param verbose:
     :param quick_run: reduce training dataset to small number (currently 10)
+    :param model_name: please refer to the model parameter in the parsing.py file to determine which argument values
+                        are currently valid (rd1, rd2, rd3)
     :return:
     """
+    if type_of_map == "u_map":
+        mc_dropout = True
+    else:
+        mc_dropout = False
     # only works for fold0 (testing purposes, small dataset), we can overwrite the quick_run argument
     # means we're loading a very small dataset (probably 2-3 images)
     exper_handlers = exper_ensemble.seg_exper_handlers
@@ -310,11 +330,10 @@ def create_dataset(exper_ensemble, train_fold_id, type_of_map="e_map", num_of_in
         patient_ids = patient_ids[:config_detector.quick_run_size]
         ensemble_patients = patient_ids
     print("INFO - Preparing experimental handlers. This may take a while. Be patient...")
-    print("INFO - Ready. Loop through patient ids.")
     # REMEMBER: type of map determines whether we're loading mc-dropout predictions or single-predictions
     exper_ensemble.prepare_handlers(type_of_map=type_of_map, force_reload=True, for_detector_dtaset=True,
-                                    patient_ids=ensemble_patients)
-
+                                    patient_ids=ensemble_patients, load_dt_roi_maps=True)
+    print("INFO - Ready. Loop through patient ids.")
     # instead of using class labels 0, 1, 2, 3 for the seg-masks we will use values between [0, 1]
     labels_float = [0., 0.3, 0.6, 0.9]
     dataset = RegionDetectorDataSet(num_of_channels=num_of_input_chnls, model_name=model_name)
@@ -337,7 +356,7 @@ def create_dataset(exper_ensemble, train_fold_id, type_of_map="e_map", num_of_in
         # automatic reference: [#classes, w, h, #slices] - 0:4=ES and 4:8=ED
         pred_labels = exper_handlers[patient_fold_id].pred_labels[patient_id]
         # target_rois (our binary voxel labels)
-        target_rois = exper_handlers[patient_fold_id].get_target_roi_maps(patient_id)
+        target_rois = exper_handlers[patient_fold_id].get_target_roi_maps(patient_id, mc_dropout=mc_dropout)
         nclasses, w, h, num_of_slices = pred_labels.shape
         # get the original images, from test set. Return [2, w, h, #slices]
         mri_image = exper_handlers[patient_fold_id].test_images[patient_id]
@@ -351,6 +370,8 @@ def create_dataset(exper_ensemble, train_fold_id, type_of_map="e_map", num_of_in
             u_maps = exper_handlers[patient_fold_id].referral_umaps[patient_id]
         elif type_of_map == "e_map":
             u_maps = exper_handlers[patient_fold_id].entropy_maps[patient_id]
+        else:
+            raise ValueError("ERROR - Unknown type of uncertainty map {}".format(type_of_map))
         # for ACDC databaset which combines ES/ED the first dimension of the u-maps must be 2
         num_of_phases = u_maps.shape[0]
         for phase in np.arange(num_of_phases):

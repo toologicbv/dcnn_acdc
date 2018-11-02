@@ -38,6 +38,7 @@ def find_multiple_connected_rois(label_slice, padding=1, min_size=config_detecto
     roi_boxes = np.empty((0, 4))
     roi_box_areas = []
     roi_binary_mask = np.zeros_like(label_slice)
+
     for i_comp in np.arange(1, n_comps + 1):
         comp_mask = cc_labels == i_comp
         roi_slice_x, roi_slice_y = ndimage.find_objects(comp_mask)[0]

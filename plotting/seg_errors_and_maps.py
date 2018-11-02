@@ -9,7 +9,7 @@ from common.common import convert_to_multiclass
 
 
 def plot_slices(exper_handler, patient_id, do_show=True, do_save=False, threshold=None, left_column_overlay="map",
-                slice_range=None, type_of_map="emap", aggregate_func=None, right_column_overlay="error"):
+                slice_range=None, type_of_map="e_map", aggregate_func=None, right_column_overlay="error"):
 
     """
 
@@ -19,7 +19,7 @@ def plot_slices(exper_handler, patient_id, do_show=True, do_save=False, threshol
     :param do_save:
     :param threshold: related to bayesian u-map. we always use 0.001
     :param slice_range:  e.g. [0, 5]
-    :param type_of_map: emap or umap
+    :param type_of_map: e_map or u_map
     :param aggregate_func:
     :param left_column_overlay: "map" = uncertainty maps or "error_roi" = seg error regions that needs to be detected
     :param right_column_overlay: ["ref", "error", "auto"] type of segmentation mask that we plot in the right figure
@@ -36,11 +36,11 @@ def plot_slices(exper_handler, patient_id, do_show=True, do_save=False, threshol
     if right_column_overlay not in ["ref", "error", "auto"]:
         raise ValueError("ERROR - seg_mask_type must be ref, error or auto! (and not {})".format(seg_mask_type))
 
-    if type_of_map not in ["emap", "umap"]:
-        raise ValueError("ERROR - type_of_map must be emap or umap! (and not {})".format(type_of_map))
+    if type_of_map not in ["e_map", "u_map"]:
+        raise ValueError("ERROR - type_of_map must be e_map or u_map! (and not {})".format(type_of_map))
     # Use base cmap to create transparent
     mycmap = transparent_cmap(plt.get_cmap('jet'))
-    if type_of_map == "umap":
+    if type_of_map == "u_map":
         mc_dropout = True
         if exper_handler.test_set.__class__.__name__ != "HVSMRTesthandler":
             umap = exper_handler.get_referral_maps(0.001, per_class=False, aggregate_func=aggregate_func, use_raw_maps=True,
@@ -166,7 +166,7 @@ def plot_slices(exper_handler, patient_id, do_show=True, do_save=False, threshol
         if not os.path.isdir(fig_path):
             os.makedirs(fig_path)
         fig_name = patient_id + "_" + type_of_map
-        if type_of_map == "umap":
+        if type_of_map == "u_map":
             fig_name += "_" + aggregate_func
         fig_name += str_slice_range
         fig_name = os.path.join(fig_path, fig_name + ".pdf")

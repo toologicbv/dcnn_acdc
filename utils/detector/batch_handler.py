@@ -34,6 +34,8 @@ class BatchHandler(object):
         self.batch_size = 0
         self.batch_images = None
         self.batch_labels_per_voxel = None
+        # stores indications for base/apex=1 or middle=0
+        self.batch_extra_labels = None
         self.target_labels_per_roi = None
         self.target_labels_stats_per_roi = None
         # during testing, we skip slices that do not contain any automatic segmentations
@@ -114,7 +116,8 @@ class BatchHandler(object):
                                               (3) predicted segmentation mask
 
         :param batch_size:
-        :param patient_id: if not None than we use all slices
+        :param disrupt_chnnl:  integer {0, 1, 2}: see meaning of channels above
+
         :param do_balance: if True batch is balanced w.r.t. slices containing positive target areas and not (1:3)
         :param keep_batch: boolean, only used during TESTING. Indicates whether we keep the batch items in
                            self.batch_images, self.target_labels_per_roi (lists)
@@ -380,7 +383,15 @@ class BatchHandler(object):
         else:
             return target_labels
 
-    def _generate_test_batch(self, batch_size=8, keep_batch=False, disrupt_chnnl=None):
+    def _generate_test_batch(self, batch_size=8, keep_batch=False, disrupt_chnnl=None, location_only="ALL"):
+        """
+
+        :param batch_size:
+        :param keep_batch:
+        :param disrupt_chnnl:
+        :param location_only: M=only middle slices; AB=only BASE/APEX slices, otherwise ALL slices
+        :return:
+        """
         if self.last_test_list_idx is None:
             self.last_test_list_idx = 0
         else:
@@ -391,6 +402,8 @@ class BatchHandler(object):
         self.batch_pred_probs = []
         self.batch_pred_labels = []
         self.batch_gt_labels = []
+        # stores 1=apex/base or 0=middle slice
+        self.batch_extra_labels = []
         self.batch_images, self.target_labels_per_roi = [], []
         self.target_labels_stats_per_roi = {}
         for i in np.arange(2, self.num_of_max_pool_layers + 1):
@@ -410,6 +423,8 @@ class BatchHandler(object):
             else:
                 input_channels = self.data_set.test_images[list_idx]
             label = self.data_set.test_labels[list_idx]
+            base_apex_slice = self.data_set.test_labels_extra[list_idx]
+            self.batch_extra_labels.append(base_apex_slice)
             roi_area_spec = self.data_set.test_pred_lbl_rois[list_idx]
             slice_x, slice_y = BoundingBox.convert_to_slices(roi_area_spec)
 
@@ -418,6 +433,17 @@ class BatchHandler(object):
                 # does not contain any automatic segmentation mask, continue
                 self.num_of_skipped_slices += 1
                 continue
+            if location_only == "AB" and not base_apex_slice:
+                # ONLY PROCESS BASE/APEX SLICES
+                self.num_of_skipped_slices += 1
+                continue
+            elif location_only == "M" and base_apex_slice:
+                # SKIP BASE or APEX slices
+                self.num_of_skipped_slices += 1
+                continue
+            else:
+                # we test ALL SLICES
+                pass
 
             # now slice input and label according to roi specifications (automatic segmentation mask roi)
             input_channels_patch = input_channels[:, slice_x, slice_y]
@@ -471,7 +497,7 @@ class BatchHandler(object):
             yield input_channels_patch, target_labels
             self.last_test_list_idx = list_idx
 
-    def visualize_batch(self, grid_spacing=8, index_range=None):
+    def visualize_batch(self, grid_spacing=8, index_range=None, base_apex_only=False):
 
         mycmap = transparent_cmap(plt.get_cmap('jet'))
         if index_range is None:
@@ -489,6 +515,7 @@ class BatchHandler(object):
         heat_map = None
         for idx in slice_idx_generator:
             slice_num = self.dataset_slice_ids[idx]
+            base_apex_slice = self.batch_extra_labels[idx]
             if self.batch_label_slices is not None and len(self.batch_label_slices) != 0:
                 target_slice = self.batch_label_slices[idx]
             else:
@@ -520,9 +547,10 @@ class BatchHandler(object):
                 target_lbl_binary = self.target_labels_per_roi[1][idx]
                 target_lbl_binary_grid = self.target_labels_per_roi[grid_spacing][idx]
             w, h = image_slice.shape
-
+            if base_apex_only and not base_apex_slice:
+                continue
             ax1 = plt.subplot2grid((rows, columns), (row, 0), rowspan=2, colspan=2)
-            ax1.set_title("Slice {} ({}) ".format(slice_num, idx + 1))
+            ax1.set_title("Slice {} ({}) (base/apex={})".format(slice_num, idx + 1, base_apex_slice))
             ax1.imshow(image_slice, cmap=cm.gray)
             # ax1.imshow(target_slice, cmap=mycmap, vmin=0, vmax=1)
             ax1.set_xticks(np.arange(-.5, h, grid_spacing))
