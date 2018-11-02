@@ -94,6 +94,52 @@ class ConcatenateCNNBlock(nn.Module):
         return torch.cat((out1, out2), dim=self.axis), out_log_softmax
 
 
+class ConcatenateCNNBlockWithStddev(ConcatenateCNNBlock):
+
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=(1, 1),
+                 prob_dropout=0., apply_batch_norm=False, apply_non_linearity=None, bias=True, axis=1, verbose=False):
+        super(ConcatenateCNNBlockWithStddev, self).__init__(in_channels, out_channels, kernel_size, stride=stride,
+                                                                padding=padding, dilation=dilation,
+                                                                prob_dropout=prob_dropout,
+                                                                apply_batch_norm=apply_batch_norm,
+                                                                apply_non_linearity=apply_non_linearity,
+                                                                bias=bias, axis=axis, verbose=verbose)
+        # we are predicting the variance of the logits before they are passed to the softmax. As described in
+        # Kendall & Gal https://arxiv.org/abs/1703.04977. E.g. when we predict four classes (logits) we predict
+        # the log(sigma^2) for each logit
+        self.layer_precision1 = nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=padding,
+                                          dilation=dilation, bias=bias)
+        self.layer_precision2 = nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=padding,
+                                          dilation=dilation, bias=bias)
+
+    def forward(self, tensor_in):
+        if self.apply_dropout:
+            tensor_in = self.layer_drop(tensor_in)
+
+        out1 = self.conv_layer1(tensor_in)
+        out2 = self.conv_layer2(tensor_in)
+        if self.apply_batch_norm:
+            out1 = self.bn1(out1)
+            out2 = self.bn2(out2)
+
+        log_stddev1 = self.layer_precision1(tensor_in)
+        log_stddev2 = self.layer_precision2(tensor_in)
+
+        if self.apply_non_linearity is not None:
+            # The model uses the so called soft-Dice loss function. Calculation of the loss requires
+            # that we calculate probabilities for each pixel, and hence we use the Softmax for this, which should
+            # be specified as the non-linearity in the dictionary of the config object
+            out1_log_softmax = self.log_softmax(out1)
+            out2_log_softmax = self.log_softmax(out2)
+            out_log_softmax = torch.cat((out1_log_softmax, out2_log_softmax), dim=self.axis)
+            out1 = self.non_linearity(out1)
+            out2 = self.non_linearity(out2)
+        else:
+            out_log_softmax = None
+
+        return torch.cat((out1, out2), dim=self.axis), out_log_softmax, torch.cat((log_stddev1, log_stddev2), dim=self.axis)
+
+
 class ConcatenateCNNBlockWithRegression(ConcatenateCNNBlock):
 
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=(1, 1),

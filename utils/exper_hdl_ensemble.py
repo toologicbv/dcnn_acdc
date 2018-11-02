@@ -1,6 +1,6 @@
 from collections import OrderedDict
 
-from common.dslices.helper import create_experiment
+from utils.experiment import create_experiment_handler
 from utils.referral_results import ReferralResults
 
 
@@ -23,7 +23,7 @@ class ExperHandlerEnsemble(object):
         # below.
         self.dice_score_slices = None
         for exper_id in exper_dict.values():
-            exp_handler = create_experiment(exper_id)
+            exp_handler = create_experiment_handler(exper_id)
             exp_handler.get_testset_ids()
             fold_id = int(exp_handler.exper.run_args.fold_ids[0])
             self.seg_exper_handlers[fold_id] = exp_handler

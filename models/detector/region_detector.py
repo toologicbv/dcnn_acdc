@@ -66,9 +66,6 @@ class RegionDetector(nn.Module):
                 nn.Conv2d(num_of_channels_last_layer, 128, kernel_size=1, padding=0),
                 nn.ReLU(True),
                 nn.Dropout(p=self.drop_prob),
-                nn.Conv2d(128, 128, kernel_size=1, padding=0),
-                nn.ReLU(True),
-                nn.Dropout(p=self.drop_prob),
                 nn.Conv2d(128, self.nclasses, kernel_size=1, padding=0),
             )
 

@@ -6,7 +6,8 @@ import os
 import glob
 import shutil
 import copy
-
+import traceback
+from tqdm import tqdm
 from collections import OrderedDict
 from datetime import datetime
 from pytz import timezone
@@ -22,13 +23,37 @@ import models.dilated_cnn
 import models.hvsmr.dilated_cnn
 from utils.test_results import TestResults
 from common.acquisition_functions import bald_function
+from common.common import convert_volume_to_multiclass
 from plotting.uncertainty_plots import analyze_slices
 from plotting.main_seg_results import plot_seg_erros_uncertainties
 from in_out.load_data import ACDC2017DataSet
+from in_out.read_save_images import write_numpy_to_image
 from utils.hvsmr.batch_handler import HVSMRTwoDimBatchHandler
 from utils.test_handler import ACDC2017TestHandler
 from in_out.patient_classification import Patients
 from utils.detector.generate_dt_maps import generate_dt_maps, determine_target_voxels
+
+
+def create_experiment_handler(exper_id, myconfig=None):
+    if myconfig is None:
+        myconfig = config
+
+    log_dir = os.path.join(myconfig.root_dir, myconfig.log_root_path)
+    exp_model_path = os.path.join(log_dir, exper_id)
+    exper_handler = ExperimentHandler()
+    exper_handler.load_experiment(exp_model_path, use_logfile=False)
+    exper_handler.set_root_dir(myconfig.root_dir)
+    # in order to be sure that the the directories are still valid (if we changed things in the config files) we
+    # "reset" the important paths
+    exper_handler.exper.output_dir = os.path.join(myconfig.log_root_path, exper_handler.exper.run_args.log_dir)
+    exper_handler.exper.stats_path = os.path.join(exper_handler.exper.output_dir, myconfig.stats_path)
+    exper_handler.exper.chkpnt_dir = os.path.join(exper_handler.exper.output_dir, myconfig.checkpoint_path)
+
+    exper_args = exper_handler.exper.run_args
+    info_str = "{} p={:.2f} fold={} loss={}".format(exper_args.model, exper_args.drop_prob, exper_args.fold_ids,
+                                                    exper_args.loss_function)
+    print("INFO - Experimental details extracted:: " + info_str)
+    return exper_handler
 
 
 class ExperimentHandler(object):
@@ -1191,6 +1216,10 @@ class ExperimentHandler(object):
             except IOError:
                 self.info("ERROR - Unable to load target roi maps from {}".format(fname))
                 raise
+            except Exception as e:
+                self.info(traceback.format_exc())
+                self.info("ERROR - when loading {}".format(fname))
+                raise
         if patient_id is not None:
             return self.target_roi_maps[patient_id]
 
@@ -1284,6 +1313,39 @@ class ExperimentHandler(object):
 
         if patient_id is not None:
             return self.pred_labels[patient_id]
+
+    def write_masks_to_disk(self, config_obj=None, type_of_mask="auto", type_of_map="emap"):
+        if config_obj is None:
+            config_obj = config
+        if self.test_set is None:
+            self.get_test_set()
+        for p_id in tqdm(self.test_set.img_file_names):
+            if type_of_mask == "auto":
+                pred_labels = self.pred_labels[p_id]
+                # convert ES and ED volumes to multiclass labels with shape [w, h, #slices]
+                pred_labels_multi_es = convert_volume_to_multiclass(pred_labels[0:4])
+                pred_labels_multi_ed = convert_volume_to_multiclass(pred_labels[4:])
+                path_out = os.path.join(self.exper.output_dir, config_obj.pred_lbl_dir)
+                volume_es = pred_labels_multi_es
+                volume_ed = pred_labels_multi_ed
+
+            elif type_of_mask == "detect_roi":
+                mc_dropout = False if type_of_map == "emap" else True
+                volume = self.get_target_roi_maps(patient_id=p_id, force_reload=False, mc_dropout=mc_dropout)
+                volume_es = convert_volume_to_multiclass(volume[0:4])
+                volume_ed = convert_volume_to_multiclass(volume[4:])
+                path_out = os.path.join(self.exper.output_dir, config_obj.troi_map_dir)
+
+            path_out = os.path.join(self.exper.config.root_dir, path_out)
+            test_set_idx = self.test_set.img_file_names.index(p_id)
+            spacings = self.test_set.spacings[test_set_idx]
+            filename_es = p_id + "_es.nii"
+            filename_ed = p_id + "_ed.nii"
+
+            filename_es = os.path.join(path_out, filename_es)
+            filename_ed = os.path.join(path_out, filename_ed)
+            write_numpy_to_image(volume_es.astype("float32"), filename_es, swap_axis=True, spacing=spacings)
+            write_numpy_to_image(volume_ed.astype("float32"), filename_ed, swap_axis=True, spacing=spacings)
 
     def change_exper_dirs(self, new_dir, move_dir=False):
 

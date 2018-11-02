@@ -101,6 +101,7 @@ def do_parse_args():
     parser.add_argument('--quick_run', action='store_true')
     parser.add_argument('--incomplete_slices', action='store_true')
     parser.add_argument('--use_reg_loss', action='store_true')
+    parser.add_argument('--use_loss_attenuation', action='store_true')
     parser.add_argument('--chkpnt_freq', type=int, default=100, metavar='N',
                         help='Checkpoint frequency (saving model state) (default: 100)')
 

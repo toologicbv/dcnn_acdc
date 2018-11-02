@@ -6,6 +6,7 @@ import numpy as np
 from config.config import OPTIMIZER_DICT
 from building_blocks import Basic2DCNNBlock
 from models.building_blocks import ConcatenateCNNBlock, ConcatenateCNNBlockWithRegression, ClassificationOutputLayer
+from models.building_blocks import ConcatenateCNNBlockWithStddev
 from utils.dice_metric import soft_dice_score, dice_coefficient
 from models.lr_schedulers import CycleLR
 from utils.medpy_metrics import hd
@@ -16,12 +17,13 @@ class BaseDilated2DCNN(nn.Module):
 
     def __init__(self, architecture, optimizer=torch.optim.Adam, lr=1e-4, weight_decay=0.,
                  use_cuda=False, verbose=True, cycle_length=0, loss_function="soft-dice",
-                 use_reg_loss=False, use_dual_head=True):
+                 use_reg_loss=False, use_dual_head=True, use_loss_attenuation=False):
         super(BaseDilated2DCNN, self).__init__()
         self.architecture = architecture
         self.use_dual_head = use_dual_head
         self.use_cuda = use_cuda
         self.use_regression_loss = use_reg_loss
+        self.use_loss_attenuation = use_loss_attenuation
         self.num_conv_layers = self.architecture['num_of_layers']
         self.verbose = verbose
         self.model = self._build_dcnn()
@@ -70,7 +72,7 @@ class BaseDilated2DCNN(nn.Module):
                 if self.use_cuda:
                     layer_list[-1].cuda()
             else:
-                if not self.use_regression_loss and self.use_dual_head:
+                if not self.use_regression_loss and not self.use_loss_attenuation and self.use_dual_head:
                     # for ACDC data the last layer is a concatenation of two 2D-CNN layers
                     layer_list.append(ConcatenateCNNBlock(in_channels, self.architecture['channels'][l_id],
                                                           self.architecture['kernels'][l_id],
@@ -79,6 +81,17 @@ class BaseDilated2DCNN(nn.Module):
                                                           apply_batch_norm=self.architecture['batch_norm'][l_id],
                                                           apply_non_linearity=self.architecture['non_linearity'][l_id],
                                                           axis=1, verbose=self.verbose))
+                elif self.use_loss_attenuation and self.use_dual_head:
+                    print("INFO - Using network with extra head to predict precision per voxel!")
+                    layer_list.append(ConcatenateCNNBlockWithStddev(
+                        in_channels,
+                        self.architecture['channels'][l_id],
+                        self.architecture['kernels'][l_id],
+                        stride=self.architecture['stride'][l_id],
+                        dilation=self.architecture['dilation'][l_id],
+                        apply_batch_norm=self.architecture['batch_norm'][l_id],
+                        apply_non_linearity=self.architecture['non_linearity'][l_id],
+                        axis=1, verbose=self.verbose))
                 elif self.use_dual_head:
                     layer_list.append(ConcatenateCNNBlockWithRegression(
                         in_channels,
@@ -113,8 +126,7 @@ class BaseDilated2DCNN(nn.Module):
                  (2) the softmax output
         """
         out = self.model(input)
-        # our last layer ConcatenateCNNBlock already contains the two Softmax layers
-
+        # our last layer ConcatenateCNNBlock already contains the two Softmax layer
         return out
 
     def get_loss_cross_entropy(self, log_softmax_predictions, labels_multiclass):
@@ -131,7 +143,7 @@ class BaseDilated2DCNN(nn.Module):
         return torch.sum(losses)
 
     def get_loss(self, predictions, labels, zooms=None, compute_hd=False, regression_maps=None,
-                 num_of_labels_per_class=None):
+                 num_of_labels_per_class=None, log_stddev=None):
         """
             IMPORTANT: predictions and labels have 4 dimensions (see below).
                        The second dim contains the split between ES and ED phase
@@ -152,6 +164,7 @@ class BaseDilated2DCNN(nn.Module):
             :param num_of_labels_per_class
             loss_func is: (1) softdice=soft_dice_score or (2) brier=compute_brier_score
         """
+        eps = torch.tensor(0.000001)
         batch_size = labels.size(0)
         num_of_classes = labels.size(1)
         half_classes = int(num_of_classes / 2)
@@ -168,6 +181,7 @@ class BaseDilated2DCNN(nn.Module):
         if self.use_cuda:
             losses = losses.cuda()
             pixel_reg_loss = pixel_reg_loss.cuda()
+            eps = eps.cuda()
 
         # determine the predicted labels. IMPORTANT do this separately for each ES and ED which means
         # we have to split the network output on dim1 in to parts of size 4
@@ -178,7 +192,8 @@ class BaseDilated2DCNN(nn.Module):
             if self.loss_function == "soft-dice":
                 losses[cls] = soft_dice_score(predictions[:, cls, :, :], labels[:, cls, :, :])
             elif self.loss_function == "brier":
-                losses[cls] = compute_brier_score(predictions[:, cls, :, :], labels[:, cls, :, :])
+                losses[cls] = compute_brier_score(predictions[:, cls, :, :], labels[:, cls, :, :],
+                                                  log_stddev=log_stddev[:, cls, :, :])
             elif self.loss_function == "cross-entropy":
                 pass
             else:
@@ -240,6 +255,11 @@ class BaseDilated2DCNN(nn.Module):
         else:
             # summing the mean loss for RV & LV as if we would have the cavity volumes. See whether this "helps"
             losses = torch.mean(losses[0:half_classes]) + torch.mean(losses[half_classes:])
+            if self.use_loss_attenuation:
+                penalty = torch.mean(torch.sum(log_stddev.view(log_stddev.size(0), -1)))
+                print("WARNING - penalty {:.3}".format(penalty.item()))
+                losses = losses + penalty
+
             if self.use_regression_loss:
                 reg_loss = reg_loss_weight * torch.sum(torch.mean(pixel_reg_loss, dim=1))
                 self.np_reg_loss = reg_loss.data.cpu().numpy()
@@ -248,8 +268,16 @@ class BaseDilated2DCNN(nn.Module):
 
     def do_train(self, batch):
         self.zero_grad()
+        b_precisions = None
         if not self.use_regression_loss:
-            b_predictions, b_log_soft_preds = self(batch.get_images())
+            if self.use_loss_attenuation:
+                # in this forward the last layer additionally returns the 1/sigma^2 for ES and ED for all voxels
+                # for the four tissue classes [batch_size, 4, w, h]. b_precisions contains a 2-tuple
+                # idx=0 => ES
+                b_predictions, b_log_soft_preds, log_stddev = self(batch.get_images())
+            else:
+                b_predictions, b_log_soft_preds = self(batch.get_images())
+
             if self.loss_function == "cross-entropy":
                 b_loss = self.get_loss_cross_entropy(b_log_soft_preds, batch.get_labels_multiclass())
                 _ = self.get_loss(b_predictions, batch.get_labels())
@@ -257,10 +285,11 @@ class BaseDilated2DCNN(nn.Module):
                 # print("Current dice accuracies ES {:.3f}/{:.3f}/{:.3f} \t"
                 #             "ED {:.3f}/{:.3f}/{:.3f} ".format(acc[0], acc[1], acc[2], acc[3], acc[4], acc[5]))
             else:
-                b_loss = self.get_loss(b_predictions, batch.get_labels())
+                b_loss = self.get_loss(b_predictions, batch.get_labels(), log_stddev=log_stddev)
                 # ent_loss = self.get_loss_cross_entropy(b_log_soft_preds, batch.get_labels_multiclass())
                 # print("INFO - CrossEntropyLoss {:.3f}".format(ent_loss.data.cpu().numpy()[0]))
         else:
+            # CURRENTLY NOT ANY MORE IN USE, but we leave this for now. maybe can re-use this later
             b_predictions, b_out_regression = self(batch.get_images())
             b_loss = self.get_loss(b_predictions, batch.get_labels(), regression_maps=b_out_regression,
                                    num_of_labels_per_class=batch.get_num_labels_per_class())
@@ -283,8 +312,15 @@ class BaseDilated2DCNN(nn.Module):
         """
         self.eval(mc_dropout=mc_dropout)
         if not self.use_regression_loss:
-            b_predictions, b_log_soft_preds = self(images)
-            test_loss = self.get_loss(b_predictions, labels, zooms=voxel_spacing, compute_hd=compute_hd)
+            if self.use_loss_attenuation:
+                # in this forward the last layer additionally returns the 1/sigma^2 for ES and ED for all voxels
+                # for the four tissue classes [batch_size, 4, w, h]. b_precisions contains a 2-tuple
+                # idx=0 => ES
+                b_predictions, b_log_soft_preds, log_stddev = self(images)
+            else:
+                b_predictions, b_log_soft_preds = self(images)
+            test_loss = self.get_loss(b_predictions, labels, zooms=voxel_spacing, compute_hd=compute_hd,
+                                      log_stddev=log_stddev)
             if self.loss_function == "cross-entropy" and multi_labels is not None:
                 test_loss = self.get_loss_cross_entropy(b_log_soft_preds, multi_labels)
         else:

@@ -58,7 +58,8 @@ def load_model(exper_hdl, verbose=False):
                             loss_function=exper_hdl.exper.run_args.loss_function,
                             verbose=verbose,
                             use_reg_loss=exper_hdl.exper.run_args.use_reg_loss,
-                            use_dual_head=use_dual_head)
+                            use_dual_head=use_dual_head,
+                            use_loss_attenuation=exper_hdl.exper.run_args.use_loss_attenuation)
 
         model.apply(weights_init)
         message = "INFO - MODEL - Creating new model {}: {} " \

@@ -50,7 +50,7 @@ class BaseConfig(object):
         # remember to ADD env variable REPO_PATH on machine. REPO_PATH=<absolute path to repository >
         self.root_dir = self.get_rootpath()
         self.data_dir = os.path.join(self.root_dir, "data/Folds/")
-        self.log_root_path = "logs"
+        self.log_root_path = "logs/ACDC"
         self.figure_path = "figures"
         self.stats_path = "stats"
         self.u_map_dir = "u_maps"

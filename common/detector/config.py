@@ -59,9 +59,9 @@ class BaseConfig(object):
                                   'drop_prob': 0.5,
                                   "backward_freq": 1,
                                   "use_extra_classifier": False,
-                                  "use_fn_loss": True,
-                                  "fn_penalty_weight": 0.3,
-                                  "fp_penalty_weight": 0.15,
+                                  "use_fn_loss": False,
+                                  "fn_penalty_weight": 0.,
+                                  "fp_penalty_weight": 0.,
                                   "description": "rd1-detector"},
                              "rd2":
                                  {'model_id': "rd2",
@@ -97,8 +97,8 @@ class BaseConfig(object):
                                   "description": "rd3-detector"},
                              "rd3L":
                                  {'model_id': "rd3",
-                                  # 'base': [16, 'M', 32, 'M', 32, 'M', 64, 'M', 64],  first version
-                                  'base': [16, 'M', 32, 'M', 64, 'M', 128, 'M', 256],
+                                  'base': [16, 'M', 32, 'M', 32, 'M', 64, 'M', 64],  # first version
+                                  # 'base': [16, 'M', 32, 'M', 64, 'M', 128, 'M', 256],
                                   'num_of_input_channels': 3,
                                   'num_of_classes': 2,
                                   'drop_prob': 0.5,

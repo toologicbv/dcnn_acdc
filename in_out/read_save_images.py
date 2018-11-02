@@ -20,7 +20,7 @@ def load_mhd_to_numpy(filename, data_type="float32", swap_axis=False):
     return mri_scan, origin, spacing
 
 
-def write_numpy_to_image(np_array, filename, swap_axis=False, spacing=None):
+def write_numpy_to_image(np_array, filename, swap_axis=False, spacing=None, verbose=False):
 
     if swap_axis:
         np_array = np.swapaxes(np_array, 0, 2)
@@ -28,7 +28,8 @@ def write_numpy_to_image(np_array, filename, swap_axis=False, spacing=None):
     if spacing is not None:
         img.SetSpacing(spacing)
     sitk.WriteImage(img, filename)
-    print("Successfully saved image to {}".format(filename))
+    if verbose:
+        print("Successfully saved image to {}".format(filename))
 
 
 def save_mhd(image, filename, verbose=True):

@@ -29,23 +29,6 @@ def detect_seg_errors(labels, pred_labels, is_multi_class=False):
     return errors
 
 
-def convert_to_multiclass(label_slice):
-    """
-    Converts slice with labels of shape [#classes, w, h] to [w, h] where voxels belonging to different classes
-    are assigned different values.
-
-    :param label_slice:
-    :return: multi_slice [w, h]
-    """
-    num_of_classes, w, h = label_slice.shape
-    multi_slice = np.zeros((w, h))
-    # omitting background class because those values are already zero
-    for cls in np.arange(1, num_of_classes):
-        multi_slice[label_slice[cls] != 0] = cls
-
-    return multi_slice
-
-
 def create_experiment(exper_id, verbose=False):
 
     log_dir = os.path.join(config_hvsmr.root_dir, config_hvsmr.log_root_path)

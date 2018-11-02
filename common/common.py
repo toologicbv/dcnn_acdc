@@ -12,6 +12,35 @@ from skimage import exposure
 import matplotlib.pyplot as plt
 
 
+def convert_to_multiclass(label_slice):
+    """
+    Converts slice with labels of shape [#classes, w, h] to [w, h] where voxels belonging to different classes
+    are assigned different values.
+
+    :param label_slice:
+    :return: multi_slice [w, h]
+    """
+    num_of_classes, w, h = label_slice.shape
+    multi_slice = np.zeros((w, h))
+    # omitting background class because those values are already zero
+    for cls in np.arange(1, num_of_classes):
+        multi_slice[label_slice[cls] != 0] = cls
+
+    return multi_slice
+
+
+def convert_volume_to_multiclass(i_volume):
+    """
+        [#classes, w, h, #slices]
+    """
+    num_of_classes, w, h, num_of_slices = i_volume.shape
+    i_out = np.zeros((w, h, num_of_slices))
+    for slice_id in np.arange(num_of_slices):
+        i_slice = i_volume[:, :, :, slice_id]
+        i_out[:, :, slice_id] = convert_to_multiclass(i_slice)
+    return i_out
+
+
 def get_dice_diffs(diffs, num_of_slices, slice_stats, phase):
     """
 
