@@ -142,9 +142,10 @@ class ExperimentHandler(object):
                     grid-spacing 4: y_pred_lbls = y_lbl_grid4 and pred_probs = pred_probs_list[1]
                 """
                 y_lbl_max_grid = y_labels_dict[self.exper.config.max_grid_spacing]
-                y_lbl_grid4 = y_labels_dict[4]
-                y_pred_lbls = y_lbl_max_grid
-                eval_loss, pred_probs_list = model.do_forward_pass(x_input, y_lbl_max_grid, y_labels_extra=y_lbl_grid4)
+                y_gt_lbl_grid4 = y_labels_dict[4]
+                y_gt_lbl_slice = y_labels_dict[1]
+                y_gt_lbls = y_lbl_max_grid
+                eval_loss, pred_probs_list = model.do_forward_pass(x_input, y_lbl_max_grid, y_labels_extra=y_gt_lbl_grid4)
                 # indices of pred_probs_list:
                 # 0 index = 8 grid-spacing hence 9x9 predictions
                 # 1 index = 4 grid-spacing hence 18x18 predictions
@@ -162,8 +163,10 @@ class ExperimentHandler(object):
             # other than pred_labels and gt_labels we store pred_probs per slice because we want the softmax-probs
             # per slice in the grid form (probably 8x8) in order to produce the probs heat map per slice (batch_handler)
             if keep_batch:
-                eval_batch.add_probs(pred_probs[:, 1])
-            np_gt_labels = np.concatenate((np_gt_labels, (y_pred_lbls.data.cpu().numpy()).flatten()))
+                slice_id = eval_batch.batch_dta_slice_ids[-1]
+                eval_batch.add_probs(pred_probs[:, 1], slice_id=slice_id)
+                eval_batch.add_gt_labels_slice(y_gt_lbl_slice, slice_id=slice_id)
+            np_gt_labels = np.concatenate((np_gt_labels, (y_gt_lbls.data.cpu().numpy()).flatten()))
             np_pred_labels = np.concatenate((np_pred_labels, pred_labels.flatten()))
             # Remember, we're only interested in the softmax-probs for the positive class
             np_pred_probs = np.concatenate((np_pred_probs, pred_probs[:, 1].flatten()))

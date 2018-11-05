@@ -124,7 +124,7 @@ class ExperimentHandler(object):
         # Hausdorff Distance maps (used in detector application)
         if self.dt_map_dir is None:
             self.dt_map_dir = os.path.join(self.exper.config.root_dir, os.path.join(self.exper.output_dir,
-                                                                                     config_env.dt_map_dir))
+                                                                                    config_env.dt_map_dir))
         if not os.path.isdir(self.dt_map_dir):
             os.mkdir(self.dt_map_dir)
 

@@ -29,7 +29,7 @@ def training(exper_hdl):
     # create dataset
     dataset = ACDC2017DataSet(exper_hdl.exper.config, search_mask=config.dflt_image_name + ".mhd",
                               fold_ids=exper_hdl.exper.run_args.fold_ids, preprocess=False,
-                              debug=exper_hdl.exper.run_args.quick_run,
+                              debug=exper_hdl.exper.run_args.quick_run, do_flip= True,
                               incomplete_only=exper_hdl.exper.run_args.incomplete_slices)
     # Load model
     if exper_hdl.exper.run_args.retrain_exper is not None:

@@ -192,8 +192,7 @@ class BaseDilated2DCNN(nn.Module):
             if self.loss_function == "soft-dice":
                 losses[cls] = soft_dice_score(predictions[:, cls, :, :], labels[:, cls, :, :])
             elif self.loss_function == "brier":
-                losses[cls] = compute_brier_score(predictions[:, cls, :, :], labels[:, cls, :, :],
-                                                  log_stddev=log_stddev[:, cls, :, :])
+                losses[cls] = compute_brier_score(predictions[:, cls, :, :], labels[:, cls, :, :])
             elif self.loss_function == "cross-entropy":
                 pass
             else:
@@ -268,7 +267,7 @@ class BaseDilated2DCNN(nn.Module):
 
     def do_train(self, batch):
         self.zero_grad()
-        b_precisions = None
+        log_stddev = None
         if not self.use_regression_loss:
             if self.use_loss_attenuation:
                 # in this forward the last layer additionally returns the 1/sigma^2 for ES and ED for all voxels
@@ -310,6 +309,7 @@ class BaseDilated2DCNN(nn.Module):
         :returns validation loss (torch.Tensor) and the label predictions [batch_size, classes, width, height]
                  also as torch.Tensor
         """
+        log_stddev = None
         self.eval(mc_dropout=mc_dropout)
         if not self.use_regression_loss:
             if self.use_loss_attenuation:

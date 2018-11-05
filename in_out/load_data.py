@@ -160,13 +160,14 @@ class ACDC2017DataSet(BaseImageDataSet):
     """
         IMPORTANT: For each patient we load four files (1) ED-image (2) ED-reference (3) ES-image (4) ES-reference
                    !!! ED image ALWAYS ends with 01 index
-                   !!! ES image had higher index
+                   !!! ES image has higher index
                    
                    HENCE ES IMAGE IS THE SECOND WE'RE LOADING in the _load_file_list method
     """
 
     def __init__(self, exper_config, search_mask=None, nclass=4, load_func=load_mhd_to_numpy,
-                 fold_ids=[0], preprocess=False, debug=False, do_augment=True, incomplete_only=False):
+                 fold_ids=[0], preprocess=False, debug=False, do_augment=True, incomplete_only=False,
+                 do_flip=False):
         super(BaseImageDataSet, self).__init__()
         self.name = "ACDC"
         self.data_dir = os.path.join(exper_config.root_dir, exper_config.data_dir)
@@ -180,6 +181,7 @@ class ACDC2017DataSet(BaseImageDataSet):
         self.abs_path_fold = os.path.join(self.data_dir, "fold")
         # extend data set with augmentations. For test images we don't want this to be performed
         self.do_augment = do_augment
+        self.do_flip = do_flip
         self.num_of_augmentations = 3  # four rotations 90, 180, 270 degrees of rotations
         self.image_names = []
         self.incomplete_stats = {"es_wo_rv": 0, "es_wo_myo": 0, "es_wo_lv": 0, "es_wo_all": 0, "es_all": 0,
@@ -343,8 +345,10 @@ class ACDC2017DataSet(BaseImageDataSet):
         self.img_stats = self.img_stats.astype(np.int16)
         if self.incomplete_only:
             print("WARNING - Loading only images WITH INCOMPLETE slices (missing RV/MYO or LV)")
-        print("INFO - Using folds {} - loaded {} files: {} studies in train set, {} studies in validation set".format(
-            self.fold_ids, files_loaded, self.train_num_slices, self.val_num_slices))
+        print("INFO - Using folds {} - loaded {} files: {} studies in train set, {} studies in validation set"
+              " (augment={}/flip={})".format(self.fold_ids, files_loaded, self.train_num_slices, self.val_num_slices,
+                                             self.do_augment, self.do_flip))
+
         print("INFO - Mean width/height/#slices per image {}/{}/{}".format(self.img_stats[0], self.img_stats[1],
                                                                            self.img_stats[2]))
         self.show_image_stats()
@@ -373,15 +377,34 @@ class ACDC2017DataSet(BaseImageDataSet):
                 # same concatenation for the label files of ED and ES
                 label_slice = np.concatenate((np.expand_dims(lbl_es_slice, axis=0),
                                                 np.expand_dims(lbl_ed_slice, axis=0)))
+                # NOTE: Also creating a 180 degree flipped image.
+                # we need to ndarray.copy() the flipped tensor, otherwise we run into annoying errors
+                # reported here: https://discuss.pytorch.org/t/torch-from-numpy-not-support-negative-strides/3663/4
+                if self.do_flip:
+                    flipped_pad_img_slice = np.flip(pad_img_slice, axis=2).copy()
+                    # remember label has shape [#classes, width, height, #slices]
+                    flipped_label_slice = np.flip(label_slice, axis=2).copy()
                 if is_train:
                     self.train_images.append(pad_img_slice)
                     self.train_labels.append(label_slice)
                     # img_slice_id is a combination of imageid and sliceID e.g. (10, 1)
                     self.train_img_slice_ids.append(img_slice_id)
+                    if self.do_flip:
+                        # add flipped image as well
+                        self.train_images.append(flipped_pad_img_slice)
+                        self.train_labels.append(flipped_label_slice)
+                        # img_slice_id is a combination of imageid and sliceID e.g. (10, 1)
+                        self.train_img_slice_ids.append(img_slice_id)
                 else:
                     self.val_images.append(pad_img_slice)
                     self.val_labels.append(label_slice)
                     self.val_img_slice_ids.append(img_slice_id)
+                    if self.do_flip:
+                        # add flipped image as well
+                        self.val_images.append(flipped_pad_img_slice)
+                        self.val_labels.append(flipped_label_slice)
+                        # img_slice_id is a combination of imageid and sliceID e.g. (10, 1)
+                        self.val_img_slice_ids.append(img_slice_id)
                 # rotate for next iteration
                 img_ed_slice = np.rot90(img_ed_slice)
                 lbl_ed_slice = np.rot90(lbl_ed_slice)

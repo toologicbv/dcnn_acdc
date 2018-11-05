@@ -332,7 +332,7 @@ def create_dataset(exper_ensemble, train_fold_id, type_of_map="e_map", num_of_in
     print("INFO - Preparing experimental handlers. This may take a while. Be patient...")
     # REMEMBER: type of map determines whether we're loading mc-dropout predictions or single-predictions
     exper_ensemble.prepare_handlers(type_of_map=type_of_map, force_reload=True, for_detector_dtaset=True,
-                                    patient_ids=ensemble_patients, load_dt_roi_maps=True)
+                                    patient_ids=ensemble_patients, load_dt_roi_maps=False)
     print("INFO - Ready. Loop through patient ids.")
     # instead of using class labels 0, 1, 2, 3 for the seg-masks we will use values between [0, 1]
     labels_float = [0., 0.3, 0.6, 0.9]
@@ -390,10 +390,15 @@ def create_dataset(exper_ensemble, train_fold_id, type_of_map="e_map", num_of_in
     dataset.size_train = len(dataset.train_images)
     dataset.size_test = len(dataset.test_images)
 
-    # clean up all exper handlers that don't belong to training fold
+    # clean up all exper handlers
     for f_id in exper_ensemble.exper_dict.keys():
         del exper_ensemble.seg_exper_handlers[f_id].test_images
-        del exper_ensemble.seg_exper_handlers[f_id]
+        del exper_ensemble.seg_exper_handlers[f_id].pred_labels
+        del exper_ensemble.seg_exper_handlers[f_id].target_roi_maps
+        if exper_ensemble.seg_exper_handlers[f_id].entropy_maps is not None:
+            del exper_ensemble.seg_exper_handlers[f_id].entropy_maps
+        if exper_ensemble.seg_exper_handlers[f_id].u_maps is not None:
+            del exper_ensemble.seg_exper_handlers[f_id].u_maps
 
     return dataset
 

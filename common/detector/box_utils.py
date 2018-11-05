@@ -159,6 +159,7 @@ def adjust_roi_bounding_box(roi_bbox, slice_idx=None, config=config_detector):
 
     :param roi_bbox: BoundingBox object
     :param slice_idx: only for debugging purposes, so we can find back the slice we're processing
+    :param config: BaseConfig object
     :return: new bounding box around e.g. automatic segmentation mask, that fits the grid spacing we defined
              e.g. 8 voxels.
     """

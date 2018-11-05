@@ -25,7 +25,7 @@ class BatchHandler(object):
         self.loss = torch.zeros(1)
         self.num_sub_batches = torch.zeros(1)
         self.backward_freq = backward_freq
-        self.dataset_slice_ids = []
+        self.batch_dta_slice_ids = []
         self.sample_range = self.data_set.get_size(is_train=is_train)
         self.verbose = verbose
         self.batch_bounding_boxes = None
@@ -34,6 +34,7 @@ class BatchHandler(object):
         self.batch_size = 0
         self.batch_images = None
         self.batch_labels_per_voxel = None
+        self.batch_patient_ids = []
         # stores indications for base/apex=1 or middle=0
         self.batch_extra_labels = None
         self.target_labels_per_roi = None
@@ -45,6 +46,11 @@ class BatchHandler(object):
         self.batch_pred_probs = None
         self.batch_pred_labels = None
         self.batch_gt_labels = None
+        # dictionary with key=slice_id and value list of indices that refer to the numpy array indices of batch_pred_probs
+        # and batch_pred_labels, batch_gt_labels. we need these to evaluate the performance PER SLICE (FROC curve)
+        # e.g.
+        self.batch_slice_pred_probs= {}
+        self.batch_slice_gt_labels = {}
         # in order to link slice_ids from the dataset used to generate batches, to the patient_id (for analysis only)
         self.trans_dict = {}
         # we store the last slice_id we returned for the test batch, so we can chunk the complete test set if
@@ -73,8 +79,19 @@ class BatchHandler(object):
             self.loss = self.loss.cuda()
             self.num_sub_batches = self.num_sub_batches.cuda()
 
-    def add_probs(self, probs):
+    def add_probs(self, probs, slice_id=None):
+        """
+
+        :param probs: has shape [1, w, h] and contains only the probabilities for the positive(true) class
+        :param slice_id:
+        :return: None
+        """
         self.batch_pred_probs.append(probs)
+        if slice_id is not None:
+            self.batch_slice_pred_probs[slice_id] = probs.flatten()
+
+    def add_gt_labels_slice(self, gt_labels, slice_id):
+        self.batch_slice_gt_labels[slice_id] = gt_labels
 
     def flatten_batch_probs(self):
         # Only used during testing
@@ -87,9 +104,11 @@ class BatchHandler(object):
 
     def fill_trans_dict(self):
         self.trans_dict = {}
-
-        for slice_id in self.dataset_slice_ids:
+        # only fill the translation dictionary (slice_id -> patient_id) for the slices we are processing in this batch
+        for slice_id in self.batch_dta_slice_ids:
             for patient_id, slice_info in self.data_set.trans_dict.iteritems():
+                # slice_info is a 2-tuple with is_train indication and list of slice ids
+                # we're only interested in train or test images. depends on the batch we're evaluating
                 if slice_info[0] == self.is_train:
                     if slice_id in slice_info[1]:
                         self.trans_dict[slice_id] = patient_id
@@ -241,7 +260,7 @@ class BatchHandler(object):
                                                         is_positive=overall_lbls)
             target_labels[1][b] = overall_lbls
             b += 1
-            self.dataset_slice_ids.append(slice_area_spec[0])
+            self.batch_dta_slice_ids.append(slice_area_spec[0])
         for slice_area_spec in negative_idx:
             # print("INFO - Negatives slice num {}".format(slice_area_spec))
             # _create_train_batch_item returns: torch.FloatTensor [3, patch_size, patch_size],
@@ -252,7 +271,7 @@ class BatchHandler(object):
                                                                                              batch_item_nr=b)
             target_labels[1][b] = overall_lbls
             b += 1
-            self.dataset_slice_ids.append(slice_area_spec[0])
+            self.batch_dta_slice_ids.append(slice_area_spec[0])
 
         return batch_imgs, np_batch_lbls, target_labels
 
@@ -398,10 +417,11 @@ class BatchHandler(object):
             # we need to increase the index by one to start with the "next" slice from the test set
             self.last_test_list_idx += 1
         self.num_of_skipped_slices = 0
-        self.dataset_slice_ids = []
+        self.batch_dta_slice_ids = []
         self.batch_pred_probs = []
         self.batch_pred_labels = []
         self.batch_gt_labels = []
+        self.batch_patient_ids = []
         # stores 1=apex/base or 0=middle slice
         self.batch_extra_labels = []
         self.batch_images, self.target_labels_per_roi = [], []
@@ -424,7 +444,6 @@ class BatchHandler(object):
                 input_channels = self.data_set.test_images[list_idx]
             label = self.data_set.test_labels[list_idx]
             base_apex_slice = self.data_set.test_labels_extra[list_idx]
-            self.batch_extra_labels.append(base_apex_slice)
             roi_area_spec = self.data_set.test_pred_lbl_rois[list_idx]
             slice_x, slice_y = BoundingBox.convert_to_slices(roi_area_spec)
 
@@ -445,6 +464,7 @@ class BatchHandler(object):
                 # we test ALL SLICES
                 pass
 
+            self.batch_extra_labels.append(base_apex_slice)
             # now slice input and label according to roi specifications (automatic segmentation mask roi)
             input_channels_patch = input_channels[:, slice_x, slice_y]
             _, w, h = input_channels_patch.shape
@@ -456,7 +476,7 @@ class BatchHandler(object):
             target_labels_stats_per_roi[1] = np.array([contains_pos_voxels])
             # construct PyTorch tensor and add a dummy batch dimension in front
             input_channels_patch = torch.FloatTensor(torch.from_numpy(input_channels_patch[np.newaxis]).float())
-            self.dataset_slice_ids.append(list_idx)
+            self.batch_dta_slice_ids.append(list_idx)
             # initialize dictionary target_labels with (currently) three keys for grid-spacing 1 (overall), 4, 8
             for i in np.arange(2, self.num_of_max_pool_layers + 1):
                 grid_spacing = int(2 ** i)
@@ -497,7 +517,7 @@ class BatchHandler(object):
             yield input_channels_patch, target_labels
             self.last_test_list_idx = list_idx
 
-    def visualize_batch(self, grid_spacing=8, index_range=None, base_apex_only=False):
+    def visualize_batch(self, grid_spacing=8, index_range=None, base_apex_only=False, sr_threshold=0.5):
 
         mycmap = transparent_cmap(plt.get_cmap('jet'))
         if index_range is None:
@@ -514,7 +534,7 @@ class BatchHandler(object):
         fig = plt.figure(figsize=(width, height))
         heat_map = None
         for idx in slice_idx_generator:
-            slice_num = self.dataset_slice_ids[idx]
+            slice_num = self.batch_dta_slice_ids[idx]
             base_apex_slice = self.batch_extra_labels[idx]
             if self.batch_label_slices is not None and len(self.batch_label_slices) != 0:
                 target_slice = self.batch_label_slices[idx]
@@ -539,7 +559,7 @@ class BatchHandler(object):
                     w, h = image_slice.shape
                     heat_map, grid_map, target_lbl_grid = create_grid_heat_map(pred_probs, grid_spacing, w, h,
                                                                                target_lbl_binary_grid,
-                                                                               prob_threshold=0.5)
+                                                                               prob_threshold=sr_threshold)
             else:
                 # training
                 image_slice = self.batch_images[idx][0]
