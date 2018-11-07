@@ -132,6 +132,16 @@ class BaseConfig(object):
                                     1: "20180703_18_13_51_dcnn_mc_f1p01_entrpy_150KE_lr2e02",
                                     0: "20180703_18_09_33_dcnn_mc_f0p01_entrpy_150KE_lr2e02"}
 
+        # plotting
+        self.title_font_large = {'fontname': 'Monospace', 'size': '36', 'color': 'black', 'weight': 'normal'}
+        self.title_font_medium = {'fontname': 'Monospace', 'size': '20', 'color': 'black', 'weight': 'normal'}
+        self.title_font_small = {'fontname': 'Monospace', 'size': '16', 'color': 'black', 'weight': 'normal'}
+        self.axis_font = {'fontname': 'Monospace', 'size': '16', 'color': 'black', 'weight': 'normal'}
+        self.axis_font18 = {'fontname': 'Monospace', 'size': '18', 'color': 'black', 'weight': 'normal'}
+        self.axis_font20 = {'fontname': 'Monospace', 'size': '20', 'color': 'black', 'weight': 'normal'}
+        self.axis_font22 = {'fontname': 'Monospace', 'size': '22', 'color': 'black', 'weight': 'normal'}
+        self.axis_font24 = {'fontname': 'Monospace', 'size': '24', 'color': 'black', 'weight': 'normal'}
+
     def get_architecture(self, model_name):
         if model_name[:3] == "rd1":
             self.architecture = self.detector_cfg[model_name]

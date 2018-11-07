@@ -7,6 +7,7 @@ from plotting.color_maps import transparent_cmap
 from common.detector.config import config_detector
 from common.detector.box_utils import BoundingBox
 from common.detector.helper import create_grid_heat_map
+from common.hvsmr.helper import convert_to_multilabel
 
 
 class BatchHandler(object):
@@ -35,6 +36,8 @@ class BatchHandler(object):
         self.batch_images = None
         self.batch_labels_per_voxel = None
         self.batch_patient_ids = []
+        # useful in order to find back the original patient+slice IDs /  only used for test-batch
+        self.batch_patient_slice_id = []
         # stores indications for base/apex=1 or middle=0
         self.batch_extra_labels = None
         self.target_labels_per_roi = None
@@ -422,6 +425,7 @@ class BatchHandler(object):
         self.batch_pred_labels = []
         self.batch_gt_labels = []
         self.batch_patient_ids = []
+        self.batch_slice_areas = []
         # stores 1=apex/base or 0=middle slice
         self.batch_extra_labels = []
         self.batch_images, self.target_labels_per_roi = [], []
@@ -464,7 +468,9 @@ class BatchHandler(object):
                 # we test ALL SLICES
                 pass
 
+            self.batch_slice_areas.append(tuple((slice_x, slice_y)))
             self.batch_extra_labels.append(base_apex_slice)
+            self.batch_patient_slice_id.append(self.data_set.test_patient_slice_id[list_idx])
             # now slice input and label according to roi specifications (automatic segmentation mask roi)
             input_channels_patch = input_channels[:, slice_x, slice_y]
             _, w, h = input_channels_patch.shape
@@ -517,9 +523,11 @@ class BatchHandler(object):
             yield input_channels_patch, target_labels
             self.last_test_list_idx = list_idx
 
-    def visualize_batch(self, grid_spacing=8, index_range=None, base_apex_only=False, sr_threshold=0.5):
+    def visualize_batch(self, grid_spacing=8, index_range=None, base_apex_only=False, sr_threshold=0.5,
+                        exper_handler=None):
 
-        mycmap = transparent_cmap(plt.get_cmap('jet'))
+        mycmap = transparent_cmap(plt.get_cmap('jet'), alpha=0.4)
+        error_cmap = transparent_cmap(plt.get_cmap('jet'), alpha=0.6)
         if index_range is None:
             index_range = [0, self.batch_size]
         slice_idx_generator = np.arange(index_range[0], index_range[1])
@@ -581,12 +589,24 @@ class BatchHandler(object):
 
             ax2 = plt.subplot2grid((rows, columns), (row, 2), rowspan=2, colspan=2)
             ax2.imshow(image_slice, cmap=cm.gray)
-            ax2.set_title("Contains ta-voxels {}".format(int(target_lbl_binary)))
+            if self.trans_dict is not None:
+                # contains tuple (patient_id, slice_id (increased + 1), 0=ES/1=ED)
+                pat_slice_id = self.batch_patient_slice_id[idx]
+                seg_error_volume = exper_handler.get_pred_labels_errors(patient_id=pat_slice_id[0])
+                seg_error_volume = convert_to_multilabel(seg_error_volume, bg_cls_idx=[0, 4])
+                seg_error_slice = seg_error_volume[pat_slice_id[2], :, :, pat_slice_id[1] - 1]
+                slice_x, slice_y = self.batch_slice_areas[idx]
+                seg_error_slice = seg_error_slice[slice_x, slice_y]
+            else:
+                pat_slice_id = None
+            ax2.set_title("Contains ta-voxels {} {}".format(int(target_lbl_binary), pat_slice_id))
 
             if heat_map is not None:
                 fontsize = 10 if grid_spacing == 4 else 15
                 ax1.imshow(uncertainty_slice, cmap=mycmap)
-                ax2.imshow(target_slice, cmap=mycmap, vmin=0, vmax=1)
+                ax2.imshow(target_slice, cmap=mycmap)
+                ax2.imshow(seg_error_slice, cmap=error_cmap)
+
                 # automatic seg-mask
                 # ax2.imshow(self.batch_images[idx][0][2], cmap=mycmap)
                 ax2.imshow(heat_map, cmap=mycmap, vmin=0, vmax=1)
@@ -594,7 +614,7 @@ class BatchHandler(object):
                     z_i = target_lbl_binary_grid[i]
                     if z_i == 1:
                         # BECAUSE, we are using ax2 with imshow, we need to swap x, y coordinates of map_index
-                        ax2.text(map_index[1], map_index[0], '{}'.format(z_i), ha='center', va='center', fontsize=15,
+                        ax2.text(map_index[1], map_index[0], '{}'.format(z_i), ha='center', va='center', fontsize=25,
                                  color="y")
             else:
                 ax2.imshow(uncertainty_slice, cmap=mycmap)

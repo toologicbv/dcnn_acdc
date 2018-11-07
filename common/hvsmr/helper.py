@@ -4,6 +4,35 @@ from common.hvsmr.config import config_hvsmr
 from utils.hvsmr.exper_handler import HVSMRExperimentHandler
 
 
+def convert_to_multilabel(labels, bg_cls_idx=[0, 4]):
+    """
+    Assuming label_slice has shape [#classes, w, h, #slices].
+
+    AND cls_idx=0 is background class.
+
+    :param label_slice:
+    :param bg_cls_idx: indices in dim0 that are background classes (0 and 4 for ACDC dataset)
+    :return:
+                converted volume where each slice contains all seg errors indicated by different scalar values
+                has shape [2, w, h, #slices]
+    """
+    nclasses, w, h, num_slices = labels.shape
+    multilabel_volume = np.zeros((2, w, h, num_slices))
+    for slice_id in np.arange(num_slices):
+        for cls_idx in np.arange(nclasses):
+            # assuming first bg class idx = 0
+            if cls_idx not in bg_cls_idx:
+                lbl_slice[labels[cls_idx, :, :, slice_id] == 1] = cls_idx
+            else:
+                # when starting with ED we save the seg-error labels for ES
+                if cls_idx == bg_cls_idx[1]:
+                    multilabel_volume[0, :, :, slice_id] = lbl_slice
+                lbl_slice = np.zeros((w, h))
+        # ED slice seg-errors
+        multilabel_volume[1, :, :, slice_id] = lbl_slice
+    return multilabel_volume
+
+
 def detect_seg_errors(labels, pred_labels, is_multi_class=False):
 
     """

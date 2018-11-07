@@ -70,6 +70,7 @@ class ExperimentHandler(object):
         self.entropy_maps = None
         self.agg_umaps = None
         self.dt_maps = None
+        self.pred_labels_errors = None
         # for ROI learning of areas in automatic segmentations that we need to inspect after inference
         self.target_roi_maps = None
         self.ref_map_blobs = None
@@ -106,6 +107,8 @@ class ExperimentHandler(object):
             self.dt_maps = OrderedDict()
         if self.target_roi_maps is None:
             self.target_roi_maps = OrderedDict()
+        if self.pred_labels_errors is None:
+            self.pred_labels_errors = OrderedDict()
 
     def _check_dirs(self, config_env):
         if self.umap_output_dir is None:
@@ -1175,13 +1178,18 @@ class ExperimentHandler(object):
             _, labels = self.test_set.get_test_pair(p_id)
             dt_slices = self.get_dt_maps(p_id)
             self.target_roi_maps[p_id] = determine_target_voxels(auto_pred, labels, dt_slices)
+            pred_labels_errors = auto_pred != labels
             if mc_dropout:
                 file_suffix = p_id + "_troi_map_mc.npz"
+                file_suffix_errors = p_id + "_pred_labels_errors_mc.npz"
             else:
                 file_suffix = p_id + "_troi_map.npz"
+                file_suffix_errors = p_id + "_pred_labels_errors.npz"
             file_name = os.path.join(self.troi_map_dir, file_suffix)
+            file_name_errors = os.path.join(self.pred_output_dir, file_suffix_errors)
             try:
                 np.savez(file_name, target_roi=self.target_roi_maps[p_id])
+                np.savez(file_name_errors, pred_labels_errors=pred_labels_errors)
             except IOError:
                 print("ERROR - cannot save target-roi map to {}".format(file_name))
                 raise
@@ -1222,6 +1230,43 @@ class ExperimentHandler(object):
                 raise
         if patient_id is not None:
             return self.target_roi_maps[patient_id]
+
+    def get_pred_labels_errors(self, patient_id=None, mc_dropout=False, force_reload=False):
+        self._check_dirs(config_env=config)
+        self._check_maps()
+        if self.pred_labels_errors is not None and patient_id is not None and not force_reload:
+            if patient_id in self.pred_labels_errors.keys():
+                return self.pred_labels_errors[patient_id]
+        # we didn't find target_roi_map in dictionary, or patient_id was empty, load from disk
+        if mc_dropout:
+            file_suffix = "__pred_labels_errors_mc.npz"
+        else:
+            file_suffix = "_pred_labels_errors.npz"
+        if patient_id is None:
+            search_path = os.path.join(self.pred_output_dir, "*" + file_suffix)
+        else:
+            filename = patient_id + file_suffix
+            search_path = os.path.join(self.pred_output_dir, filename)
+
+        if len(glob.glob(search_path)) == 0:
+            raise ValueError("ERROR - No search result for {}".format(search_path))
+        for fname in glob.glob(search_path):
+            # get base filename first and then extract patient/name/ID (filename is e.g. patient012_dt_map.npz)
+            file_basename = os.path.splitext(os.path.basename(fname))[0]
+            patient_id = file_basename[:file_basename.find("_")]
+            try:
+                data = np.load(fname)
+                self.pred_labels_errors[patient_id] = data["pred_labels_errors"]
+                del data
+            except IOError:
+                self.info("ERROR - Unable to load predicted label errors from {}".format(fname))
+                raise
+            except Exception as e:
+                self.info(traceback.format_exc())
+                self.info("ERROR - when loading {}".format(fname))
+                raise
+        if patient_id is not None:
+            return self.pred_labels_errors[patient_id]
 
     def info(self, message):
         if self.logger is None:

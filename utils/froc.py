@@ -66,14 +66,17 @@ def compute_froc(pred_probs, gt_labels, nbr_of_thresholds=40, range_threshold=No
 
     threshold_sensitivity = []
     threshold_precision = []
+    threshold_fp_rate = []  # 1 - specificity: False negative rate, used on ROC AUC curve x-axis
     threshold_fp = []
     if slice_probs_dict is not None:
         slice_threshold_sensitivity = []
         slice_threshold_precision = []
+        slice_threshold_fp_rate = []
         slice_threshold_fp = []
     else:
         slice_threshold_sensitivity = None
         slice_threshold_precision = None
+        slice_threshold_fp_rate = None
         slice_threshold_fp = None
     # loop over thresholds
     for i, threshold in enumerate(threshold_list):
@@ -93,18 +96,22 @@ def compute_froc(pred_probs, gt_labels, nbr_of_thresholds=40, range_threshold=No
             if s_tp_2[0] != 0:
                 slice_threshold_sensitivity.append((float(s_tp_2[0]) / (float(s_tp_2[0]) + s_fn_2[0])))
                 slice_threshold_precision.append((float(s_tp_2[0]) / (float(s_tp_2[0]) + s_fp_2[0])))
+                slice_threshold_fp_rate.append((float(s_fp_2[0]) / (float(s_tn_2[0]) + s_fp_2[0])))
                 slice_threshold_fp.append(s_fp_2[0])
         # check that ground truth contains at least one positive
         threshold_sensitivity.append((float(tp_2[0]) / (float(tp_2[0]) + fn_2[0])))
         threshold_precision.append((float(tp_2[0]) / (float(tp_2[0]) + fp_2[0])))
+        threshold_fp_rate.append((float(fp_2[0]) / (float(tn_2[0]) + fp_2[0])))
         threshold_fp.append(fp_2[0])
 
     threshold_sensitivity = np.array(threshold_sensitivity)
     threshold_precision = np.array(threshold_precision)
+    threshold_fp_rate = np.array(threshold_fp_rate)
     threshold_fp = np.array(threshold_fp)
     if slice_probs_dict is not None:
         slice_threshold_sensitivity = np.array(slice_threshold_sensitivity)
         slice_threshold_precision = np.array(slice_threshold_precision)
+        slice_threshold_fp_rate = np.array(slice_threshold_fp_rate)
         slice_threshold_fp = np.array(slice_threshold_fp)
 
     if exper_handler is not None:
@@ -119,19 +126,23 @@ def compute_froc(pred_probs, gt_labels, nbr_of_thresholds=40, range_threshold=No
             file_name = "froc_data"
         abs_file_name = os.path.join(output_dir, file_name)
         try:
-            np.savez(abs_file_name, threshold_sensitivity=threshold_sensitivity, threshold_fp=threshold_fp,
-                     slice_threshold_sensitivity=slice_threshold_sensitivity, slice_threshold_fp=slice_threshold_fp,
-                     slice_threshold_precision=slice_threshold_precision, threshold_precision=threshold_precision,
+            np.savez(abs_file_name, threshold_sensitivity=threshold_sensitivity, threshold_precision=threshold_precision,
+                     threshold_fp=threshold_fp, threshold_fp_rate=threshold_fp_rate,
+                     slice_threshold_sensitivity=slice_threshold_sensitivity,
+                     slice_threshold_precision=slice_threshold_precision,
+                     slice_threshold_fp=slice_threshold_fp,
+                     slice_threshold_fp_rate=slice_threshold_fp_rate,
                      threshold_list=threshold_list, num_of_slices=num_of_slices, num_of_grids=num_of_grids)
             print("INFO - Saved froc data successfully to {}".format(abs_file_name))
         except Exception as e:
             print(traceback.format_exc())
 
     if slice_probs_dict is None:
-        return threshold_sensitivity, threshold_precision, threshold_fp, threshold_list, num_of_slices, num_of_grids
+        return threshold_sensitivity, threshold_precision, threshold_fp, threshold_fp_rate, threshold_list, num_of_slices, num_of_grids
     else:
-        return threshold_sensitivity, threshold_precision, threshold_fp, slice_threshold_sensitivity, slice_threshold_precision, \
-               slice_threshold_fp, threshold_list, num_of_slices, num_of_grids
+        return threshold_sensitivity, threshold_precision, threshold_fp, threshold_fp_rate,\
+               slice_threshold_sensitivity, slice_threshold_precision, slice_threshold_fp, slice_threshold_fp_rate, \
+               threshold_list, num_of_slices, num_of_grids
 
 
 def load_froc_data(exper_handler):
@@ -161,4 +172,24 @@ def load_froc_data(exper_handler):
 
     return threshold_sensitivity, threshold_precision, threshold_fp, slice_threshold_sensitivity, slice_threshold_precision, \
            slice_threshold_fp, threshold_list, num_of_slices, num_of_grids
+
+
+class RegionDetectionEvaluation(object):
+
+    def __init__(self, pred_probs, gt_labels, slice_probs_dict, slice_labels_dict, exper_handler,
+                 nbr_of_thresholds=50, base_apex_labels=None, loc=0, range_threshold=None):
+
+        self.pred_probs = pred_probs
+        self.gt_labels = gt_labels
+        self.slice_probs_dict = slice_probs_dict
+        self.slice_labels_dict = slice_labels_dict
+        self.exper_handler = exper_handler
+        self.nbr_of_thresholds = nbr_of_thresholds
+        self.base_apex_labels = base_apex_labels
+        # loc can have 2 values: 0=non-base-apex    1=base-apex
+        self.loc = loc
+        self.range_threshold = range_threshold
+
+    def generate_auc_curves(self):
+        pass
 

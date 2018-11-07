@@ -4,7 +4,7 @@ from pylab import MaxNLocator
 import numpy as np
 import os
 from matplotlib import cm
-from common.hvsmr.helper import detect_seg_errors
+from common.hvsmr.helper import detect_seg_errors, convert_to_multilabel
 from common.common import convert_to_multiclass
 
 
@@ -66,12 +66,15 @@ def plot_slices(exper_handler, patient_id, do_show=True, do_save=False, threshol
         num_of_classes = 4
         mri_image = mri_image[:, config.pad_size:-config.pad_size, config.pad_size:-config.pad_size, :]
         errors_to_detect = exper_handler.get_target_roi_maps(patient_id=patient_id, mc_dropout=mc_dropout)
-
+        seg_error_volume = exper_handler.pred_labels_errors(patient_id=patient_id, mc_dropout=mc_dropout)
+        # convert [8, w, h, #slices] to [2, w, h, #slices]  ES/ED
+        seg_error_volume = convert_to_multilabel(seg_error_volume, bg_cls_idx=[0, 4])
     else:
         is_acdc = False
         num_of_classes = 3
         num_of_phases = 1
         errors_to_detect = None
+        seg_error_volume = None
     if slice_range is None:
         num_of_slices = umap.shape[-1]
         str_slice_range = "_s1_" + str(num_of_slices)
@@ -106,7 +109,8 @@ def plot_slices(exper_handler, patient_id, do_show=True, do_save=False, threshol
                 # IMPORTANT: (already verified) Assuming labels AND pred_labels has shape [8, w, h, #slices]
                 labels_slice = labels[cls_offset:cls_offset+num_of_classes, :, :, slice_id]
                 pred_labels_slice = pred_labels[cls_offset:cls_offset+num_of_classes, :, :, slice_id]
-                errors_slice = detect_seg_errors(labels_slice, pred_labels_slice, is_multi_class=False)
+                # errors_slice = detect_seg_errors(labels_slice, pred_labels_slice, is_multi_class=False)
+                errors_slice = seg_error_volume[phase, :, :, slice_id]
                 errors_slice_to_detect = errors_to_detect[cls_offset:cls_offset+num_of_classes, :, :, slice_id]
             else:
                 rows = 2 * num_of_slices

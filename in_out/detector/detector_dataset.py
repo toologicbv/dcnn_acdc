@@ -42,6 +42,7 @@ class RegionDetectorDataSet(object):
         self.size_test = 0
         self.train_patient_ids = []
         self.test_patient_ids = []
+        self.test_patient_slice_id = []
         # translation dictionary from patient id to list index numbers. Key=patient_id,
         # value=tuple(is_train, [<indices>])
         self.trans_dict = OrderedDict()
@@ -92,7 +93,7 @@ class RegionDetectorDataSet(object):
         return roi_areas, roi_aspect_ratio
 
     def augment_data(self, input_chnl1, input_chnl2, input_chnl3, label_slices, is_train=False,
-                     do_rotate=False):
+                     do_rotate=False, patient_id=None, cardiac_phase=None):
         """
         Augments image slices by rotating z-axis slices for 90, 180 and 270 degrees
 
@@ -103,6 +104,8 @@ class RegionDetectorDataSet(object):
         :param is_train: boolean
         :param do_rotate: boolean, if True (currently only for training images) then each slice is rotated
                           three times (90, ..., 270)
+        :param patient_id
+        :param cardiac_phase
         :return None (fills train/test arrays of object)
 
         """
@@ -134,6 +137,7 @@ class RegionDetectorDataSet(object):
         list_array_indices = []
         # for each image-slice rotate the img four times. We're doing that for all three orientations
         for z in range(num_of_slices):
+            pat_slice_id = tuple((patient_id, z+1, cardiac_phase))
             input_chnl1_slice = input_chnl1[:, :, z]
             input_chnl2_slice = input_chnl2[:, :, z]
             input_chnl3_slice = input_chnl3[:, :, z]
@@ -178,12 +182,12 @@ class RegionDetectorDataSet(object):
             else:
                 # Note: for the TEST set we also use the label_slice_filtered object.
                 self.add_image_to_set(is_train, input_chnl1_slice, input_chnl2_slice, input_chnl3_slice,
-                                      label_slice_filtered, list_array_indices)
+                                      label_slice_filtered, list_array_indices, pat_slice_id)
 
         return list_array_indices
 
     def add_image_to_set(self, is_train, input_chnl1_slice, input_chnl2_slice, input_chnl3_slice, label_slice,
-                         list_array_indices):
+                         list_array_indices, pat_slice_id=None):
         if is_train:
             p_slice1 = np.pad(input_chnl1_slice, RegionDetectorDataSet.pad_size, 'constant',
                               constant_values=(0,)).astype(RegionDetectorDataSet.pixel_dta_type)
@@ -235,6 +239,7 @@ class RegionDetectorDataSet(object):
             self.test_lbl_rois.append(bbox_for_rois)
             list_array_indices.append(len(self.test_images) - 1)
             self.test_pred_lbl_rois.append(pred_lbl_roi.box_four)
+            self.test_patient_slice_id.append(pat_slice_id)
         return list_array_indices
 
     @staticmethod
@@ -384,7 +389,8 @@ def create_dataset(exper_ensemble, train_fold_id, type_of_map="e_map", num_of_in
             # returns list of indices.
             # NOTE: we're currently NOT rotating the TEST images
             list_data_indices.extend(dataset.augment_data(mri_image[phase], u_maps[phase], pred_labels_multi[phase],
-                                                          label_slices, do_rotate=is_train, is_train=is_train))
+                                                          label_slices, do_rotate=is_train, is_train=is_train,
+                                                          patient_id=patient_id, cardiac_phase=phase))
         dataset.trans_dict[patient_id] = tuple((is_train, list_data_indices))
 
     dataset.size_train = len(dataset.train_images)
@@ -392,14 +398,20 @@ def create_dataset(exper_ensemble, train_fold_id, type_of_map="e_map", num_of_in
 
     # clean up all exper handlers
     for f_id in exper_ensemble.exper_dict.keys():
-        del exper_ensemble.seg_exper_handlers[f_id].test_images
-        del exper_ensemble.seg_exper_handlers[f_id].pred_labels
-        del exper_ensemble.seg_exper_handlers[f_id].target_roi_maps
-        if exper_ensemble.seg_exper_handlers[f_id].entropy_maps is not None:
-            del exper_ensemble.seg_exper_handlers[f_id].entropy_maps
-        if exper_ensemble.seg_exper_handlers[f_id].u_maps is not None:
-            del exper_ensemble.seg_exper_handlers[f_id].u_maps
-
+        if f_id != train_fold_id:
+            del exper_ensemble.seg_exper_handlers[f_id].test_images
+            del exper_ensemble.seg_exper_handlers[f_id].pred_labels
+            del exper_ensemble.seg_exper_handlers[f_id].target_roi_maps
+            if exper_ensemble.seg_exper_handlers[f_id].entropy_maps is not None:
+                del exper_ensemble.seg_exper_handlers[f_id].entropy_maps
+            if exper_ensemble.seg_exper_handlers[f_id].u_maps is not None:
+                del exper_ensemble.seg_exper_handlers[f_id].u_maps
+        else:
+            exper_ensemble.seg_exper_handlers[f_id].test_images = None
+            exper_ensemble.seg_exper_handlers[f_id].pred_labels = None
+            exper_ensemble.seg_exper_handlers[f_id].target_roi_maps = None
+            exper_ensemble.seg_exper_handlers[f_id].entropy_maps = None
+            exper_ensemble.seg_exper_handlers[f_id].u_maps = None
     return dataset
 
 
