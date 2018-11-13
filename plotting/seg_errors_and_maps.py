@@ -33,8 +33,11 @@ def plot_slices(exper_handler, patient_id, do_show=True, do_save=False, threshol
         mycmap._lut[:, -1] = np.linspace(0, 0.8, N + 4)
         return mycmap
 
-    if right_column_overlay not in ["ref", "error", "auto"]:
-        raise ValueError("ERROR - seg_mask_type must be ref, error or auto! (and not {})".format(seg_mask_type))
+    if right_column_overlay not in [None, "ref", "error", "auto"]:
+        raise ValueError("ERROR - right_column_overlay must be ref, error or auto! (and not {})".format(right_column_overlay))
+
+    if left_column_overlay not in [None, "map", "error_roi"]:
+        raise ValueError("ERROR - left_column_overlay must be ref, error or auto! (and not {})".format(left_column_overlay))
 
     if type_of_map not in ["e_map", "u_map"]:
         raise ValueError("ERROR - type_of_map must be e_map or u_map! (and not {})".format(type_of_map))
@@ -65,8 +68,10 @@ def plot_slices(exper_handler, patient_id, do_show=True, do_save=False, threshol
         phase_labels = ["ES", "ED"]
         num_of_classes = 4
         mri_image = mri_image[:, config.pad_size:-config.pad_size, config.pad_size:-config.pad_size, :]
-        errors_to_detect = exper_handler.get_target_roi_maps(patient_id=patient_id, mc_dropout=mc_dropout)
-        seg_error_volume = exper_handler.pred_labels_errors(patient_id=patient_id, mc_dropout=mc_dropout)
+        errors_to_detect = exper_handler.get_target_roi_maps(patient_id=patient_id, mc_dropout=mc_dropout,
+                                                             force_reload=True)
+        seg_error_volume = exper_handler.get_pred_labels_errors(patient_id=patient_id, mc_dropout=mc_dropout,
+                                                                force_reload=True)
         # convert [8, w, h, #slices] to [2, w, h, #slices]  ES/ED
         seg_error_volume = convert_to_multilabel(seg_error_volume, bg_cls_idx=[0, 4])
     else:
@@ -135,6 +140,8 @@ def plot_slices(exper_handler, patient_id, do_show=True, do_save=False, threshol
                 errors_slice_to_detect = convert_to_multiclass(errors_slice_to_detect)
                 _ = ax1.imshow(errors_slice_to_detect, cmap=mycmap)
                 left_title_suffix = " (error rois)"
+            else:
+                left_title_suffix = ""
 
             # ax1.set_aspect('auto')
             # fig.colorbar(ax1plot, ax=ax1, fraction=0.046, pad=0.04)

@@ -1239,7 +1239,7 @@ class ExperimentHandler(object):
                 return self.pred_labels_errors[patient_id]
         # we didn't find target_roi_map in dictionary, or patient_id was empty, load from disk
         if mc_dropout:
-            file_suffix = "__pred_labels_errors_mc.npz"
+            file_suffix = "_pred_labels_errors_mc.npz"
         else:
             file_suffix = "_pred_labels_errors.npz"
         if patient_id is None:
