@@ -48,7 +48,7 @@ python generate_uncertainty_stats.py --cuda --exper_dict_id="exp_base_brier" --c
 
 """
 ROOT_DIR = os.getenv("REPO_PATH", "/home/jorg/repo/dcnn_acdc/")
-LOG_DIR = os.path.join(ROOT_DIR, "logs")
+LOG_DIR = os.path.join(ROOT_DIR, "logs/ACDC/")
 exp_mc01_brier = {3: "20180426_14_14_57_dcnn_mc_f3p01_brier_150KE_lr2e02",
                   2: "20180426_14_14_39_dcnn_mc_f2p01_brier_150KE_lr2e02",
                   1: "20180426_14_13_46_dcnn_mc_f1p01_brier_150KE_lr2e02",

@@ -15,6 +15,7 @@ import dill
 from common.parsing import create_def_argparser, run_dict
 
 from common.common import create_logger, create_exper_label, setSeed, load_pred_labels
+from common.cardiac_indices import compute_ejection_fraction
 from config.config import config, DEFAULT_DCNN_MC_2D
 from utils.batch_handlers import TwoDimBatchHandler, BatchStatistics
 from utils.generate_uncertainty_maps import InferenceGenerator, ImageUncertainties, OutOfDistributionSlices
@@ -95,6 +96,9 @@ class ExperimentHandler(object):
         # to be inspected after segmentation
         self.troi_map_dir = None
         self._check_maps()
+        # dictionary (patient_id) for cardiac indices of test_set. values: np.array [2, 3]
+        # dim0: LV, dim0: RV; dim1: 0=ESV, 1=EDV, 2=Ejection fraction
+        self.cardiac_indices = {}
 
     def _check_maps(self):
         if self.u_maps is None:
@@ -329,10 +333,10 @@ class ExperimentHandler(object):
                               val_loss, duration, arr_val_acc[0], arr_val_acc[1]))
         del val_batch
 
-    def test(self, checkpoints, test_set, image_num=0, mc_samples=1, sample_weights=False, compute_hd=False,
+    def test(self, checkpoints, test_set=None, image_num=0, mc_samples=1, sample_weights=False, compute_hd=False,
              use_seed=False, verbose=False, store_details=False,
              do_filter=True, u_threshold=0., save_pred_labels=False,
-             store_test_results=True):
+             store_test_results=True, save_mc_samples=False):
         """
 
         :param model:
@@ -366,6 +370,11 @@ class ExperimentHandler(object):
         # if we're lazy and just pass checkpoints as a single number, we convert this here to a list
         if not isinstance(checkpoints, list):
             checkpoints = list(checkpoints)
+        # ugly! yes! but due to evolution of this method
+        if test_set is None:
+            if self.test_set is None:
+                self.get_test_set()
+            test_set = self.test_set
 
         # -------------------------------------- local procedures END -----------------------------------------
         if use_seed:
@@ -503,6 +512,44 @@ class ExperimentHandler(object):
                                           image_name=test_set.b_image_name,
                                           referral_accuracy=None, referral_hd=None,
                                           referral_stats=test_set.referral_stats)
+        if mc_samples and save_mc_samples:
+            self._check_dirs(config_env=config)
+            patient_id = test_set.img_file_names[image_num]
+            abs_file_name = os.path.join(self.pred_output_dir, patient_id + "_mc_predictions.npz")
+            np.savez(abs_file_name, mc_samples=b_predictions)
+            abs_file_name = os.path.join(self.pred_output_dir, patient_id + "_mri.npz")
+            mri = test_set.images[image_num][:, config.pad_size:-config.pad_size, config.pad_size:-config.pad_size, :]
+            np.savez(abs_file_name, mri=mri)
+            print("INFO - Saved mc-predictions and mri to {}".format(abs_file_name))
+
+    def compute_cardiac_indices(self, mc_dropout=False, on_set="predictions"):
+        """
+
+        :param mc_dropout:
+        :param on_set: (1) predictions = predicted labels (with or without mc-dropout)
+        :return:
+        """
+        self.get_patients()
+        if self.test_set is None:
+            self.get_test_set()
+        if on_set == "predictions":
+            self.get_pred_labels(mc_dropout=mc_dropout, force_reload=True)
+            labels = self.pred_labels
+        else:
+            raise not NotImplementedError()
+
+        for patient_id, label_volume in labels.iteritems():
+            # assuming label_volume has shape [8, w, h, #slices]
+            volume_es = label_volume[:4]
+            volume_ed = label_volume[4:]
+            test_set_idx = self.test_set.trans_dict[patient_id]
+            spacings = self.test_set.spacings[test_set_idx]
+            # LV indices, class-index 3 = LV
+            lv_esv, lv_edv, lv_ef = compute_ejection_fraction(volume_es[3], volume_ed[3], spacings)
+            # RV indices, class-index 3 = RV
+            rv_esv, rv_edv, rv_ef = compute_ejection_fraction(volume_es[1], volume_ed[1], spacings)
+            self.cardiac_indices[patient_id] = np.array([[lv_esv, lv_edv, lv_ef], [rv_esv, rv_edv, rv_ef]])
+
 
     def create_u_maps(self, model=None, checkpoints=None, mc_samples=10, u_threshold=0.,
                       save_actual_maps=False, test_set=None, generate_figures=False, verbose=False,

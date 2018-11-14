@@ -163,9 +163,18 @@ class ExperimentHandler(object):
             # other than pred_labels and gt_labels we store pred_probs per slice because we want the softmax-probs
             # per slice in the grid form (probably 8x8) in order to produce the probs heat map per slice (batch_handler)
             if keep_batch:
+                # batch_dta_slice_ids is a list of test slice ids, starting from 0...
                 slice_id = eval_batch.batch_dta_slice_ids[-1]
+                # test_patient_slice_id is a list of 3-tuples where index 0 contains patient_id
+                # the slice id in test_patient_slice_id refers to the #slices for this particular patient
+                # IMPORTANT: slice_id = overall slice ids used during testing (counter)
+                #            whereas pat_slice_id refers to slices in volume
+                patient_id, pat_slice_id, _ = eval_batch.data_set.test_patient_slice_id[slice_id]
                 eval_batch.add_probs(pred_probs[:, 1], slice_id=slice_id)
                 eval_batch.add_gt_labels_slice(y_gt_lbl_slice, slice_id=slice_id)
+                eval_batch.add_patient_slice_pred_probs(patient_id, pat_slice_id, pred_probs[:, 1])
+                eval_batch.add_patient_slice_gt_labels(patient_id, pat_slice_id, y_gt_lbls.data.cpu().numpy())
+
             np_gt_labels = np.concatenate((np_gt_labels, (y_gt_lbls.data.cpu().numpy()).flatten()))
             np_pred_labels = np.concatenate((np_pred_labels, pred_labels.flatten()))
             # Remember, we're only interested in the softmax-probs for the positive class

@@ -54,6 +54,9 @@ class BatchHandler(object):
         # e.g.
         self.batch_slice_pred_probs= {}
         self.batch_slice_gt_labels = {}
+        # same as above but then separately for each patient:
+        self.batch_patient_pred_probs = {}
+        self.batch_patient_gt_labels = {}
         # in order to link slice_ids from the dataset used to generate batches, to the patient_id (for analysis only)
         self.trans_dict = {}
         # we store the last slice_id we returned for the test batch, so we can chunk the complete test set if
@@ -100,10 +103,10 @@ class BatchHandler(object):
         # Only used during testing
         # batch_pred_probs is a list of numpy arrays with shape [1, w_grid, h_grid]. For our analysis of the model
         # performance we flatten here all probs and concatenate them into ONE np array
-        flattend_probs = np.empty(0)
+        flattened_probs = np.empty(0)
         for probs in self.batch_pred_probs:
-            flattend_probs = np.concatenate((flattend_probs, probs.flatten()))
-        return flattend_probs
+            flattened_probs = np.concatenate((flattened_probs, probs.flatten()))
+        return flattened_probs
 
     def fill_trans_dict(self):
         self.trans_dict = {}
@@ -122,6 +125,20 @@ class BatchHandler(object):
 
     def add_gt_labels(self, gt_labels):
         self.batch_gt_labels.extend(gt_labels)
+
+    def add_patient_slice_gt_labels(self, patient_id, slice_id, gt_labels):
+        if patient_id not in self.batch_patient_gt_labels.keys():
+            self.batch_patient_gt_labels[patient_id] = {slice_id: gt_labels.flatten()}
+        else:
+            # patient as key already exists
+            self.batch_patient_gt_labels[patient_id][slice_id] = gt_labels.flatten()
+
+    def add_patient_slice_pred_probs(self, patient_id, slice_id, pred_probs):
+        if patient_id not in self.batch_patient_pred_probs.keys():
+            self.batch_patient_pred_probs[patient_id] = {slice_id: pred_probs.flatten()}
+        else:
+            # patient as key already exists
+            self.batch_patient_pred_probs[patient_id][slice_id] = pred_probs.flatten()
 
     @property
     def do_backward(self):
@@ -430,6 +447,8 @@ class BatchHandler(object):
         self.batch_extra_labels = []
         self.batch_images, self.target_labels_per_roi = [], []
         self.target_labels_stats_per_roi = {}
+        self.batch_patient_pred_probs = {}
+        self.batch_patient_gt_labels = {}
         for i in np.arange(2, self.num_of_max_pool_layers + 1):
             grid_spacing = int(2 ** i)
             self.target_labels_stats_per_roi[grid_spacing] = []
@@ -468,9 +487,12 @@ class BatchHandler(object):
                 # we test ALL SLICES
                 pass
 
+            # test_patient_slice_id contains 3-tuple (patient_id, slice_id, ES=0/ED=1)
+            patient_id, slice_id, _ = self.data_set.test_patient_slice_id[list_idx]
             self.batch_slice_areas.append(tuple((slice_x, slice_y)))
             self.batch_extra_labels.append(base_apex_slice)
             self.batch_patient_slice_id.append(self.data_set.test_patient_slice_id[list_idx])
+
             # now slice input and label according to roi specifications (automatic segmentation mask roi)
             input_channels_patch = input_channels[:, slice_x, slice_y]
             _, w, h = input_channels_patch.shape
@@ -503,6 +525,7 @@ class BatchHandler(object):
             else:
                 # no target voxels to inspect in ROI
                 pass
+
             # if on GPU
             if self.cuda:
                 input_channels_patch = input_channels_patch.cuda()

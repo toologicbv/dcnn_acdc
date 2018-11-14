@@ -12,6 +12,7 @@ from utils.img_sampling import resample_image_scipy
 from utils.medpy_metrics import hd
 from utils.post_processing import filter_connected_components
 from common.common import create_mask_uncertainties
+from common.cardiac_indices import compute_ejection_fraction
 import torch
 from scipy.ndimage.measurements import label
 from scipy.ndimage.morphology import generate_binary_structure
@@ -168,6 +169,7 @@ class ACDC2017TestHandler(object):
         self.abs_path_fold = os.path.join(self.data_dir, "fold")
         self.images = []
         self.images_flipped = []
+        self.cardiac_indices = {}  # will store per patient np.array([2, ESV, EDV, EJ]) for index=0=LV, index=1=RV
         #
         # filename of the figures printed during test evaluation. Contains patient_ids
         self.img_file_names = []
@@ -1107,6 +1109,20 @@ class ACDC2017TestHandler(object):
                                                         + suffix + "_cls" + str(cls) + ".nii")
                             write_numpy_to_image(pred_cls_lbl.astype("float32"), filename=filename_lbl, swap_axis=True,
                                                  spacing=new_spacing)
+
+    def compute_cardiac_indices(self):
+
+        for idx, label_volume in enumerate(self.labels):
+            patient_id = self.img_file_names[idx]
+            # assuming label_volume has shape [8, w, h, #slices]
+            volume_es = label_volume[:4]
+            volume_ed = label_volume[4:]
+            spacings = self.spacings[idx]
+            # LV indices, class-index 3 = LV
+            lv_esv, lv_edv, lv_ef = compute_ejection_fraction(volume_es[3], volume_ed[3], spacings)
+            # RV indices, class-index 3 = RV
+            rv_esv, rv_edv, rv_ef = compute_ejection_fraction(volume_es[1], volume_ed[1], spacings)
+            self.cardiac_indices[patient_id] = np.array([[lv_esv, lv_edv, lv_ef], [rv_esv, rv_edv, rv_ef]])
 
     @staticmethod
     def get_testset_instance(config_obj, fold_id, load_train=False, load_val=True, batch_size=None, use_cuda=True):
