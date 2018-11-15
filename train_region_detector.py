@@ -31,8 +31,13 @@ def training(args):
                              quick_run=exper_hdl.exper.run_args.quick_run,
                              type_of_map=exper_hdl.exper.run_args.type_of_map,
                              num_of_input_chnls=exper_hdl.exper.run_args.num_input_chnls,
-                             model_name=exper_hdl.exper.run_args.model)
-
+                             model_name=exper_hdl.exper.run_args.model,
+                             use_raw_errors=exper_hdl.exper.run_args.use_raw_error_maps)
+    if exper_hdl.exper.run_args.use_raw_error_maps:
+        exper_hdl.logger.info("WARNING - Using raw errors to train model!")
+        do_balance_batch = False;
+    else:
+        do_balance_batch = True
     # Load model. In the same procedure the model is assigned to the CPU or GPU
     rd_model = load_region_detector_model(exper_hdl)
 
@@ -48,7 +53,7 @@ def training(args):
     for epoch_id in range(exper_hdl.exper.run_args.epochs):
         exper_hdl.next_epoch()
         start_time = time.time()
-        x_input, y_lbl_dict = train_batch(batch_size=args.batch_size, do_balance=True)
+        x_input, y_lbl_dict = train_batch(batch_size=args.batch_size, do_balance=do_balance_batch)
         # returns cross-entropy loss (binary) and predicted probabilities [batch-size, 2] for this batch
         y_lbl_max_grid = y_lbl_dict[config_detector.max_grid_spacing]
         y_lbl_grid4 = y_lbl_dict[4]

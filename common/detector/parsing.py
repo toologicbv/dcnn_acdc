@@ -46,6 +46,7 @@ def do_parse_args():
     # Checkpoints and storing models
     parser.add_argument('--chkpnt', action='store_true')
     parser.add_argument('--quick_run', action='store_true')
+    parser.add_argument('--use_raw_error_maps', action='store_true')
     parser.add_argument('--chkpnt_freq', type=int, default=3000, metavar='N',
                         help='Checkpoint frequency (saving model state) (default: 3000)')
 
@@ -94,6 +95,7 @@ run_dict = {'type_of_map': 'e_map',
             'chkpnt': False,
             'use_no_map': False,
             'use_random_map': False,
+            'use_raw_error_maps': False,
             'num_input_chnls': 3
 }
 
@@ -123,6 +125,6 @@ def create_def_argparser(**kwargs):
     args.use_no_map = kwargs['use_no_map']
     args.use_random_map = kwargs['use_random_map']
     args.num_input_chnls = kwargs['num_input_chnls']
-
+    args.use_raw_error_maps = kwargs['num_input_chnls']
     return args
 

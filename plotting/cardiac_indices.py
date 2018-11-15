@@ -1,12 +1,66 @@
 from config.config import config
 import matplotlib.pyplot as plt
-import pylab
 import numpy as np
 
 arr_diff_lv_ej, arr_diff_rv_ej = [], []
 arr_lv_ej, arr_rv_ej = [], []
 arr_errors_lv, arr_errors_rv = [], []
 arr_errors_reg_lv, arr_errors_reg_rv = [], []
+
+
+def plot_error_dependencies(exper_handler, height, width, do_show=True, do_save=False, mc_dropout=False,
+                            prepare_handler=True, second_yaxis=""):
+
+    global arr_diff_lv_ej, arr_diff_rv_ej, arr_lv_ej, arr_rv_ej, arr_errors_lv, arr_errors_rv, arr_errors_reg_lv, \
+        arr_errors_reg_rv
+
+    analyze_cardiac_indices(exper_handler, mc_dropout=mc_dropout, prepare_handler=prepare_handler)
+    # LV
+    np_diff_lv_ej = np.array(arr_diff_lv_ej)
+    np_errors_lv = np.array(arr_errors_lv)
+    np_errors_reg_lv = np.array(arr_errors_reg_lv)
+    # RV
+    np_diff_rv_ej = np.array(arr_diff_rv_ej)
+    np_errors_rv = np.array(arr_errors_rv)
+    np_errors_reg_rv = np.array(arr_errors_reg_rv)
+
+    # setup
+    axis_label_size = {'fontname': 'Monospace', 'size': '20', 'color': 'black', 'weight': 'normal'}
+    sub_title_size = {'fontname': 'Monospace', 'size': '24', 'color': 'black', 'weight': 'normal'}
+    tick_size = 16
+    legend_size = 16
+
+    rows = 4
+    columns = 4
+
+    fig = plt.figure(figsize=(width, height))
+    ax1 = plt.subplot2grid((rows, columns), (0, 0), rowspan=2, colspan=4)
+    ax1.plot(np_errors_lv, np_errors_reg_lv, color="red", linestyle='', marker='o', markersize=10, alpha=0.4,
+             label="errors-to-detect")
+    ax1.set_xlabel("# segmentation errors", **axis_label_size)
+    ax1.set_ylabel("# errors-to-detect", **axis_label_size)
+    ax1.tick_params(axis='both', which='major', labelsize=tick_size)
+    ax1.tick_params(axis='y', colors='red')
+    ax1.set_title("Relationship between errors", **sub_title_size)
+    # ax1.legend(loc=1,prop={'size': legend_size})
+    if second_yaxis[:3] == "ejf":
+        ax1b = ax1.twinx()
+        if second_yaxis == "ejf_LV":
+            y_axis_error = np_diff_lv_ej
+            c_phase = "LV"
+        elif second_yaxis == "ejf_RV":
+            y_axis_error = np_diff_rv_ej
+            c_phase = "RV"
+        else:
+            raise ValueError("{} is not supported".format(second_yaxis))
+        ax1b.plot(np_errors_lv, y_axis_error, color="blue", linestyle='', marker='d', markersize=10, alpha=0.4,
+                  label="error EJF {}".format(c_phase))
+        ax1b.set_ylabel("# error EJF ({})".format(c_phase), **axis_label_size)
+        ax1b.tick_params(axis='both', which='major', labelsize=tick_size)
+        ax1b.tick_params(axis='y', colors='blue')
+        # ax1b.legend(loc=2, prop={'size': legend_size})
+    if do_show:
+        plt.show()
 
 
 def plot_ejection_fraction(exper_handler, height, width, do_show=True, do_save=False, mc_dropout=False,
@@ -60,7 +114,6 @@ def plot_ejection_fraction(exper_handler, height, width, do_show=True, do_save=F
     ax1.set_xlabel("Patient ID", **axis_label_size)
     ax1.set_xticks(x_values)
     ax1.set_xticklabels(np_patients)
-    ax1.set_title("LV ejection fraction", **sub_title_size)
     ax1.tick_params(axis='both', which='major', labelsize=tick_size)
     if bars == "both" or bars == "errors":
         ax1b = ax1.twinx()
@@ -71,6 +124,12 @@ def plot_ejection_fraction(exper_handler, height, width, do_show=True, do_save=F
         ax1b.set_ylabel("LV #seg-errors", **axis_label_size)
         ax1b.tick_params(axis='both', which='major', labelsize=tick_size)
         ax1b.legend(loc=2, prop={'size': legend_size})
+        if bars == "errors":
+            ax1.set_title("LV segmentation errors", **sub_title_size)
+        else:
+            ax1.set_title("LV ejection fraction & seg-errors", **sub_title_size)
+    else:
+        ax1.set_title("LV ejection fraction", **sub_title_size)
 
     #       THE SAME FOR RV Ejection fraction
     np_rv_ej = np.array(arr_rv_ej)

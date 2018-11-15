@@ -301,7 +301,7 @@ class RegionDetectorDataSet(object):
 
 
 def create_dataset(exper_ensemble, train_fold_id, type_of_map="e_map", num_of_input_chnls=2, quick_run=False,
-                   model_name=None):
+                   model_name=None, use_raw_errors=False):
     """
 
     :param train_fold_id: This is the fold_id we use for the experiment handler
@@ -314,6 +314,8 @@ def create_dataset(exper_ensemble, train_fold_id, type_of_map="e_map", num_of_in
     :param quick_run: reduce training dataset to small number (currently 10)
     :param model_name: please refer to the model parameter in the parsing.py file to determine which argument values
                         are currently valid (rd1, rd2, rd3)
+    :param use_raw_errors: boolean, if True = use "raw" segmentation errors from prediction task, otherwise use
+                            the "filtered" predicted masks
     :return:
     """
     if type_of_map == "u_map":
@@ -361,7 +363,10 @@ def create_dataset(exper_ensemble, train_fold_id, type_of_map="e_map", num_of_in
         # automatic reference: [#classes, w, h, #slices] - 0:4=ES and 4:8=ED
         pred_labels = exper_handlers[patient_fold_id].pred_labels[patient_id]
         # target_rois (our binary voxel labels)
-        target_rois = exper_handlers[patient_fold_id].get_target_roi_maps(patient_id, mc_dropout=mc_dropout)
+        if not use_raw_errors:
+            target_rois = exper_handlers[patient_fold_id].get_target_roi_maps(patient_id, mc_dropout=mc_dropout)
+        else:
+            target_rois = exper_handlers[patient_fold_id].get_pred_labels_errors(patient_id, mc_dropout=mc_dropout)
         nclasses, w, h, num_of_slices = pred_labels.shape
         # get the original images, from test set. Return [2, w, h, #slices]
         mri_image = exper_handlers[patient_fold_id].test_images[patient_id]

@@ -11,7 +11,8 @@ from utils.dice_metric import dice_coefficient
 from utils.img_sampling import resample_image_scipy
 from utils.medpy_metrics import hd
 from utils.post_processing import filter_connected_components
-from common.common import create_mask_uncertainties
+from common.common import create_mask_uncertainties, convert_to_multiclass
+from common.detector.box_utils import find_bbox_object
 from common.cardiac_indices import compute_ejection_fraction
 import torch
 from scipy.ndimage.measurements import label
@@ -174,6 +175,10 @@ class ACDC2017TestHandler(object):
         # filename of the figures printed during test evaluation. Contains patient_ids
         self.img_file_names = []
         self.labels = []
+        # contains the target region or cropped image size for target region. Contains dictionary of dicts.
+        # Outer dice: patient_id with value dictionary, inner dict: 0=ES, 1=ED, values tuples of slices (slice_x, slice_y)
+        # where slice_x, slice_y are 2-tuples themselves.
+        self.labels_target_roi = {}
         self.labels_flipped = []
         self.num_labels_per_class = []
         self.spacings = []
@@ -251,6 +256,23 @@ class ACDC2017TestHandler(object):
         self.images_flipped = []
         self.labels = self.labels_flipped
         self.labels_flipped = []
+
+    def generate_bbox_target_roi(self):
+        for idx, labels in enumerate(self.labels):
+            patient_id = self.img_file_names[idx]
+            num_of_slices = labels.shape[3]
+            pat_slice_rois = OrderedDict()
+            for slice_id in np.arange(num_of_slices):
+                label_slice = labels[:, :, :, slice_id]
+                # label_slice has shape [8, w, h, #slices], hence we separate es and ed and convert slice to multi-label
+                label_slice_es = convert_to_multiclass(label_slice[0:4])
+                label_slice_ed = convert_to_multiclass(label_slice[4:])
+                # returns BoundingBox object for the target roi
+                gt_label_roi_es = find_bbox_object(label_slice_es, padding=0)
+                gt_label_roi_ed = find_bbox_object(label_slice_ed, padding=0)
+                pat_slice_rois[slice_id] = {0: tuple((gt_label_roi_es.slice_x, gt_label_roi_es.slice_y)),
+                                            1: tuple((gt_label_roi_ed.slice_x, gt_label_roi_ed.slice_y))}
+            self.labels_target_roi[patient_id] = pat_slice_rois
 
     def _set_pathes(self):
         # kind of awkward. but because it's a class variable we need to check whether we extended the path

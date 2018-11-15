@@ -44,6 +44,7 @@ class BatchHandler(object):
         self.target_labels_stats_per_roi = None
         # during testing, we skip slices that do not contain any automatic segmentations
         self.num_of_skipped_slices = 0
+        self.default_patch = 0
         # when calling with keep_batch=True, we also want to store the predicted probs during testing
         # only during eval time
         self.batch_pred_probs = None
@@ -219,16 +220,26 @@ class BatchHandler(object):
         # this array holds the patch for each label_slice (binary). Is a numpy array, we only need this object
         # to determine the final target labels per grid/roi
         np_batch_lbls = np.zeros((batch_size, config_detector.patch_size[0], config_detector.patch_size[1]))
-        max_search_iters = batch_size * 5
+        max_search_iters = batch_size * 10
         cannot_balance = False
         do_continue = True
+        # in case the target area is too close to the boundaries of the image (we create a patch around the target area)
+        # then we just choose the center location of the image and create a batch around. Should not happen often
+        # only a couple of times when we use the raw segmentation errors as supervision of the task
+        self.default_patch = 0
         i = 0
         # start with collecting image slice indices
         while do_continue:
             slice_num = np.random.randint(0, self.sample_range, size=1, dtype=np.int)[0]
+            # IMPORTANT: np array train_lbl_rois contains filtered target rois for supervision
             # train_lbl_rois has shape [N,4] and contains box_four notation for target areas
+            # IMPORTANT: train_pred_lbl_rois contains one array with bounding box specifications
+            # train_pred_lbl_rois
             num_of_target_rois = self.data_set.train_lbl_rois[slice_num].shape[0]
             pred_lbls_exist = (np.sum(self.data_set.train_pred_lbl_rois[slice_num]) != 0).astype(np.bool)
+            if num_of_target_rois == 0 and not pred_lbls_exist:
+                # print("WARNING - No automatic mask and no seg-errors - hence continue")
+                continue
             i += 1
             # we enforce the ratio between positives-negatives up to a certain effort (max_search_iters)
             # and when we indicated that we want to balance anyway
@@ -244,6 +255,9 @@ class BatchHandler(object):
                 if self.verbose:
                     print("Continue - #negatives {} out of {}".format(num_of_negatives, len(negative_idx)))
                 continue
+            elif not do_balance:
+                # we don't need to bother because WE ARE NOT BALANCING THE BATCH (between neg/pos examples)
+                pass
             else:
                 if i > max_search_iters and not cannot_balance:
                     cannot_balance = True
@@ -251,11 +265,20 @@ class BatchHandler(object):
             # We need to make sure that if we still need negatives, and we don't have target rois to detect
             # then we AT LEAST need predicted labels. It's one or the other. In case we didn't predict anything
             # AND we didn't make any errors, then skip this slice
-            if num_of_target_rois == 0 and not pred_lbls_exist and i <= max_search_iters and num_of_negatives != 0:
+            if do_balance and num_of_target_rois == 0 and not pred_lbls_exist and i <= max_search_iters \
+                    and num_of_negatives != 0:
                 continue
+            # this is for the case WE DON't balance. Make sure pred_lbls_exist = TRUE, otherwise continue
+            elif not do_balance and not pred_lbls_exist and i <= max_search_iters:
+                continue
+            elif not do_balance and num_of_target_rois == 0 and not pred_lbls_exist:
+                print("WARNING - {} <= max_search_iters ".format(i))
 
             if num_of_target_rois == 0:
                 num_of_negatives -= 1
+                # print("WARNING ---->>> zero target rois for slice {}".format(slice_num))
+                # print("WARNING predicted mask ", self.data_set.train_pred_lbl_rois[slice_num])
+                # print("WARNING error mask ", self.data_set.train_lbl_rois[slice_num])
                 # make a tuple with (1) slice-number (2) slice-coordinates describing area automatic mask (4 numbers)
                 negative_idx.append(tuple((slice_num, self.data_set.train_pred_lbl_rois[slice_num])))
             else:
@@ -340,17 +363,20 @@ class BatchHandler(object):
                 do_continue = False
             else:
                 if max_iters > 50:
-                    print("WARNING - Problem need to break out of loop in BatchHandler._create_train_batch_item")
-                    half_width = w / 2
-                    half_height = h / 2
-                    slice_x = slice(half_width - config_detector.patch_size[0],
-                                    half_width + config_detector.patch_size[1], None)
-                    slice_y = slice(half_height - config_detector.patch_size[0],
-                                    half_height + config_detector.patch_size[1], None)
+                    if self.verbose:
+                        print("WARNING - Problem need to break out of loop in BatchHandler._create_train_batch_item")
+                    # so we can check afterwards how many times we needed to break out of this loop.
+                    self.default_patch += 1
+                    img_half_width = w / 2
+                    img_half_height = h / 2
+                    slice_x = slice(img_half_width - half_width,
+                                    img_half_width + half_width, None)
+                    slice_y = slice(img_half_height - half_height,
+                                    img_half_height + half_height, None)
                     input_channels_patch = input_channels[:, slice_x, slice_y]
-                    target_label = 1 if np.count_nonzero(lbl_slice) != 0 else 0
                     do_continue = False
                     lbl_slice = label[slice_x, slice_y]
+                    target_label = 1 if np.count_nonzero(lbl_slice) != 0 else 0
                 else:
                     continue
             if self.keep_bounding_boxes:
