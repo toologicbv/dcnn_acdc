@@ -44,6 +44,10 @@ class BaseConfig(object):
 
         # Settings for determining the target areas/pixels to be inspected. used in procedure
         # find_multiple_connected_rois (file box_utils.py)
+        # 16-11-2018: IMPORTANT CHANGE:
+        #             We filtered the target rois on a minimum connected size. In experiments we actually found
+        #             that the detection works slightly better if we don't filter on connected componnents.
+        #             HENCE, this is not in use anymore!
         self.min_roi_area = 2  # minimum number of 2D 4-connected component. Otherwise target pixels are discarded
         self.fraction_negatives = 0.67
         # patch size during training
