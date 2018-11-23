@@ -207,6 +207,7 @@ class RegionDetector(nn.Module):
         loss = self.get_loss(out["log_softmax"].view(batch_size, channels, -1), y_labels, average=False,
                              pred_probs=out["softmax"])
         if out_extra is not None and y_labels_extra is not None:
+            # WE SHOULD ONLY COME UP IF self.use_extra_classifier=True (combine two grid losses)
             loss_extra = self.get_loss(out_extra["log_softmax"].view(batch_size, channels, -1), y_labels_extra,
                                        average=False, pred_probs=out_extra["softmax"])
             loss += loss_extra

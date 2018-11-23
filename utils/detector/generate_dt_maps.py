@@ -28,7 +28,15 @@ def compute_slice_distance_transform_for_structure(reference, voxelspacing=None,
     return dt, inside_obj_mask
 
 
-def generate_dt_maps(labels, voxelspacing=1.4, bg_classes=[0, 4]):
+def generate_dt_maps(labels, voxelspacing=1.4, bg_classes=[0, 4], slice_label_areas=None):
+    """
+
+    :param labels: shape [8, w, h, #slices]
+    :param voxelspacing:
+    :param bg_classes:
+    :param slice_label_areas: [2, #slices]: contains tissue roi area for each slice in volume for ES and ED
+    :return: distance transform maps for a particular tissue class per slice
+    """
 
     dt_slices = np.zeros_like(labels)
     num_of_classes, w, h, num_of_slices = labels.shape
@@ -38,9 +46,24 @@ def generate_dt_maps(labels, voxelspacing=1.4, bg_classes=[0, 4]):
             non_base_apex_slice = 0
         else:
             non_base_apex_slice = 1
+        if slice_label_areas is not None:
+            # print(slice_label_areas[:, slice_id])
+            slice_label_area_es, slice_label_area_ed = slice_label_areas[:, slice_id]
+            scale_bin_es = np.digitize(slice_label_area_es, config_detector.label_area_bins)
+            scale_bin_ed = np.digitize(slice_label_area_ed, config_detector.label_area_bins)
+        else:
+            slice_label_area_es, slice_label_area_ed = -1, -1
+            scale_bin_es, scale_bin_ed = config_detector.label_area_num_bins, config_detector.label_area_num_bins
+
         for cls_idx in np.arange(1, num_of_classes):
             # IMPORTANT: skip the background classes!
             if cls_idx not in bg_classes:
+                if cls_idx < num_of_classes / 2:
+                    scale_bin = scale_bin_es
+                    s_area = slice_label_area_es
+                else:
+                    scale_bin = scale_bin_ed
+                    s_area = slice_label_area_ed
                 label_slice = labels[cls_idx, :, :, slice_id]
                 if 0 != np.count_nonzero(label_slice):
                     dt_slices[cls_idx, :, :, slice_id], inside_obj_mask = \
@@ -51,11 +74,19 @@ def generate_dt_maps(labels, voxelspacing=1.4, bg_classes=[0, 4]):
                     #         index=1: the margin we use for the non-apex/base slices, it's smaller than the first
                     # we substract the margin from the distance-transform for all voxels.
                     inter_observ_margin = config_detector.acdc_inter_observ_var[cls_idx][non_base_apex_slice]
-                    if inter_observ_margin > 5.:
-                        dt[~inside_obj_mask] -= inter_observ_margin
+                    if slice_label_areas is not None:
+                        margin_bins = np.linspace(voxelspacing, inter_observ_margin, config_detector.label_area_num_bins)
+                        error_margin = margin_bins[scale_bin - 1]
+                    else:
+                        error_margin = inter_observ_margin
+                    # print("INFO area {:.2f}, scale_bin {}, error_margin {:.2f}, "
+                    #      "inter_observer_m {:.2f}".format(s_area, scale_bin, error_margin, inter_observ_margin))
+                    # config_detector.label_area_bins
+                    if error_margin > 5.:
+                        dt[~inside_obj_mask] -= error_margin
                         dt[inside_obj_mask] -= 5  # we only substract
                     else:
-                        dt -= inter_observ_margin
+                        dt -= error_margin
                     # dt -= 5.  # 5 mm is what we accept
                     dt[dt < 0] = 0
                     dt_slices[cls_idx, :, :, slice_id] = dt

@@ -30,11 +30,17 @@ class BaseConfig(object):
         # ED: 5 = RV; 6 = MYO; 7 = LV
         self.acdc_inter_observ_var = {1: [14.05, 9.05], 2: [7.8, 5.8], 3: [8.3, 5.65],  # ES
                                       5: [12.35, 8.15], 6: [6.95, 5.25], 7: [5.9, 4.65]}  # ED
+        # range of area (target tissue structure per slice) from 5 to 95 percentile (we can compute this by means of
+        # TestHandler.generate_bbox_target_roi method).
+        self.label_area_num_bins = 10
+        self.range_label_area = [500, 5500]
+        # used in np.digitize(array, bins) to determine
+        self.label_area_bins = np.array([0, 550, 1100, 1650, 2200, 2750, 3300, 3850, 4400, 4950])
         self.acdc_background_classes = [0, 4]
         # IMPORTANT: we don't use PADDING because during batch training and testing we crop out a region that fits
         # the max-pool operations & convolutions. Due toe fully-conv NN we can process different sizes of images.
         self.acdc_pad_size = 0
-        self.quick_run_size = 6
+        self.quick_run_size = 10
 
         # Settings for determining the target areas/pixels to be inspected. used in procedure
         # find_multiple_connected_rois (file box_utils.py)
@@ -83,7 +89,7 @@ class BaseConfig(object):
                              "rd3":
                                  {'model_id': "rd3",
                                   # 'base': [16, 'M', 32, 'M', 32, 'M', 64, 'M', 64],  # first version
-                                  'base': [16, 'M', 16, 'M', 32, 'M', 32, 'M', 32],  # first version
+                                  'base': [16, 'M', 16, 'M', 32, 'M', 32, 'M', 32],  # 2nd version
                                   'num_of_input_channels': 3,
                                   'num_of_classes': 2,
                                   'drop_prob': 0.5,
@@ -95,7 +101,7 @@ class BaseConfig(object):
                                   "use_extra_classifier": False,
                                   "use_fn_loss": True,
                                   "fn_penalty_weight": 0.1,
-                                  "fp_penalty_weight": 0.3,
+                                  "fp_penalty_weight": 0.5,
                                   "description": "rd3-detector"},
                              "rd3L":
                                  {'model_id': "rd3",

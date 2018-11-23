@@ -38,7 +38,6 @@ def find_multiple_connected_rois(label_slice, padding=1, min_size=config_detecto
     roi_boxes = np.empty((0, 4))
     roi_box_areas = []
     roi_binary_mask = np.zeros_like(label_slice)
-    total_roi_size = np.count_nonzero(label_slice)
     total_connected_roi_size = 0
     total_size_omitted = 0
     rois_omitted = 0
@@ -65,12 +64,7 @@ def find_multiple_connected_rois(label_slice, padding=1, min_size=config_detecto
             pass
     del cc_labels
     del comp_mask
-    # t = total_roi_size - total_connected_roi_size
-    # t_perc = (float(t) / total_roi_size) * 100
-    # if t_perc >= 1.:
-    #    print("Warning - Omitted {:.2f} per cent ({}/{})".format(t_perc, total_connected_roi_size, total_roi_size))
-    # if rois_omitted != 0:
-    #    print("WARNING - Total size target ROIs omitted {} (#ROIS={})".format(total_size_omitted, rois_omitted))
+
     return roi_boxes, roi_binary_mask, roi_box_areas
 
 
@@ -100,7 +94,7 @@ class BoundingBox(object):
         slice_y = slice(slice_y.start - padding, slice_y.stop + padding, None)
         self.slice_x = slice_x
         self.slice_y = slice_y
-        if slice_x.stop - slice_x.start == 0:
+        if slice_x.stop - slice_x.start == 0 or slice_x.start < 0:
             self.empty = True
         self.padding = padding
         self.xy_left = tuple((slice_y.start, slice_x.start))

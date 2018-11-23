@@ -5,6 +5,7 @@ import time
 import shutil
 import torch
 from collections import OrderedDict
+
 import numpy as np
 from common.common import create_logger
 from sklearn.metrics import auc
@@ -13,6 +14,7 @@ from scipy.signal import convolve2d
 
 from models.model_handler import load_region_detector_model
 from common.detector.config import config_detector
+from common.visdom_utils import Visualizer
 
 from utils.detector.batch_handler import BatchHandler
 from utils.dslices.accuracies import compute_eval_metrics
@@ -45,6 +47,7 @@ class ExperimentHandler(object):
         self.seg_exper_ensemble = None
         # ID for different test runs (after training)
         self.last_test_id = 0
+        self.last_eval_loss = 0
         # not consequent, but we'll add a dictionary for the test runs to the handler instead of the experiment object
         self.test_stats = {}
         # objects to compute ROC-AUC and ROC-PR
@@ -62,6 +65,15 @@ class ExperimentHandler(object):
         self.num_of_neg_eval_slices = 0
         # total number of test/validation slices that we processed
         self.num_of_eval_slices = 0
+        # visdom object
+        self.vis = None
+
+    def initialize_visdom(self):
+        try:
+            self.vis = Visualizer(self.exper.exper_label, ' ', ['training', 'validation'])
+            self.info("Initializing visdom environment {}".format(self.exper.exper_label))
+        except:
+            self.vis = None
 
     def set_seg_ensemble(self, seg_ensemble):
         self.seg_exper_ensemble = seg_ensemble
@@ -71,7 +83,7 @@ class ExperimentHandler(object):
         if val_run_id is None:
             self.exper.epoch_stats["loss"][self.exper.epoch_id - 1] = loss
         else:
-            self.exper.val_stats["loss"][val_run_id-1] = loss
+            self.exper.val_stats["loss"][int(val_run_id-1)] = loss
 
     def set_exper(self, exper, use_logfile=False):
         self.exper = exper
@@ -199,6 +211,7 @@ class ExperimentHandler(object):
             self.eval_loss = np.mean(self.eval_loss)
         else:
             self.eval_loss = self.eval_loss[0]
+
         # if we have at least one TP, otherwise...
         if not_one_tp:
             # we only had test slices that don't contain ANY positive voxels that needed to be detected. Hence, we
@@ -253,6 +266,7 @@ class ExperimentHandler(object):
             self.exper.val_stats["pr_auc"][self.num_val_runs - 1] = self.arr_eval_metrics[2]
             self.exper.val_stats["prec"][self.num_val_runs - 1] = self.arr_eval_metrics[3]
             self.exper.val_stats["rec"][self.num_val_runs - 1] = self.arr_eval_metrics[4]
+            self.last_eval_loss = self.eval_loss
         duration = time.time() - start_time
 
         self.info("---> END VALIDATION epoch {} #slices={}(skipped {}) (negatives/positives={}/{}) loss {:.3f}: "

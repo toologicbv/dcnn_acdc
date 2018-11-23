@@ -14,6 +14,7 @@ from utils.post_processing import filter_connected_components
 from common.common import create_mask_uncertainties, convert_to_multiclass
 from common.detector.box_utils import find_bbox_object
 from common.cardiac_indices import compute_ejection_fraction
+from common.detector.box_utils import BoundingBox
 import torch
 from scipy.ndimage.measurements import label
 from scipy.ndimage.morphology import generate_binary_structure
@@ -257,9 +258,16 @@ class ACDC2017TestHandler(object):
         self.labels = self.labels_flipped
         self.labels_flipped = []
 
-    def generate_bbox_target_roi(self):
-        for idx, labels in enumerate(self.labels):
-            patient_id = self.img_file_names[idx]
+    def generate_bbox_target_roi(self, patient_id=None):
+        if patient_id is None:
+            label_list = self.labels
+        else:
+            idx = self.trans_dict[patient_id]
+            label_list = [self.labels[idx]]
+        for idx, labels in enumerate(label_list):
+            if patient_id is None:
+                patient_id = self.img_file_names[idx]
+
             num_of_slices = labels.shape[3]
             pat_slice_rois = OrderedDict()
             for slice_id in np.arange(num_of_slices):
@@ -273,6 +281,26 @@ class ACDC2017TestHandler(object):
                 pat_slice_rois[slice_id] = {0: tuple((gt_label_roi_es.slice_x, gt_label_roi_es.slice_y)),
                                             1: tuple((gt_label_roi_ed.slice_x, gt_label_roi_ed.slice_y))}
             self.labels_target_roi[patient_id] = pat_slice_rois
+        if patient_id is not None:
+            return self.labels_target_roi[patient_id]
+
+    def get_label_areas(self, patient_id):
+        """
+
+        :param patient_id:
+        :return: numpy array [2, #slice] with tissue label areas per slice (NOT PER CLASS)
+        """
+        pat_slice_rois = self.labels_target_roi[patient_id]
+        num_of_slices = len(pat_slice_rois)
+        # 2 = for ES/ED, 0=ES, 1=ED
+        pat_slice_areas = np.zeros((2, num_of_slices))
+        for slice_id, slice_rois in pat_slice_rois.iteritems():
+            roi_box_es = BoundingBox(slice_rois[0][0], slice_rois[0][1])
+            roi_box_ed = BoundingBox(slice_rois[1][0], slice_rois[1][1])
+            area_es = roi_box_es.width * roi_box_es.height
+            area_ed = roi_box_ed.width * roi_box_ed.height
+            pat_slice_areas[:, slice_id] = np.array([area_es, area_ed])
+        return pat_slice_areas
 
     def _set_pathes(self):
         # kind of awkward. but because it's a class variable we need to check whether we extended the path

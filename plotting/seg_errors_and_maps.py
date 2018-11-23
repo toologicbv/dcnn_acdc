@@ -6,6 +6,7 @@ import os
 from matplotlib import cm
 from common.hvsmr.helper import detect_seg_errors, convert_to_multilabel
 from common.common import convert_to_multiclass
+from common.detector.box_utils import find_bbox_object
 
 
 def plot_slices(exper_handler, patient_id, do_show=True, do_save=False, threshold=None, left_column_overlay="map",
@@ -160,6 +161,11 @@ def plot_slices(exper_handler, patient_id, do_show=True, do_save=False, threshol
                 ax2.set_title("Reference (r=LV/y=myo/b=RV)", **config.title_font_small)
             elif right_column_overlay == "error":
                 ax2.imshow(errors_slice, cmap=mycmap)
+                # returns BoundingBox for seg-errors
+                if False:
+                    bbox_error = find_bbox_object(errors_slice, threshold_pixel_value=0, padding=0)
+                    plt_box = bbox_error.get_matplotlib_patch()
+                    ax2.add_patch(plt_box)
                 ax2.set_title("Segmentation errors (r=LV/y=myo/b=RV)", **config.title_font_small)
             else:
                 # automatic seg-mask

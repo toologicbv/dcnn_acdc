@@ -41,6 +41,7 @@ class RegionDetectorDataSet(object):
         self.size_train = 0
         self.size_test = 0
         self.train_patient_ids = []
+        self.train_patient_slice_id = []
         self.test_patient_ids = []
         self.test_patient_slice_id = []
         # translation dictionary from patient id to list index numbers. Key=patient_id,
@@ -49,8 +50,6 @@ class RegionDetectorDataSet(object):
         # ROI statistics, indices meaning: 0=approx # of target grids
         #                                  1=total ROIs, 2=ROIS in base/apex slices, 3=ROIS in other slices
         self.roi_stats = {"train": np.zeros(4).astype(np.int), "test": np.zeros(4).astype(np.int)}
-        # store ROI areas sizes. index: 0=apex/base, 1=other slices
-        self.roi_areas = [[], []]
         if model_name is not None:
             self.model_name = model_name
             config_detector.get_architecture(model_name=model_name)
@@ -111,7 +110,7 @@ class RegionDetectorDataSet(object):
         """
 
         def rotate_slice(mri_img_slice, uncertainty_slice, pred_lbl_slice, label_slice,
-                         is_train=False):
+                         is_train=False, pat_slice_id=None, base_apex_slice=None):
             """
 
             :param mri_img_slice: [w, h] original mri image
@@ -126,7 +125,7 @@ class RegionDetectorDataSet(object):
             for rots in range(RegionDetectorDataSet.num_of_augs):
 
                 self.add_image_to_set(is_train, mri_img_slice, uncertainty_slice, pred_lbl_slice, label_slice,
-                                      list_array_indices)
+                                      list_array_indices, pat_slice_id=pat_slice_id, base_apex_slice=base_apex_slice)
                 # rotate for next iteration
                 mri_img_slice = np.rot90(mri_img_slice)
                 uncertainty_slice = np.rot90(uncertainty_slice)
@@ -151,18 +150,20 @@ class RegionDetectorDataSet(object):
                 # in. label_slice_filtered: filtered by 2D 4-connected structure.
                 # Meaning, that potential target voxels that are not part of larger 4-connected components will be
                 # discarded. Please also see config_detector.min_roi_area, currently = 2!
-                label_bbox, label_slice_filtered, bbox_areas = find_multiple_connected_rois(label_slice, padding=1)
+                # label_bbox, label_slice_filtered, roi_bbox_area = find_multiple_connected_rois(label_slice, padding=1)
+                # 16-11-2018: Changed this. We're not anymore filtering target rois based on connected components
+
                 self.roi_stats["train" if is_train else "test"][0] += num_of_grids
                 # increase total #ROIS
-                num_of_rois = label_bbox.shape[0]
-                self.roi_stats["train" if is_train else "test"][1] += num_of_rois
+                # 16-11-2018 changed this to number of voxels
+                # num_of_rois = label_bbox.shape[0]
+                num_of_voxel_rois = np.count_nonzero(label_slice)
+                self.roi_stats["train" if is_train else "test"][1] += num_of_voxel_rois
                 if z == 0 or z == (num_of_slices - 1):
-                    self.roi_stats["train" if is_train else "test"][2] += num_of_rois
-                    self.roi_areas[0].extend(bbox_areas)
+                    self.roi_stats["train" if is_train else "test"][2] += num_of_voxel_rois
                     base_apex_slice = 1
                 else:
-                    self.roi_stats["train" if is_train else "test"][3] += num_of_rois
-                    self.roi_areas[1].extend(bbox_areas)
+                    self.roi_stats["train" if is_train else "test"][3] += num_of_voxel_rois
                     base_apex_slice = 0
 
             else:
@@ -171,23 +172,21 @@ class RegionDetectorDataSet(object):
                     base_apex_slice = 1
                 else:
                     base_apex_slice = 0
-                label_slice_filtered = label_slice
-            if is_train:
-                self.train_labels_extra.append(base_apex_slice)
-            else:
-                self.test_labels_extra.append(base_apex_slice)
+                # 16-11-2018 disabled this because we're not anymore filtering the target rois on connected comps
+                # label_slice_filtered = label_slice
+
             if do_rotate:
-                rotate_slice(input_chnl1_slice, input_chnl2_slice, input_chnl3_slice, label_slice_filtered,
-                             is_train)
+                rotate_slice(input_chnl1_slice, input_chnl2_slice, input_chnl3_slice, label_slice,
+                             is_train, pat_slice_id=pat_slice_id, base_apex_slice=base_apex_slice)
             else:
-                # Note: for the TEST set we also use the label_slice_filtered object.
+                # Note: for the TEST set we also use the label_slice object.
                 self.add_image_to_set(is_train, input_chnl1_slice, input_chnl2_slice, input_chnl3_slice,
-                                      label_slice_filtered, list_array_indices, pat_slice_id)
+                                      label_slice, list_array_indices, pat_slice_id, base_apex_slice)
 
         return list_array_indices
 
     def add_image_to_set(self, is_train, input_chnl1_slice, input_chnl2_slice, input_chnl3_slice, label_slice,
-                         list_array_indices, pat_slice_id=None):
+                         list_array_indices, pat_slice_id=None, base_apex_slice=None):
         if is_train:
             p_slice1 = np.pad(input_chnl1_slice, RegionDetectorDataSet.pad_size, 'constant',
                               constant_values=(0,)).astype(RegionDetectorDataSet.pixel_dta_type)
@@ -207,7 +206,7 @@ class RegionDetectorDataSet(object):
             # Because we've prior knowlegde about the dataset, we know that the mask will be always smaller than
             # the original image, hence, we NEVER have to pad the image in order to make sure that the size (w, h)
             # is dividable by max_grid_spacing (currently 8).
-            pred_lbl_roi = find_bbox_object(input_chnl3_slice, padding=0)
+            pred_lbl_roi = find_bbox_object(input_chnl3_slice, padding=2)
             # in case we are dealing with slices that do not contain an automatic seg-mask we don't need to find
             # the ROI. We will even not use these slices during testing because we're only interested in slices with
             # an automatic seg-mask. Is slice_idx=len(self.test_images) then procedure will print slices bigger than
@@ -224,22 +223,34 @@ class RegionDetectorDataSet(object):
         # we get the bounding boxes for the different target rois in box_four format (x.start, y.start, ...)
         # we use these when generating the batches, because we want to make sure that for the positive batch items
         # at least ONE target rois is in the FOV i.e. included in the patch that we sample from a slice
-        bbox_for_rois = find_box_four_rois(label_slice)
+        # 16-11-2018 we're not anymore identifying individual rois for the target regions, but use one bounding box
+        # for the complete target region. We do this because we only exploit the region to create batches.
+        # bbox_for_rois = find_box_four_rois(label_slice)
+        roi_bbox_area = find_bbox_object(label_slice, padding=1)
+        if roi_bbox_area.empty:
+            roi_bbox_area = np.empty((0, 4))
+        else:
+            roi_bbox_area = roi_bbox_area.box_four[np.newaxis]
+
         if is_train:
             self.train_images.append(padded_input_slices)
             self.train_labels.append(label_slice)
-            # IMPORTANT: the bbox is not rotated!
-            self.train_lbl_rois.append(bbox_for_rois)
+            # we add a new axis to np array of shape [4] i.e. [1, 4], because caused by earlier code we expect
+            # the first dimension to indicate the number of target rois (when we used individual bounding boxes around
+            # the target rois).
+            self.train_lbl_rois.append(roi_bbox_area)
             list_array_indices.append(len(self.train_images) - 1)
             self.train_pred_lbl_rois.append(pred_lbl_roi.box_four)
+            self.train_patient_slice_id.append(pat_slice_id)
+            self.train_labels_extra.append(base_apex_slice)
         else:
             self.test_images.append(padded_input_slices)
             self.test_labels.append(label_slice)
-            # IMPORTANT: the bbox is not rotated!
-            self.test_lbl_rois.append(bbox_for_rois)
+            self.test_lbl_rois.append(roi_bbox_area)
             list_array_indices.append(len(self.test_images) - 1)
             self.test_pred_lbl_rois.append(pred_lbl_roi.box_four)
             self.test_patient_slice_id.append(pat_slice_id)
+            self.test_labels_extra.append(base_apex_slice)
         return list_array_indices
 
     @staticmethod
@@ -342,7 +353,9 @@ def create_dataset(exper_ensemble, train_fold_id, type_of_map="e_map", num_of_in
                                     patient_ids=ensemble_patients, load_dt_roi_maps=False)
     print("INFO - Ready. Loop through patient ids.")
     # instead of using class labels 0, 1, 2, 3 for the seg-masks we will use values between [0, 1]
-    labels_float = [0., 0.3, 0.6, 0.9]
+    # 19-11-2018 Changed the labels back to [1...4] instead of [0, 0.3, 0.6, 0.9] because the former yields slightly
+    # better validation performance
+    labels_float = [1., 2., 3., 4.]
     dataset = RegionDetectorDataSet(num_of_channels=num_of_input_chnls, model_name=model_name)
     # loop over training images
     for patient_id in tqdm(patient_ids):

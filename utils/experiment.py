@@ -1138,7 +1138,7 @@ class ExperimentHandler(object):
         if patient_id is not None:
             return self.entropy_maps[patient_id]
 
-    def generate_dt_maps(self, patient_id=None, voxelspacing=ACDC2017DataSet.new_voxel_spacing):
+    def generate_dt_maps(self, patient_id=None, voxelspacing=ACDC2017DataSet.new_voxel_spacing, adjust_to_roi=False):
         """
         Generating the distance transform maps for all tissue classes per slice.
         dt_slices (the result) has shape [num_of_classes, w, h, #slices]
@@ -1146,6 +1146,8 @@ class ExperimentHandler(object):
 
         :param patient_id:
         :param voxelspacing:
+        :param adjust_to_roi: boolean, if True, we use the size of the target tissue structure to scale the inter-observer
+                                error margin (please see config.py for details on the area-size bins for scaling).
         :return:
         """
         self._check_dirs(config_env=config)
@@ -1158,7 +1160,12 @@ class ExperimentHandler(object):
             p_range = [patient_id]
         for p_id in p_range:
             _, labels = self.test_set.get_test_pair(p_id)
-            dt_slices = generate_dt_maps(labels, voxelspacing=voxelspacing)
+            _ = self.test_set.generate_bbox_target_roi(p_id)
+            if adjust_to_roi:
+                slice_label_areas = self.test_set.get_label_areas(p_id)
+            else:
+                slice_label_areas = None
+            dt_slices = generate_dt_maps(labels, voxelspacing=voxelspacing, slice_label_areas=slice_label_areas)
             file_name = os.path.join(self.dt_map_dir, p_id + "_dt_map.npz")
             try:
                 self.dt_maps[p_id] = dt_slices
